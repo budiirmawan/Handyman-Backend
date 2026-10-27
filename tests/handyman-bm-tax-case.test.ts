@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import { api } from './helpers/http';
+import { credentialService } from '../src/modules/auth';
+import { downloadHandymanBmStatement } from '../src/modules/handyman-bm-statement/handyman-bm-statement.service';
 import { mkdir, rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import EmbeddedPostgres from 'embedded-postgres';
@@ -1167,5 +1171,180 @@ describe('BM-SETTLEMENT-03 PART 02 manual settlement and evidence',()=>{
       evidenceReference:`check/${id()}`}),code('HANDYMAN_BM_SETTLEMENT_STALE'));
     await assert.rejects(q(`INSERT INTO handyman_bm_settlement_verifications(id,settlement_id,payment_id,evidence_read_id,content_sha256,evidence_reference,method,actor_user_id)
       VALUES($1,$2,$3,$4,$5,$6,'FINANCE_MANUAL_DOCUMENT_REVIEW',$7)`,[id(),ys.snapshot.id,id(),id(),'a'.repeat(64),`review/${id()}`,y.checker]),/stale|payment evidence/i);
+  });
+});
+
+/** CR-HM-BM-COMMISSION-04: one focused suite over real 0503/0505 facts. */
+const utcDay=(offset=0)=>{const d=new Date();return new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()+offset)).toISOString().slice(0,10);};
+function statementInput(x:Awaited<ReturnType<typeof settlementFixture>>) {
+  return {clientId:x.f.realm.client.id,buildingId:x.f.realm.building.id,counterpartyId:x.f.bm.counterparty.id,
+    agreementVersionId:x.f.versionId,dateFrom:utcDay(),dateTo:utcDay()};
+}
+async function statementManager(buildingId:string) {
+  return scopedUser(buildingId,['handyman.commercial.manage','handyman.finance.read']);
+}
+async function statementToken(userId:string) {
+  const email=(await q('SELECT email FROM users WHERE id=$1',[userId])).rows[0].email;
+  const password='StatementPass123!';await credentialService.createInitialCredential({userId,password});
+  const login=await api().post('/api/v1/auth/login').send({email,password});assert.equal(login.status,200,JSON.stringify(login.body));
+  return login.body.data.sessionToken as string;
+}
+async function pdfTextContent(bytes:Buffer):Promise<string> {
+  const pdf=await PDFDocument.load(bytes),text:string[]=[];
+  for(const page of pdf.getPages()) {
+    const c=page.node.Contents();
+    const streams=c instanceof PDFArray ? Array.from({length:c.size()},(_,i)=>c.lookup(i)) : c ? [c] : [];
+    for(const stream of streams) if(stream instanceof PDFRawStream) {
+      const data=Buffer.from(decodePDFRawStream(stream).decode()).toString('latin1');
+      for(const match of data.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) text.push(Buffer.from(match[1]!, 'hex').toString('latin1'));
+    }
+  }
+  return text.join('\n');
+}
+function assertPdfChunkedField(text:string,label:string,expected:string) {
+  const lines=text.split('\n'),parts=expected.match(/[\s\S]{1,48}/g)??[''];
+  parts.forEach((part,index)=>{
+    const field=parts.length===1?label:`${label} (${index+1}/${parts.length})`, start=lines.indexOf(field);
+    assert.notEqual(start,-1,`PDF missing field ${field}`);
+    let actual='';
+    for(let i=start+1;actual.length<part.length && i<lines.length;i++) actual+=lines[i];
+    assert.equal(actual,part,`PDF truncated or altered ${field}`);
+  });
+}
+async function recordStatementPayment(x:Awaited<ReturnType<typeof settlementFixture>>, reference:string) {
+  const prepared=(await prepareHandymanBmSettlement(x.maker,prepareInput(x))).settlement;
+  const scope={clientId:x.f.realm.client.id,settlementId:prepared.snapshot.id};
+  await approveHandymanBmSettlement(x.checker,{...scope,settlementDigest:prepared.digest,evidenceReference:`approve/${id()}`});
+  await wait(20);const transferredAt=iso(Date.now());
+  await recordHandymanBmSettlementPayment(x.maker,{...scope,transferReference:reference,amount:prepared.snapshot.netPayable,
+    transferredAt,idempotencyKey:id(),file:{buffer:Buffer.from('%PDF-1.4\nreceipt\n%%EOF'),mimeType:'application/pdf'}});
+  return {prepared,scope,transferredAt};
+}
+async function verifyStatementPayment(x:Awaited<ReturnType<typeof settlementFixture>>, p:Awaited<ReturnType<typeof recordStatementPayment>>,reference:string) {
+  const evidence=await readHandymanBmSettlementEvidence(x.checker,p.scope);
+  return verifyHandymanBmSettlementPayment(x.checker,{...p.scope,evidenceReadId:evidence.evidenceReadId,contentSha256:evidence.contentSha256,
+    transferReference:reference,amount:p.prepared.snapshot.netPayable,transferredAt:p.transferredAt,confirmedAccountNumber:x.bankNumber,
+    attestedActualPayment:true,evidenceReference:`review/${id()}`});
+}
+
+describe('BM-COMMISSION-04 PART 01 scoped statement preview',()=>{
+  it('downloads a sourced DRAFT preview with exact calculation, provenance, checksums and UTC period semantics',async()=>{
+    const x=await settlementFixture(),manager=await statementManager(x.f.realm.building.id),input=statementInput(x),before=await counts();
+    const result=await downloadHandymanBmStatement(manager,input),s=result.snapshot;
+    assert.equal(s.status,'DRAFT_PREVIEW');assert.equal(s.issuer.legalName,x.f.issuerIdentity.snapshot.legalName);
+    assert.equal(s.beneficiary.id,x.f.bm.counterparty.id);assert.equal(s.building.id,input.buildingId);
+    assert.equal(s.agreement.versionId,x.f.versionId);assert.equal(s.period.timezone,'UTC');assert.equal(s.period.basis,'LEDGER_POSTED_AT');
+    assert.deepEqual(s.calculated,{gross:'10.00',ppn:'1.00',pphProjection:'0.75',netProjection:'10.25'});
+    assert.deepEqual(s.assertions,{withholding:'NOT_ASSERTED',taxRemittance:'NOT_ASSERTED'});
+    assert.equal(s.entries.length,1);assert.equal(s.entries[0]!.digest,x.entry.digest);
+    assert.equal(s.entries[0]!.sourceChecksum,x.entry.snapshot.sourceChecksum);assert.equal(s.entries[0]!.settlement.status,'CALCULATED');
+    assert.equal(s.entries[0]!.basis.commercialBasis,'100.00');assert.equal(s.entries[0]!.basis.ratePercent,'10.0000');
+    assert.equal(result.sourceChecksum,hash(s));assert.equal(result.checksum,createHash('sha256').update(result.bytes).digest('hex'));
+    assert.equal(result.bytes.subarray(0,5).toString(),'%PDF-');const text=await pdfTextContent(result.bytes);
+    for(const expected of ['DRAFT/PREVIEW','BM Commission Statement','CALCULATED gross','IDR 10.00','PPh projection',
+      'NOT ASSERTED','Tax remittance',x.entry.snapshot.id,x.f.source.transactionId,result.sourceChecksum.slice(0,48),x.entry.digest.slice(0,48)]) {
+      assert.ok(text.includes(expected),`PDF missing ${expected}`);
+    }
+    assertPdfChunkedField(text,'Snapshot SHA-256',result.sourceChecksum);
+    assertPdfChunkedField(text,'E1 ledger digest',x.entry.digest);
+    assert.ok(!text.includes('ISSUED'));assert.deepEqual(await counts(),before);
+    const excluded=await downloadHandymanBmStatement(manager,{...input,dateFrom:utcDay(-1),dateTo:utcDay(-1)});
+    assert.equal(excluded.snapshot.entries.length,0);assert.equal(excluded.snapshot.calculated.netProjection,'0.00');
+    assert.notEqual(excluded.sourceChecksum,result.sourceChecksum);
+  });
+  it('separates PREPARED, PAYABLE, unverified payment and manually verified PAID with full references',async()=>{
+    const x=await settlementFixture(),manager=await statementManager(x.f.realm.building.id),input=statementInput(x);
+    const ref=`bank/🙂/${'W'.repeat(140)}/tail-${id()}`;
+    const prepared=(await prepareHandymanBmSettlement(x.maker,prepareInput(x))).settlement;
+    const scope={clientId:input.clientId,settlementId:prepared.snapshot.id};
+    let s=(await downloadHandymanBmStatement(manager,input)).snapshot;
+    assert.equal(s.settlements[0]!.lifecycle,'PREPARED');assert.equal(s.settlements[0]!.status,'CALCULATED');
+    await approveHandymanBmSettlement(x.checker,{...scope,settlementDigest:prepared.digest,evidenceReference:`approve/${id()}`});
+    s=(await downloadHandymanBmStatement(manager,input)).snapshot;assert.equal(s.settlements[0]!.status,'PAYABLE');
+    await wait(20);const transferredAt=iso(Date.now());
+    await recordHandymanBmSettlementPayment(x.maker,{...scope,transferReference:ref,amount:prepared.snapshot.netPayable,
+      transferredAt,idempotencyKey:id(),file:{buffer:Buffer.from('%PDF-1.4\nreceipt\n%%EOF'),mimeType:'application/pdf'}});
+    const pending=await downloadHandymanBmStatement(manager,input);s=pending.snapshot;
+    assert.equal(s.settlements[0]!.lifecycle,'PAYMENT_RECORDED');assert.equal(s.settlements[0]!.status,'PAYABLE');
+    assert.equal(s.settlements[0]!.unverifiedPaymentRecorded,true);assert.equal(s.settlements[0]!.verifiedPayment,null);
+    assert.ok(!(await pdfTextContent(pending.bytes)).includes('tail-'));assert.ok(!JSON.stringify(s).includes(ref));
+    const evidence=await readHandymanBmSettlementEvidence(x.checker,scope);
+    await verifyHandymanBmSettlementPayment(x.checker,{...scope,evidenceReadId:evidence.evidenceReadId,contentSha256:evidence.contentSha256,
+      transferReference:ref,amount:prepared.snapshot.netPayable,transferredAt,confirmedAccountNumber:x.bankNumber,
+      attestedActualPayment:true,evidenceReference:`review/${id()}`});
+    const paid=await downloadHandymanBmStatement(manager,input),payment=paid.snapshot.settlements[0]!;
+    assert.equal(payment.status,'PAID');assert.equal(payment.verifiedPayment!.transferReference,ref);
+    assert.equal(payment.verifiedPayment!.method,'FINANCE_MANUAL_DOCUMENT_REVIEW');
+    assert.equal(payment.verifiedPayment!.contentSha256,evidence.contentSha256);
+    assert.ok(!JSON.stringify(paid.snapshot).includes(x.bankNumber));
+    const text=await pdfTextContent(paid.bytes);assert.ok(text.includes('PAID - Finance manual document review'));
+    assert.ok(text.includes('not bank'));assert.ok(text.includes('authenticated.'));assert.ok(text.includes('\\u{1F642}'));
+    assertPdfChunkedField(text,'S1 verified transfer reference',ref.replace('🙂','\\u{1F642}'));
+    assertPdfChunkedField(text,'S1 evidence SHA-256',evidence.contentSha256);
+    assert.ok(text.includes('Tax remittance'));assert.ok(text.includes('NOT ASSERTED'));
+  });
+  it('enforces Manager permissions, exact Client and Building scope, API query allowlist and download headers',async()=>{
+    const x=await settlementFixture(),input=statementInput(x),manager=await statementManager(input.buildingId);
+    const readOnly=await scopedUser(input.buildingId,['handyman.finance.read']);
+    const commercialOnly=await scopedUser(input.buildingId,['handyman.commercial.manage']);
+    await assert.rejects(downloadHandymanBmStatement(readOnly,input),code('PERMISSION_DENIED'));
+    await assert.rejects(downloadHandymanBmStatement(commercialOnly,input),code('PERMISSION_DENIED'));
+    const sibling=await buildingService.createBuilding({propertyId:x.f.realm.property.id,code:`SIB_${id().slice(0,8)}`,name:'Sibling'});
+    const outsider=await statementManager(sibling.id);
+    await assert.rejects(downloadHandymanBmStatement(outsider,input),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(downloadHandymanBmStatement(manager,{...input,clientId:id()}),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(downloadHandymanBmStatement(manager,{...input,counterpartyId:id()}),code('HANDYMAN_BM_STATEMENT_NOT_FOUND'));
+    await assert.rejects(downloadHandymanBmStatement(manager,{...input,agreementVersionId:id()}),code('HANDYMAN_BM_STATEMENT_NOT_FOUND'));
+    await assert.rejects(downloadHandymanBmStatement(manager,{...input,dateFrom:'2026-02-30'}),code('VALIDATION_ERROR'));
+    const path=`/api/v1/handyman/clients/${input.clientId}/buildings/${input.buildingId}/bm-beneficiaries/${input.counterpartyId}/commission-statement.pdf`;
+    const query={agreementVersionId:input.agreementVersionId,dateFrom:input.dateFrom,dateTo:input.dateTo};
+    assert.equal((await api().get(path).query(query)).status,401);
+    const token=await statementToken(manager),wrongToken=await statementToken(outsider),readToken=await statementToken(readOnly);
+    assert.equal((await api().get(path).query(query).set('Authorization',`Bearer ${readToken}`)).status,403);
+    assert.equal((await api().get(path).query(query).set('Authorization',`Bearer ${wrongToken}`)).status,403);
+    assert.equal((await api().get(path).query({...query,amount:'999'}).set('Authorization',`Bearer ${token}`)).status,400);
+    assert.equal((await api().get(path).query({...query,dateFrom:['2026-01-01','2026-01-02']}).set('Authorization',`Bearer ${token}`)).status,400);
+    const response=await api().get(path).query(query).set('Authorization',`Bearer ${token}`);
+    assert.equal(response.status,200);assert.match(response.headers['content-type'],/^application\/pdf/);
+    assert.match(response.headers['content-disposition'],/^attachment;.*preview\.pdf/);
+    assert.match(response.headers['cache-control'],/no-store/);assert.match(response.headers['x-statement-source-sha256'],/^[a-f0-9]{64}$/);
+    assert.equal(response.headers['x-content-sha256'],createHash('sha256').update(response.body as Buffer).digest('hex'));
+    assert.ok((await pdfTextContent(response.body as Buffer)).includes(response.headers['x-statement-source-sha256'].slice(0,48)));
+  });
+  it('never assigns a prior verified payment to a later, unpinned correction',async()=>{
+    const x=await settlementFixture(),manager=await statementManager(x.f.realm.building.id),input=statementInput(x),ref=`transfer/${id()}`;
+    const p=await recordStatementPayment(x,ref);await verifyStatementPayment(x,p,ref);await wait(25);
+    const {f}=x,ledger=await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,
+      amount:'20.00',reason:'Recorded labor reduction',idempotencyKey:id()},admin);await wait(25);
+    await deriveHandymanFinancialEntitlements(f.scope.id,admin,id());
+    const fact=(await q('SELECT * FROM handyman_entitlement_corrections WHERE entitlement_id=$1',[f.earned.bmFee.id])).rows[0];
+    const baseline=x.approvedTax.cmd.determination,source=await readHandymanBmCorrectedCommissionSource(admin,
+      {clientId:f.input.clientId,entitlementId:f.input.entitlementId,correctionFactId:fact.id,baseline});
+    const correctionInput:ProposeBmCorrectionTaxInput={...occurredInput(f),correctionFactId:fact.id,baseline,sourceChecksum:source.checksum,idempotencyKey:id()};
+    const state={f,old:x.approvedTax,ledger,fact,baseline,source,input:correctionInput};
+    const c=await proposeHandymanBmCorrectionTaxCase(admin,correctionInput),d=await decideHandymanBmCorrectionTaxCase(f.checker,correctionReview(state,c));
+    await wait(25);const corrected=await postHandymanBmCommissionLedger(admin,{...correctionCommand(state,c,d),idempotencyKey:id()});
+    const result=await downloadHandymanBmStatement(manager,input),s=result.snapshot;
+    assert.equal(s.entries.length,2);const original=s.entries.find(e=>e.id===x.entry.snapshot.id)!,adjustment=s.entries.find(e=>e.id===corrected.snapshot.id)!;
+    assert.equal(original.settlement.status,'PAID');assert.equal(adjustment.settlement.status,'CALCULATED');
+    assert.equal(adjustment.settlement.coverage,'NOT_COVERED');assert.equal(adjustment.correction!.factId,fact.id);
+    assert.equal(adjustment.correction!.reason,'Recorded labor reduction');assert.equal(adjustment.delta.gross,'-2.00');
+    assert.equal(adjustment.delta.net,'-1.85');assert.equal(s.calculated.netProjection,'8.40');
+    assert.equal(s.settlements[0]!.currentAnchorsValid,false);assert.deepEqual(s.settlements[0]!.ledgerEntries,[{id:x.entry.snapshot.id,digest:x.entry.digest}]);
+    assert.equal(s.settlements[0]!.verifiedPayment!.transferReference,ref);
+    const text=await pdfTextContent(result.bytes);assert.ok(text.includes('NOT_COVERED'));assert.ok(text.includes('No payment asserted for this entry'));
+    assert.ok(text.includes('IDR -2.00'));assert.ok(text.includes('IDR -1.85'));
+  });
+  it('requires a real current issuer profile even for an empty scoped period',async()=>{
+    const {realm}=await baseFixture(),draft=await prepareHandymanCommercialAgreement(admin,{clientId:realm.client.id,idempotencyKey:id()}),versionId=draft.version.id;
+    await q(`INSERT INTO handyman_bm_fee_rule_definitions(id,agreement_version_id,basis,mode,idempotency_key,created_by_user_id)
+      VALUES($1,$2,'LABOR_ONLY','DEFAULT',$3,$4)`,[id(),versionId,id(),admin]);
+    await q(`INSERT INTO handyman_bm_fee_term_definitions(id,agreement_version_id,term_kind,rate_percent,idempotency_key,created_by_user_id)
+      VALUES($1,$2,'PERCENTAGE_OF_BASIS','10.0000',$3,$4)`,[id(),versionId,id(),admin]);
+    await activateHandymanCommercialAgreementVersion(admin,{versionId,effectiveFrom:iso(Date.now()-60000),idempotencyKey:id()});
+    const bm=await bindVerifiedTestBm({actor:admin,clientId:realm.client.id,buildingId:realm.building.id,versionId,query:q,distinct:true});
+    const manager=await statementManager(realm.building.id);
+    await assert.rejects(downloadHandymanBmStatement(manager,{clientId:realm.client.id,buildingId:realm.building.id,counterpartyId:bm.counterparty.id,
+      agreementVersionId:versionId,dateFrom:utcDay(),dateTo:utcDay()}),code('HANDYMAN_DOCUMENT_ISSUER_PROFILE_NOT_FOUND'));
   });
 });
