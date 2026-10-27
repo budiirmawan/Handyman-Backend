@@ -1,5 +1,6 @@
 import { withTransaction } from '../../database';
 import type { PoolClient } from 'pg';
+import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
   assertBuildingScopedResourceAccess,
@@ -29,6 +30,8 @@ import {
 } from './handyman-material-execution.errors';
 import { handymanMaterialExecutionRepository }
   from './handyman-material-execution.repository';
+import { resolveApprovedAddMaterial }
+  from '../handyman-scope-variations/handyman-scope-variation-material-authority';
 import type {
   AcquireHandymanMaterialLineInput,
   ApproveHandymanMaterialLineInput,
@@ -38,6 +41,7 @@ import type {
   HandymanMaterialAcquisitionMode,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventType,
+  HandymanMaterialExecutionLineRecord,
   SettleHandymanMaterialLineInput,
   UsageHandymanMaterialLineInput,
   HandymanMaterialFinalChargeReadyProjection,
@@ -148,6 +152,59 @@ async function assertRemainingOriginalMaterialQuantity(
   }
 }
 
+function assertAddMaterialPrecision(quantity: number): void {
+  if (Number(quantity.toFixed(3)) !== quantity || quantity < 0.001) {
+    throw handymanMaterialExecutionQuantityExceededError('add-material-quantity-precision');
+  }
+}
+
+// Match the NUMERIC(14,3) storage scale for ADD arithmetic; binary float
+// artifacts such as 0.1 + 0.2 must not reject an exactly authorized 0.3.
+function materialQuantity(value: number, isAdd: boolean): number {
+  return isAdd ? Math.round(value * 1000) / 1000 : value;
+}
+
+function assertAddReplayQuantity(actual: number | null, requested: number): void {
+  if (actual !== requested) {
+    throw new AppError({ statusCode: 409, code: ERROR_CODES.IDEMPOTENCY_CONFLICT,
+      message: 'Idempotency key was already used with a different ADD material quantity.' });
+  }
+}
+
+async function assertAddMaterialLineAuthority(
+  tx: PoolClient,
+  line: HandymanMaterialExecutionLineRecord,
+  proposedQuantity: number,
+): Promise<void> {
+  if (!line.variationId || !line.approvedVariationVersion || !line.workOrderId) {
+    throw handymanMaterialExecutionLinkInvalidError('missing-add-material-binding');
+  }
+  const authority = await resolveApprovedAddMaterial(tx, line.executionScopeId,
+    line.variationId, line.approvedVariationVersion);
+  if (line.quotationVersionId !== authority.variation.revisedQuotationVersionId ||
+      line.quotationLineId !== authority.binding.revisedQuotationLineId ||
+      line.workOrderId !== authority.binding.workOrderId ||
+      line.sourceItemId !== authority.sourceItemId ||
+      line.approvedQty !== Number(authority.variation.quantity)) {
+    throw handymanMaterialExecutionLinkInvalidError('add-material-binding-mismatch');
+  }
+  if (Number(proposedQuantity.toFixed(3)) > Number(authority.variation.quantity)) {
+    throw handymanMaterialExecutionQuantityExceededError('exceeds-approved-add-material-quantity');
+  }
+}
+
+async function assertMaterialQuantityAuthority(
+  tx: PoolClient,
+  line: HandymanMaterialExecutionLineRecord,
+  proposedQuantity: number,
+): Promise<void> {
+  if (line.variationId) {
+    await assertAddMaterialLineAuthority(tx, line, proposedQuantity);
+  } else {
+    await assertRemainingOriginalMaterialQuantity(tx, line.executionScopeId, line.quotationLineId, proposedQuantity);
+  }
+}
+
 /**
  * ESTIMATE (governance D1/D3/D4/D7): AUTHORIZED scope + CURRENT
  * authoritative Crew Lead + valid quotation MATERIAL-line link →
@@ -171,6 +228,15 @@ export async function estimateHandymanMaterialExecutionLine(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
   const estimatedQty = ensureEstimatedQuantity(input.estimatedQty);
+  const variationUuid = input.variationId === undefined ? null : ensureUuid(input.variationId, 'variationId').toLowerCase();
+  const workOrderUuid = input.workOrderId === undefined ? null : ensureUuid(input.workOrderId, 'workOrderId').toLowerCase();
+  const approvedVariationVersion = input.approvedVariationVersion ?? null;
+  if ((variationUuid === null) !== (approvedVariationVersion === null) ||
+      (workOrderUuid !== null && variationUuid === null) ||
+      (approvedVariationVersion !== null && (!Number.isInteger(approvedVariationVersion) || approvedVariationVersion < 1))) {
+    throw handymanMaterialExecutionValidationError('approvedVariationVersion');
+  }
+  if (variationUuid) assertAddMaterialPrecision(estimatedQty);
 
   const { scope } = await authorityPreamble(scopeUuid, actorUuid);
   if (scope.status !== 'AUTHORIZED') {
@@ -181,11 +247,10 @@ export async function estimateHandymanMaterialExecutionLine(
     undefined,
     versionUuid,
   );
-  if (!version || version.id !== scope.approvedQuotationVersionId) {
-    // The link MUST anchor to the scope's immutable APPROVED
-    // quotation snapshot — never to an arbitrary or pending version.
+  if (!version || (!variationUuid && version.id !== scope.approvedQuotationVersionId) ||
+      (variationUuid && version.id === scope.approvedQuotationVersionId)) {
     throw handymanMaterialExecutionLinkInvalidError(
-      'version-not-approved-snapshot');
+      variationUuid ? 'add-requires-revised-quotation' : 'version-not-approved-snapshot');
   }
   const quoteLine = (await handymanQuotationLineRepository.listLines(
     undefined,
@@ -199,13 +264,15 @@ export async function estimateHandymanMaterialExecutionLine(
     throw handymanMaterialExecutionEstimateInvalidError(
       'exceeds-approved-snapshot-quantity');
   }
-  if (input.sourceItemId != null
-      && quoteLine.sourceItemId != null
-      && input.sourceItemId !== quoteLine.sourceItemId) {
+  if (input.sourceItemId != null &&
+      ((variationUuid && input.sourceItemId !== quoteLine.sourceItemId) ||
+       (!variationUuid && quoteLine.sourceItemId != null && input.sourceItemId !== quoteLine.sourceItemId))) {
     throw handymanMaterialExecutionLinkInvalidError(
       'source-item-mismatch-with-approved-line');
   }
-  const sourceItemId = input.sourceItemId ?? quoteLine.sourceItemId;
+  // For ADD material, the chosen immutable quote line is the sole identity
+  // source; a field caller may not substitute or invent an inventory item.
+  const sourceItemId = variationUuid ? quoteLine.sourceItemId : (input.sourceItemId ?? quoteLine.sourceItemId);
 
   return withTransaction(async (tx) => {
     await lockMaterialAuthority(tx, scopeUuid, actorUuid);
@@ -225,12 +292,31 @@ export async function estimateHandymanMaterialExecutionLine(
       const replayEvent = await handymanMaterialExecutionRepository
         .findMaterialExecutionEventByIdempotency(tx, existing.id,
           'ESTIMATE', key);
-      if (replayEvent && existing.executionScopeId === scopeUuid) {
+      if (replayEvent && existing.executionScopeId === scopeUuid &&
+          (variationUuid === null ? existing.variationId === null :
+            existing.variationId === variationUuid && existing.approvedVariationVersion === approvedVariationVersion &&
+            existing.quotationVersionId === version.id && existing.estimatedQty === estimatedQty &&
+            existing.sourceItemId === sourceItemId && (!workOrderUuid || existing.workOrderId === workOrderUuid))) {
         return { line: existing, event: replayEvent, replayed: true };
       }
       throw handymanMaterialExecutionLinkConflictError();
     }
-    await assertRemainingOriginalMaterialQuantity(tx, scopeUuid, quoteLineUuid, estimatedQty);
+    const addAuthority = variationUuid
+      ? await resolveApprovedAddMaterial(tx, scopeUuid, variationUuid, approvedVariationVersion!)
+      : null;
+    if (addAuthority) {
+      if (addAuthority.variation.revisedQuotationVersionId !== version.id ||
+          addAuthority.binding.revisedQuotationLineId !== quoteLine.id ||
+          (workOrderUuid && addAuthority.binding.workOrderId !== workOrderUuid) ||
+          addAuthority.sourceItemId !== sourceItemId) {
+        throw handymanMaterialExecutionLinkInvalidError('add-material-binding-mismatch');
+      }
+      if (estimatedQty > Number(addAuthority.variation.quantity)) {
+        throw handymanMaterialExecutionEstimateInvalidError('exceeds-approved-add-material-quantity');
+      }
+    } else {
+      await assertRemainingOriginalMaterialQuantity(tx, scopeUuid, quoteLineUuid, estimatedQty);
+    }
 
     const line = await handymanMaterialExecutionRepository
       .createMaterialExecutionLine(tx, {
@@ -240,6 +326,8 @@ export async function estimateHandymanMaterialExecutionLine(
         quotationLineId: quoteLine.id,
         sourceItemId,
         estimatedQty,
+        ...(addAuthority ? { variationId: variationUuid, approvedVariationVersion: addAuthority.approvedVersion,
+          workOrderId: addAuthority.binding.workOrderId, approvedQty: Number(addAuthority.variation.quantity) } : {}),
         supplierReference: input.supplierReference ?? null,
       });
     // approvedQty is the immutable quotation snapshot's quantity
@@ -264,6 +352,7 @@ export async function estimateHandymanMaterialExecutionLine(
         eventType: 'ESTIMATE',
         idempotencyKey: key,
         actorUserId: actorUuid,
+        ...(addAuthority ? { quantityDelta: estimatedQty } : {}),
       });
     return { line: headed, event, replayed: false };
   });
@@ -289,6 +378,7 @@ export async function approveHandymanMaterialExecutionLine(
   await authorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
+    await lockMaterialAuthority(tx, scopeUuid, actorUuid);
     const current = await handymanMaterialExecutionRepository
       .findMaterialExecutionLineByIdForUpdate(tx, lineUuid);
     if (!current || current.executionScopeId !== scopeUuid) {
@@ -303,6 +393,9 @@ export async function approveHandymanMaterialExecutionLine(
     if (current.status !== 'ESTIMATED') {
       throw handymanMaterialExecutionIllegalTransitionError(
         current.status, 'APPROVE');
+    }
+    if (current.variationId) {
+      await assertAddMaterialLineAuthority(tx, current, current.estimatedQty);
     }
     const headed = await handymanMaterialExecutionRepository
       .updateMaterialExecutionLineHead(tx, lineUuid, {
@@ -387,8 +480,10 @@ async function acquireHandymanMaterialLine(
       .findMaterialExecutionEventByIdempotency(tx, lineUuid,
         config.eventType, key);
     if (replayEvent) {
+      if (current.variationId) assertAddReplayQuantity(replayEvent.quantityDelta, deltaQty);
       return { line: current, event: replayEvent, replayed: true };
     }
+    if (current.variationId) assertAddMaterialPrecision(deltaQty);
     // A line adopts exactly ONE acquisition mode; a mismatch between
     // the chosen axis and the requested command is a bounded 409.
     if (current.acquisitionMode !== null
@@ -402,11 +497,12 @@ async function acquireHandymanMaterialLine(
       throw handymanMaterialExecutionIllegalTransitionError(
         current.status, config.eventType);
     }
+    const isAdd = current.variationId !== null;
     const nextIssued = mode === 'ISSUED'
-      ? current.issuedQty + deltaQty
+      ? materialQuantity(current.issuedQty + deltaQty, isAdd)
       : current.issuedQty;
     const nextPurchased = mode === 'PURCHASED'
-      ? current.purchasedQty + deltaQty
+      ? materialQuantity(current.purchasedQty + deltaQty, isAdd)
       : current.purchasedQty;
     // Quantity cap: accumulated possession may never exceed the
     // approved snapshot authority.
@@ -415,9 +511,8 @@ async function acquireHandymanMaterialLine(
       throw handymanMaterialExecutionQuantityExceededError(
         'exceeds-approved-snapshot-quantity');
     }
-    await assertRemainingOriginalMaterialQuantity(
-      tx, scopeUuid, current.quotationLineId,
-      nextIssued + nextPurchased - current.returnedQty,
+    await assertMaterialQuantityAuthority(
+      tx, current, materialQuantity(nextIssued + nextPurchased - current.returnedQty, isAdd),
     );
     const headed = await handymanMaterialExecutionRepository
       .updateMaterialExecutionLineHead(tx, lineUuid, {
@@ -440,6 +535,7 @@ async function acquireHandymanMaterialLine(
         eventType: config.eventType,
         idempotencyKey: key,
         actorUserId: actorUuid,
+        ...(current.variationId ? { quantityDelta: deltaQty } : {}),
       });
     return { line: headed, event, replayed: false };
   });
@@ -510,8 +606,10 @@ async function adjustUsageHandymanMaterialLine(
       .findMaterialExecutionEventByIdempotency(tx, lineUuid,
         kind, key);
     if (replayEvent) {
+      if (current.variationId) assertAddReplayQuantity(replayEvent.quantityDelta, deltaQty);
       return { line: current, event: replayEvent, replayed: true };
     }
+    if (current.variationId) assertAddMaterialPrecision(deltaQty);
     // Legal opening states: anything after acquisition opened
     // (ISSUED/PURCHASED/USED). FINAL_CHARGE_READY closes adjustment.
     if (current.status !== 'ISSUED'
@@ -520,31 +618,28 @@ async function adjustUsageHandymanMaterialLine(
       throw handymanMaterialExecutionIllegalTransitionError(
         current.status, kind);
     }
+    const isAdd = current.variationId !== null;
     const nextUsed = kind === 'USE'
-      ? current.usedQty + deltaQty
+      ? materialQuantity(current.usedQty + deltaQty, isAdd)
       : current.usedQty;
     const nextReturned = kind === 'RETURN'
-      ? current.returnedQty + deltaQty
+      ? materialQuantity(current.returnedQty + deltaQty, isAdd)
       : current.returnedQty;
     // Frozen quantity caps: the usage basis may never go negative —
     // (a) used, including this delta, may not exceed what is held
     // after previously returned quantities;
     // (b) returned, including this delta, may not exceed what
     // remains used.
-    if (nextUsed > current.issuedQty + current.purchasedQty
-          - nextReturned) {
+    if (nextUsed > materialQuantity(current.issuedQty + current.purchasedQty - nextReturned, isAdd)) {
       throw handymanMaterialExecutionQuantityExceededError(
         'use-exceeds-held-quantity');
     }
-    if (nextReturned > current.issuedQty + current.purchasedQty
-          - nextUsed) {
+    if (nextReturned > materialQuantity(current.issuedQty + current.purchasedQty - nextUsed, isAdd)) {
       throw handymanMaterialExecutionQuantityExceededError(
         'return-exceeds-used-quantity');
     }
     if (kind === 'USE') {
-      await assertRemainingOriginalMaterialQuantity(
-        tx, scopeUuid, current.quotationLineId, nextUsed,
-      );
+      await assertMaterialQuantityAuthority(tx, current, nextUsed);
     }
     const headed = await handymanMaterialExecutionRepository
       .updateMaterialExecutionLineHead(tx, lineUuid, {
@@ -566,6 +661,7 @@ async function adjustUsageHandymanMaterialLine(
         eventType: kind,
         idempotencyKey: key,
         actorUserId: actorUuid,
+        ...(current.variationId ? { quantityDelta: deltaQty } : {}),
       });
     return { line: headed, event, replayed: false };
   });

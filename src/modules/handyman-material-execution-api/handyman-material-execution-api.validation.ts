@@ -97,11 +97,26 @@ export function parseEstimateBody(
     'quotationLineId');
   const estimatedQty = quantity(source.estimatedQty, 'estimatedQty');
   const idempotencyKey = key(source.idempotencyKey);
+  const hasVariation = source.variationId !== undefined && source.variationId !== null;
+  const hasVersion = source.approvedVariationVersion !== undefined && source.approvedVariationVersion !== null;
+  if (hasVariation !== hasVersion) {
+    fail('Request validation failed.', [{ field: 'variationId', message: 'variationId and approvedVariationVersion must be supplied together.' }]);
+  }
+  const variationId = hasVariation ? uuid(source.variationId, 'variationId') : undefined;
+  const workOrderId = source.workOrderId == null ? undefined : uuid(source.workOrderId, 'workOrderId');
+  if (workOrderId && !variationId) {
+    fail('Request validation failed.', [{ field: 'workOrderId', message: 'workOrderId requires an ADD variation binding.' }]);
+  }
+  const approvedVariationVersion = hasVersion ? quantity(source.approvedVariationVersion, 'approvedVariationVersion') : undefined;
+  if (approvedVariationVersion !== undefined && (!Number.isInteger(approvedVariationVersion) || approvedVariationVersion < 1)) {
+    fail('Request validation failed.', [{ field: 'approvedVariationVersion', message: 'approvedVariationVersion must be a positive integer.' }]);
+  }
   return {
     quotationVersionId,
     quotationLineId,
     estimatedQty,
     idempotencyKey,
+    ...(variationId ? { variationId, approvedVariationVersion, workOrderId } : {}),
   };
 }
 

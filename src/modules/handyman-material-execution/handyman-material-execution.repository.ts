@@ -27,15 +27,15 @@ type Executor = Pick<PoolClient, 'query'>;
 
 const LINE_SELECT = `
   SELECT id, client_id, execution_scope_id, quotation_version_id,
-         quotation_line_id, source_item_id, status, acquisition_mode,
-         estimated_qty, approved_qty, issued_qty, purchased_qty,
+         quotation_line_id, source_item_id, variation_id, approved_variation_version, work_order_id,
+         status, acquisition_mode, estimated_qty, approved_qty, issued_qty, purchased_qty,
          used_qty, returned_qty, supplier_reference,
          created_at, updated_at
     FROM handyman_material_execution_lines`;
 
 const EVENT_SELECT = `
   SELECT id, client_id, line_id, execution_scope_id, event_type,
-         idempotency_key, actor_user_id, occurred_at, created_at
+         idempotency_key, actor_user_id, quantity_delta, occurred_at, created_at
     FROM handyman_material_execution_events`;
 
 function toQuantity(value: unknown): number {
@@ -50,6 +50,9 @@ function mapLine(row: Row): HandymanMaterialExecutionLineRecord {
     quotationVersionId: row.quotation_version_id,
     quotationLineId: row.quotation_line_id,
     sourceItemId: row.source_item_id,
+    variationId: row.variation_id ?? null,
+    approvedVariationVersion: row.approved_variation_version == null ? null : Number(row.approved_variation_version),
+    workOrderId: row.work_order_id ?? null,
     status: row.status as HandymanMaterialExecutionStatus,
     acquisitionMode:
       row.acquisition_mode as HandymanMaterialAcquisitionMode | null,
@@ -74,6 +77,7 @@ function mapEvent(row: Row): HandymanMaterialExecutionEventRecord {
     eventType: row.event_type as HandymanMaterialExecutionEventType,
     idempotencyKey: row.idempotency_key,
     actorUserId: row.actor_user_id,
+    quantityDelta: row.quantity_delta == null ? null : toQuantity(row.quantity_delta),
     occurredAt: row.occurred_at.toISOString(),
     createdAt: row.created_at.toISOString(),
   };
@@ -91,14 +95,15 @@ async function createMaterialExecutionLine(
   const result = await executor.query(
     `INSERT INTO handyman_material_execution_lines (
        id, client_id, execution_scope_id, quotation_version_id,
-       quotation_line_id, source_item_id, status, acquisition_mode,
-       estimated_qty, approved_qty, issued_qty, purchased_qty,
+       quotation_line_id, source_item_id, variation_id, approved_variation_version, work_order_id,
+       status, acquisition_mode, estimated_qty, approved_qty, issued_qty, purchased_qty,
        used_qty, returned_qty, supplier_reference
-     ) VALUES ($1, $2, $3, $4, $5, $6,
-               'ESTIMATED', NULL, $7, 0, 0, 0, 0, 0, $8)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $9, $10, $11,
+               'ESTIMATED', NULL, $7, $12, 0, 0, 0, 0, $8)
      RETURNING id, client_id, execution_scope_id,
                quotation_version_id, quotation_line_id,
-               source_item_id, status, acquisition_mode, estimated_qty,
+               source_item_id, variation_id, approved_variation_version, work_order_id,
+               status, acquisition_mode, estimated_qty,
                approved_qty, issued_qty, purchased_qty, used_qty,
                returned_qty, supplier_reference, created_at,
                updated_at`,
@@ -111,6 +116,10 @@ async function createMaterialExecutionLine(
       record.sourceItemId ?? null,
       record.estimatedQty,
       record.supplierReference ?? null,
+      record.variationId ?? null,
+      record.approvedVariationVersion ?? null,
+      record.workOrderId ?? null,
+      record.approvedQty ?? 0,
     ],
   );
   return mapLine(result.rows[0]);
@@ -197,8 +206,8 @@ async function updateMaterialExecutionLineHead(
       WHERE id = $1
       RETURNING id, client_id, execution_scope_id,
                 quotation_version_id, quotation_line_id,
-                source_item_id, status, acquisition_mode,
-                estimated_qty, approved_qty, issued_qty,
+                source_item_id, variation_id, approved_variation_version, work_order_id,
+                status, acquisition_mode, estimated_qty, approved_qty, issued_qty,
                 purchased_qty, used_qty, returned_qty,
                 supplier_reference, created_at, updated_at`,
     [
@@ -229,11 +238,11 @@ async function appendMaterialExecutionEvent(
   const result = await executor.query(
     `INSERT INTO handyman_material_execution_events (
        id, client_id, line_id, execution_scope_id, event_type,
-       idempotency_key, actor_user_id, occurred_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       idempotency_key, actor_user_id, quantity_delta, occurred_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
      RETURNING id, client_id, line_id, execution_scope_id,
                event_type, idempotency_key, actor_user_id,
-               occurred_at, created_at`,
+               quantity_delta, occurred_at, created_at`,
     [
       randomUUID(),
       record.clientId,
@@ -242,6 +251,7 @@ async function appendMaterialExecutionEvent(
       record.eventType,
       record.idempotencyKey,
       record.actorUserId,
+      record.quantityDelta ?? null,
     ],
   );
   return mapEvent(result.rows[0]);

@@ -1,3 +1,4 @@
+import { migration0511HandymanAddMaterialExecutionBinding } from './0511_handyman_add_material_execution_binding';
 import { migration0510HandymanQuotationDeliveryEvents } from './0510_handyman_quotation_delivery_events';
 import { migration0509HandymanQuotationDocuments } from './0509_handyman_quotation_documents';
 import { migration0508HandymanInspectionWorkLinks } from './0508_handyman_inspection_work_links';
@@ -1068,4 +1069,5 @@ export const migrations: readonly Migration[] = [
   migration0508HandymanInspectionWorkLinks,
   migration0509HandymanQuotationDocuments,
   migration0510HandymanQuotationDeliveryEvents,
+  migration0511HandymanAddMaterialExecutionBinding,
 ];

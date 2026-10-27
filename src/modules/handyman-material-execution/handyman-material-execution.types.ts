@@ -65,6 +65,10 @@ export type HandymanMaterialExecutionLineRecord = {
   quotationVersionId: string;
   quotationLineId: string;
   sourceItemId: string | null;
+  /** Null for original quotation lines; immutable for approved ADD material. */
+  variationId: string | null;
+  approvedVariationVersion: number | null;
+  workOrderId: string | null;
   status: HandymanMaterialExecutionStatus;
   acquisitionMode: HandymanMaterialAcquisitionMode | null;
   estimatedQty: number;
@@ -85,6 +89,11 @@ export type NewHandymanMaterialExecutionLine = {
   quotationLineId: string;
   sourceItemId: string | null;
   estimatedQty: number;
+  /** Present together only for ADD material, derived from consent. */
+  variationId?: string | null;
+  approvedVariationVersion?: number | null;
+  workOrderId?: string | null;
+  approvedQty?: number;
   supplierReference?: string | null;
 };
 
@@ -96,6 +105,11 @@ export type EstimateHandymanMaterialLineInput = {
   quotationVersionId: string;
   quotationLineId: string;
   estimatedQty: number;
+  variationId?: string;
+  /** Version of the Tenant-approved variation snapshot, not the lifecycle head. */
+  approvedVariationVersion?: number;
+  /** Optional caller expectation; the actual Work Order is derived from PIC consent. */
+  workOrderId?: string;
   sourceItemId?: string | null;
   supplierReference?: string | null;
   idempotencyKey: string;
@@ -202,6 +216,7 @@ export type HandymanMaterialExecutionEventRecord = {
   eventType: HandymanMaterialExecutionEventType;
   idempotencyKey: string;
   actorUserId: string;
+  quantityDelta: number | null;
   occurredAt: string;
   createdAt: string;
 };
@@ -213,4 +228,5 @@ export type NewHandymanMaterialExecutionEvent = {
   eventType: HandymanMaterialExecutionEventType;
   idempotencyKey: string;
   actorUserId: string;
+  quantityDelta?: number | null;
 };

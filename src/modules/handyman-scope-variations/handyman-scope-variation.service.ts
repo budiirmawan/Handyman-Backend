@@ -20,6 +20,10 @@ import { assertHandymanQuotationPricingAuthority }
   from '../handyman-quotations/handyman-quotation-access';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
 import {
+  addMaterialBindingFromEvents, assertAddMaterialQuoteBinding,
+  assertPinnedVariationApproval, variationConsentSnapshot,
+} from './handyman-scope-variation-material-authority';
+import {
   HANDYMAN_SCOPE_VARIATION_LINE_TYPES,
   HANDYMAN_SCOPE_VARIATION_QC_OUTCOMES,
   HANDYMAN_SCOPE_VARIATION_TYPES,
@@ -489,61 +493,6 @@ function assertExpectedVersion(
   }
 }
 
-// The Tenant decides this exact immutable event snapshot, not a future edit of
-// the variation projection. A legacy decision without this pin fails closed at
-// authorization or execution rather than being silently upgraded to consent.
-function variationConsentSnapshot(v: HandymanScopeVariationRecord, version = v.version) {
-  return {
-    version,
-    revisedQuotationVersionId: v.revisedQuotationVersionId,
-    variationType: v.variationType,
-    lineType: v.lineType,
-    targetQuotationLineId: v.targetQuotationLineId,
-    title: v.title,
-    description: v.description,
-    technicalFinding: v.technicalFinding,
-    quantity: v.quantity,
-    uomId: v.uomId,
-    quotedUnitAmount: v.quotedUnitAmount,
-    quotedTotalDelta: v.quotedTotalDelta,
-    currency: v.currency,
-  };
-}
-
-function matchesVariationConsentSnapshot(
-  actual: unknown,
-  expected: ReturnType<typeof variationConsentSnapshot>,
-): boolean {
-  return !!actual && typeof actual === 'object' && !Array.isArray(actual) &&
-    Object.entries(expected).every(([key, value]) =>
-      (actual as Record<string, unknown>)[key] === value);
-}
-
-async function assertPinnedVariationApproval(
-  tx: PoolClient,
-  variation: HandymanScopeVariationRecord,
-  approvedVersion: number,
-): Promise<void> {
-  const events = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
-  const decision = events.find((event) => event.eventType === 'TENANT_DECISION');
-  if (
-    !decision || variation.tenantDecisionOutcome !== 'APPROVED' ||
-    decision.actorRole !== 'TENANT' ||
-    decision.actorUserId !== variation.tenantDecidedByUserId ||
-    decision.metadata.decisionOutcome !== 'APPROVED' ||
-    !matchesVariationConsentSnapshot(
-      decision.metadata.consentSnapshot,
-      variationConsentSnapshot(variation, approvedVersion),
-    )
-  ) {
-    throw new AppError({
-      statusCode: 409,
-      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-      message: 'Variation requires an exact version-pinned Tenant PIC approval; obtain a new decision on a newly issued variation.',
-    });
-  }
-}
-
 function toCents(amount: string): bigint {
   const trimmed = amount.trim();
   const isNegative = trimmed.startsWith('-');
@@ -853,6 +802,9 @@ function stripCommercialForField(
   v: HandymanScopeVariationRecord,
   events: HandymanScopeVariationEventRecord[],
 ): FieldScopeVariationProjection {
+  const binding = addMaterialBindingFromEvents(v, events);
+  const decision = events.find((event) => event.eventType === 'TENANT_DECISION');
+  const approvedVersion = (decision?.metadata.consentSnapshot as { version?: unknown } | undefined)?.version;
   return {
     id: v.id,
     executionScopeId: v.executionScopeId,
@@ -860,6 +812,9 @@ function stripCommercialForField(
     variationType: v.variationType,
     lineType: v.lineType,
     targetQuotationLineId: v.targetQuotationLineId,
+    ...(binding ? { revisedQuotationVersionId: v.revisedQuotationVersionId, ...binding } : {}),
+    ...(binding && v.tenantDecisionOutcome === 'APPROVED' && typeof approvedVersion === 'number'
+      ? { approvedVariationVersion: approvedVersion } : {}),
     title: v.title,
     description: v.description,
     technicalFinding: v.technicalFinding,
@@ -1698,6 +1653,8 @@ export async function prepareVariationRevisedQuotation(
     quotedUnitAmount: unknown;
     currency?: unknown;
     revisedQuotationVersionId?: unknown;
+    revisedQuotationLineId?: unknown;
+    workOrderId?: unknown;
     evidenceReference?: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -1751,6 +1708,15 @@ export async function prepareVariationRevisedQuotation(
       tx, actorUserId, ctx, variation.originActorUserId,
     );
 
+    const isAddMaterial = variation.variationType === 'ADD' && variation.lineType === 'MATERIAL';
+    const binding = isAddMaterial ? {
+      revisedQuotationLineId: assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase(),
+      workOrderId: assertUuid(input.workOrderId, 'workOrderId').toLowerCase(),
+    } : null;
+    if (!isAddMaterial && (input.revisedQuotationLineId != null || input.workOrderId != null)) {
+      throw AppError.validation('The material line and Work Order binding is only valid for an ADD material variation.');
+    }
+
     const existingEv =
       await handymanScopeVariationRepository.findEventByIdempotencyKey(
         tx,
@@ -1763,7 +1729,9 @@ export async function prepareVariationRevisedQuotation(
         existingEv.actorUserId !== actorUserId ||
         variation.revisedQuotationVersionId !== revisedQuotationVersionId ||
         variation.quotedUnitAmount !== quotedUnitAmount ||
-        variation.currency !== currency
+        variation.currency !== currency ||
+        (binding !== null && (existingEv.metadata.revisedQuotationLineId !== binding.revisedQuotationLineId ||
+          existingEv.metadata.workOrderId !== binding.workOrderId))
       ) {
         throw new AppError({
           statusCode: 409,
@@ -1808,6 +1776,13 @@ export async function prepareVariationRevisedQuotation(
       },
     );
 
+    if (binding) {
+      await assertAddMaterialQuoteBinding(tx, {
+        executionScopeId: ctx.executionScopeId, quotationVersionId: revisedQuotationVersionId,
+        quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
+        quantity: variation.quantity, uomId: variation.uomId, quotedUnitAmount, currency,
+      });
+    }
     const evidenceReference =
       input.evidenceReference !== undefined && input.evidenceReference !== null
         ? assertNonEmptyText(
@@ -1848,6 +1823,7 @@ export async function prepareVariationRevisedQuotation(
         quotedTotalDelta,
         currency,
         revisedQuotationVersionId,
+        ...(binding ?? {}),
         revisedVersionNumber: qvValidation.revisedVersionNumber,
         originalQuotedTotal: qvValidation.originalQuotedTotal,
         revisedQuotedTotal: qvValidation.revisedQuotedTotal,
@@ -1894,6 +1870,8 @@ export async function recordVariationTenantDecision(
   input: {
     decision: unknown;
     revisedQuotationVersionId: unknown;
+    revisedQuotationLineId?: unknown;
+    workOrderId?: unknown;
     evidenceReference: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -1956,6 +1934,20 @@ export async function recordVariationTenantDecision(
     }
 
     await assertAuthorizedTenantDecisionActor(actorUserId, ctx, tx);
+
+    const bindingEvents = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+    const materialBinding = addMaterialBindingFromEvents(variation, bindingEvents);
+    if (variation.variationType === 'ADD' && variation.lineType === 'MATERIAL') {
+      if (!materialBinding) {
+        throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'ADD material requires a revised quotation-line and Work Order binding before Tenant consent.' });
+      }
+      if (assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase() !== materialBinding.revisedQuotationLineId ||
+          assertUuid(input.workOrderId, 'workOrderId').toLowerCase() !== materialBinding.workOrderId) {
+        throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'Tenant decision must identify the exact offered material line and Work Order.' });
+      }
+    }
 
     // The PIC must identify both the variation state and the issued offer
     // they actually reviewed; neither may be silently inferred from the head.
@@ -2041,6 +2033,14 @@ export async function recordVariationTenantDecision(
       expectedVariationDelta: variation.quotedTotalDelta,
       requireCurrentOffer: true,
     });
+    if (materialBinding && variation.quotedUnitAmount !== null) {
+      await assertAddMaterialQuoteBinding(tx, {
+        executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
+        quotationLineId: materialBinding.revisedQuotationLineId, workOrderId: materialBinding.workOrderId,
+        quantity: variation.quantity, uomId: variation.uomId,
+        quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
+      });
+    }
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
     // Evidence I/O can outlast an offer's deadline; recheck at the write.
@@ -2084,7 +2084,7 @@ export async function recordVariationTenantDecision(
         decisionOutcome,
         variationType: variation.variationType,
         quantity: variation.quantity,
-        consentSnapshot: variationConsentSnapshot(variation),
+        consentSnapshot: variationConsentSnapshot(variation, variation.version, materialBinding),
       },
     });
 
@@ -2229,6 +2229,20 @@ export async function authorizeVariationScope(
       expectedCurrency: variation.currency,
       expectedVariationDelta: variation.quotedTotalDelta,
     });
+    if (variation.variationType === 'ADD' && variation.lineType === 'MATERIAL') {
+      const events = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+      const binding = addMaterialBindingFromEvents(variation, events);
+      if (!binding || variation.quotedUnitAmount === null) {
+        throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'ADD material requires the PIC-approved quotation-line and Work Order binding.' });
+      }
+      await assertAddMaterialQuoteBinding(tx, {
+        executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
+        quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
+        quantity: variation.quantity, uomId: variation.uomId,
+        quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
+      });
+    }
 
     if (variation.variationType === 'REDUCE') {
       await validateReduceTargetAndRemainingQuantity(tx, ctx, {

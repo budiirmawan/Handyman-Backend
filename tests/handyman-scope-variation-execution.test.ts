@@ -15,6 +15,9 @@ import { userService } from '../src/modules/users';
 import { roleService } from '../src/modules/roles';
 import { permissionRepository, permissionService } from '../src/modules/permissions';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
+import { buildingService } from '../src/modules/buildings';
+import { workOrderService } from '../src/modules/work-orders';
+import { inventoryItemService } from '../src/modules/inventory-items';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
 import { tenantPicService } from '../src/modules/tenant-pics';
@@ -54,6 +57,8 @@ let originalA: string, originalB: string, originalLabor: string, uom: string;
 let evidence: string, materialA: string;
 let firstReduce: string, rejectedAdd: string;
 let rejectedVersion: string;
+let workOrder: string, foreignWorkOrder: string, materialItem: string;
+let approvedAdd: string, addLine: string, approvedVersionId: string;
 
 function responseData(response: any, status = 200) {
   assert.equal(response.status, status, JSON.stringify(response.body));
@@ -76,9 +81,10 @@ async function material(lineId: string, action: string, quantity?: number, idemp
     ...(quantity === undefined ? {} : { quantity }), idempotencyKey,
   });
 }
-async function estimate(versionId: string, lineId: string, quantity: number, idempotencyKey = key()) {
+async function estimate(versionId: string, lineId: string, quantity: number, idempotencyKey = key(),
+  binding?: { variationId: string; approvedVariationVersion: number; workOrderId?: string }) {
   return post(`${materials()}/estimate`, leadToken, {
-    quotationVersionId: versionId, quotationLineId: lineId, estimatedQty: quantity, idempotencyKey,
+    quotationVersionId: versionId, quotationLineId: lineId, estimatedQty: quantity, idempotencyKey, ...binding,
   });
 }
 async function proposal(type: 'ADD' | 'REDUCE', quantity: number, target?: string) {
@@ -98,29 +104,31 @@ async function operation(variationId: string, action: string, body: Record<strin
 async function review(variationId: string) {
   responseData(await operation(variationId, 'operations-review', { expectedVersion: 1 }));
 }
-async function addQuoteLine(version: string, type: 'LABOR' | 'MATERIAL', qty: number, price: number, name: string) {
+async function addQuoteLine(version: string, type: 'LABOR' | 'MATERIAL', qty: number, price: number, name: string, sourceItemId?: string) {
   return addHandymanQuotationLine(version, { lineType: type, description: name, quantity: qty,
-    uomId: uom, currency: 'IDR', finalQuotedUnitAmount: price }, admin);
+    uomId: uom, currency: 'IDR', finalQuotedUnitAmount: price, ...(sourceItemId ? { sourceItemId } : {}) }, admin);
 }
-// A real issued revised quote with the exact cumulative amount; these lines do
-// not by themselves establish an ADD-to-execution identity (the blocker).
-async function revision(a: number, b: number, add = false) {
+// Real revisions contain original scope and separately identified additions.
+async function revision(a: number, b: number, add = false, oneOff = false) {
   const v = await createHandymanQuotationRevision(quotationId, admin);
-  await addQuoteLine(v.id, 'LABOR', 1, 100, 'Original labor');
-  await addQuoteLine(v.id, 'MATERIAL', a, 25, 'Original material A');
+  const labor = await addQuoteLine(v.id, 'LABOR', 1, 100, 'Original labor');
+  const lineA = await addQuoteLine(v.id, 'MATERIAL', a, 25, 'Original material A');
   await addQuoteLine(v.id, 'MATERIAL', b, 25, 'Original material B');
-  const added = add ? await addQuoteLine(v.id, 'MATERIAL', 2, 30, 'Additional material') : null;
+  const added = add ? await addQuoteLine(v.id, 'MATERIAL', 2, 30, 'Additional material', materialItem) : null;
+  const oneOffLine = oneOff ? await addQuoteLine(v.id, 'MATERIAL', 0.3, 40, 'One-off seal') : null;
   await issueHandymanQuotationVersion(v.id, { validUntil: validUntil() }, admin);
-  return { id: v.id, addedLine: added?.id };
+  return { id: v.id, addedLine: added?.id, oneOffLine: oneOffLine?.id, lineA: lineA.id, labor: labor.id };
 }
-async function prepare(variationId: string, versionId: string, amount: number) {
+async function prepare(variationId: string, versionId: string, amount: number, lineId?: string) {
   responseData(await operation(variationId, 'revised-quotation', {
     expectedVersion: 2, revisedQuotationVersionId: versionId, quotedUnitAmount: amount, currency: 'IDR',
+    ...(lineId ? { revisedQuotationLineId: lineId, workOrderId: workOrder } : {}),
   }));
 }
-async function decision(variationId: string, versionId: string, outcome: 'APPROVED' | 'REJECTED') {
+async function decision(variationId: string, versionId: string, outcome: 'APPROVED' | 'REJECTED', lineId?: string) {
   responseData(await operation(variationId, 'tenant-decision', {
     expectedVersion: 3, revisedQuotationVersionId: versionId, decision: outcome, evidenceReference: evidence,
+    ...(lineId ? { revisedQuotationLineId: lineId, workOrderId: workOrder } : {}),
   }, picToken));
 }
 async function authorize(variationId: string) {
@@ -172,6 +180,15 @@ before(async () => {
   uom = id();
   await pool.query(`INSERT INTO units_of_measure(id,client_id,code,name,symbol,category)
     VALUES($1,$2,$3,'piece','pc','COUNT')`, [uom, realm.client.id, `U_${id().slice(0, 8).toUpperCase()}`]);
+  materialItem = (await inventoryItemService.createInventoryItem({ clientId: realm.client.id,
+    code: `I_${id().slice(0, 8).toUpperCase()}`, name: 'Copper pipe', itemType: 'MATERIAL', uomId: uom }, admin)).id;
+  const otherBuilding = await buildingService.createBuilding({ propertyId: realm.property.id,
+    code: `B_${id().slice(0, 8).toUpperCase()}`, name: 'Other building' });
+  await buildingAssignmentService.createAssignment(admin, { buildingId: otherBuilding.id });
+  workOrder = (await workOrderService.createWorkOrder({ clientId: realm.client.id, buildingId: realm.building.id,
+    workOrderNumber: `WO_${id().slice(0, 8)}`, title: 'Pipe repair', workType: 'HANDYMAN', createdByUserId: admin })).id;
+  foreignWorkOrder = (await workOrderService.createWorkOrder({ clientId: realm.client.id, buildingId: otherBuilding.id,
+    workOrderNumber: `WO_${id().slice(0, 8)}`, title: 'Other building', workType: 'HANDYMAN', createdByUserId: admin })).id;
   const attr = await createChannelAttribution({ tenantCompanyId: tenant.id, buildingId: realm.building.id, tenantPicId: pic.id,
     spaceId: chain.space.id, originChannel: 'BM_SUPER_APP', originReference: `bm-handoff:BM_SUPER_APP:${id()}`,
     createdByUserId: customer.id });
@@ -307,33 +324,119 @@ describe('approved variation and real material execution', () => {
     assert.equal(responseData(await material(line.id, 'purchase', 6, purchaseKey)).replayed, true);
   });
 
-  it('does not pretend rejected or even approved ADD has a material execution binding', async () => {
+  it('binds the approved ADD to the exact material line, consent version and Work Order', async () => {
     rejectedAdd = await proposal('ADD', 2); await review(rejectedAdd);
     const refusedOffer = await revision(3, 6, true); rejectedVersion = refusedOffer.id;
     assert.ok(refusedOffer.addedLine);
-    await prepare(rejectedAdd, refusedOffer.id, 30);
-    rejection(await estimate(refusedOffer.id, refusedOffer.addedLine!, 1), 409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'version-not-approved-snapshot');
-    await decision(rejectedAdd, refusedOffer.id, 'REJECTED');
+    const terms = { expectedVersion: 2, revisedQuotationVersionId: refusedOffer.id,
+      revisedQuotationLineId: refusedOffer.addedLine, workOrderId: workOrder, quotedUnitAmount: 30, currency: 'IDR' };
+    rejection(await operation(rejectedAdd, 'revised-quotation', terms, leadToken), 403, 'HANDYMAN_VARIATION_ROLE_FORBIDDEN');
+    rejection(await operation(rejectedAdd, 'revised-quotation', { ...terms, revisedQuotationLineId: undefined }), 400, 'VALIDATION_ERROR');
+    rejection(await operation(rejectedAdd, 'revised-quotation', { ...terms, workOrderId: foreignWorkOrder }), 403, 'BUILDING_ACCESS_DENIED');
+    rejection(await operation(rejectedAdd, 'revised-quotation', { ...terms, revisedQuotationLineId: refusedOffer.lineA }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(rejectedAdd, 'revised-quotation', { ...terms, revisedQuotationLineId: refusedOffer.labor }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    await prepare(rejectedAdd, refusedOffer.id, 30, refusedOffer.addedLine);
+    const refusedBinding = { variationId: rejectedAdd, approvedVariationVersion: 3, workOrderId: workOrder };
+    rejection(await estimate(refusedOffer.id, refusedOffer.addedLine!, 1, key(), refusedBinding), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(rejectedAdd, 'tenant-decision', { expectedVersion: 3, revisedQuotationVersionId: refusedOffer.id,
+      revisedQuotationLineId: refusedOffer.addedLine, workOrderId: workOrder, decision: 'APPROVED', evidenceReference: evidence }, leadToken),
+    403, 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN');
+    await decision(rejectedAdd, refusedOffer.id, 'REJECTED', refusedOffer.addedLine);
     rejection(await operation(rejectedAdd, 'authorize-scope', { expectedVersion: 4 }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
-    rejection(await estimate(refusedOffer.id, refusedOffer.addedLine!, 1), 409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'version-not-approved-snapshot');
-    const approvedAdd = await proposal('ADD', 2); await review(approvedAdd);
-    rejection(await operation(approvedAdd, 'revised-quotation', { expectedVersion: 2,
-      revisedQuotationVersionId: rejectedVersion, quotedUnitAmount: 30, currency: 'IDR' }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await estimate(refusedOffer.id, refusedOffer.addedLine!, 1, key(), refusedBinding), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+
+    approvedAdd = await proposal('ADD', 2); await review(approvedAdd);
+    rejection(await operation(approvedAdd, 'revised-quotation', { ...terms, revisedQuotationVersionId: rejectedVersion }),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
     const offer = await revision(3, 6, true); assert.ok(offer.addedLine);
-    await prepare(approvedAdd, offer.id, 30);
-    rejection(await operation(approvedAdd, 'tenant-decision', { expectedVersion: 3,
-      revisedQuotationVersionId: rejectedVersion, decision: 'APPROVED', evidenceReference: evidence }, picToken), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
-    await decision(approvedAdd, offer.id, 'APPROVED'); await authorize(approvedAdd);
-    rejection(await estimate(offer.id, offer.addedLine!, 2), 409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'version-not-approved-snapshot');
-    const count = await pool.query('SELECT COUNT(*)::int AS n FROM handyman_material_execution_lines WHERE quotation_line_id=$1', [offer.addedLine]);
-    assert.equal(count.rows[0].n, 0, 'no fabricated additional execution record');
+    approvedVersionId = offer.id;
+    await prepare(approvedAdd, offer.id, 30, offer.addedLine);
+    const consent = { expectedVersion: 3, revisedQuotationVersionId: offer.id, revisedQuotationLineId: offer.addedLine,
+      workOrderId: workOrder, decision: 'APPROVED', evidenceReference: evidence };
+    rejection(await operation(approvedAdd, 'tenant-decision', { ...consent, revisedQuotationVersionId: rejectedVersion }, picToken),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(approvedAdd, 'tenant-decision', { ...consent, workOrderId: foreignWorkOrder }, picToken),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(approvedAdd, 'tenant-decision', { ...consent, revisedQuotationLineId: offer.lineA }, picToken),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    await decision(approvedAdd, offer.id, 'APPROVED', offer.addedLine); await authorize(approvedAdd);
+    const field = responseData(await api().get(fieldVariations()).set(auth(leadToken))).variations
+      .find((v: any) => v.id === approvedAdd);
+    assert.equal(field.revisedQuotationVersionId, offer.id);
+    assert.equal(field.revisedQuotationLineId, offer.addedLine);
+    assert.equal(field.workOrderId, workOrder);
+    assert.equal(field.approvedVariationVersion, 3);
+    assert.equal(field.quotedUnitAmount, undefined);
+    const binding = { variationId: approvedAdd, approvedVariationVersion: 3, workOrderId: workOrder };
+    rejection(await estimate(offer.id, offer.addedLine!, 1), 409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'version-not-approved-snapshot');
+    rejection(await estimate(offer.id, offer.addedLine!, 1, key(), { ...binding, approvedVariationVersion: 4 }),
+      409, 'HANDYMAN_VARIATION_VERSION_CONFLICT');
+    rejection(await estimate(offer.id, offer.addedLine!, 1, key(), { ...binding, workOrderId: foreignWorkOrder }),
+      409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'add-material-binding-mismatch');
+    rejection(await estimate(offer.id, offer.lineA, 1, key(), binding),
+      409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'add-material-binding-mismatch');
+    rejection(await estimate(originalVersion, originalA, 1, key(), binding),
+      409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_INVALID', 'add-requires-revised-quotation');
+    rejection(await estimate(offer.id, offer.addedLine!, 2.001, key(), binding),
+      400, 'HANDYMAN_MATERIAL_EXECUTION_ESTIMATE_INVALID');
+    const keys = [key(), key()];
+    const concurrent = await Promise.all(keys.map((k) => estimate(offer.id, offer.addedLine!, 2, k, binding)));
+    assert.deepEqual(concurrent.map((r) => r.status).sort(), [200, 409]);
+    const winner = concurrent.findIndex((r) => r.status === 200);
+    const execution = responseData(concurrent[winner]);
+    addLine = execution.line.id;
+    assert.equal(execution.line.variationId, approvedAdd);
+    assert.equal(execution.line.approvedVariationVersion, 3);
+    assert.equal(execution.line.workOrderId, workOrder);
+    assert.equal(execution.line.quotationLineId, offer.addedLine);
+    assert.equal(execution.line.sourceItemId, materialItem);
+    assert.equal(execution.line.approvedQty, 2);
+    assert.equal(responseData(await estimate(offer.id, offer.addedLine!, 2, keys[winner], binding)).replayed, true);
+    rejection(await estimate(offer.id, offer.addedLine!, 1, keys[winner], binding), 409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_CONFLICT');
+    rejection(await estimate(offer.id, offer.addedLine!, 2, key(), binding), 409, 'HANDYMAN_MATERIAL_EXECUTION_LINK_CONFLICT');
+    responseData(await material(addLine, 'approve'));
+    rejection(await material(addLine, 'issue', 2.001), 400, 'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED');
+    const issueKey = key(); responseData(await material(addLine, 'issue', 2, issueKey));
+    assert.equal(responseData(await material(addLine, 'issue', 2, issueKey)).replayed, true);
+    rejection(await material(addLine, 'issue', 1, issueKey), 409, 'IDEMPOTENCY_CONFLICT');
+    const useKey = key(); assert.equal(responseData(await material(addLine, 'use', 1, useKey)).line.usedQty, 1);
+    assert.equal(responseData(await material(addLine, 'use', 1, useKey)).replayed, true);
+    rejection(await material(addLine, 'use', 0.5, useKey), 409, 'IDEMPOTENCY_CONFLICT');
+    rejection(await material(addLine, 'use', 0.0001), 400, 'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED', 'precision');
+    await assert.rejects(pool.query('UPDATE handyman_material_execution_lines SET work_order_id=$2 WHERE id=$1', [addLine, foreignWorkOrder]), /immutable/);
+    await assert.rejects(pool.query('UPDATE handyman_material_execution_lines SET approved_qty=3 WHERE id=$1', [addLine]), /immutable/);
+    const events = await pool.query('SELECT id FROM handyman_material_execution_events WHERE line_id=$1 AND event_type=$2', [addLine, 'USE']);
+    await assert.rejects(pool.query('UPDATE handyman_material_execution_events SET quantity_delta=2 WHERE id=$1', [events.rows[0].id]), /append-only/);
   });
 
-  it('documents the missing labor item binding rather than treating a generic session as item execution', async () => {
-    const columns = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='handyman_work_sessions'`);
-    const names = new Set(columns.rows.map((row) => row.column_name));
-    assert.equal(names.has('variation_id'), false);
-    assert.equal(names.has('quotation_line_id'), false);
-    assert.equal(names.has('quantity'), false);
+  it('uses immutable one-off material identity and keeps earlier approved ADD usable after a later quote', async () => {
+    const oneOff = await proposal('ADD', 0.3); await review(oneOff);
+    const later = await revision(3, 6, true, true); assert.ok(later.oneOffLine);
+    await prepare(oneOff, later.id, 40, later.oneOffLine);
+    await decision(oneOff, later.id, 'APPROVED', later.oneOffLine); await authorize(oneOff);
+    const prior = await pool.query('SELECT status FROM handyman_quotation_versions WHERE id=$1', [approvedVersionId]);
+    assert.equal(prior.rows[0].status, 'SUPERSEDED');
+    // Superseding an already-consented offer does not silently revoke its ADD.
+    const raced = await Promise.all([material(addLine, 'use', 0.6), material(addLine, 'use', 0.6)]);
+    assert.deepEqual(raced.map((r) => r.status).sort(), [200, 400]);
+    assert.equal(responseData(await material(addLine, 'use', 0.4)).line.usedQty, 2);
+    rejection(await material(addLine, 'use', 0.001), 400, 'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED');
+    const binding = { variationId: oneOff, approvedVariationVersion: 3, workOrderId: workOrder };
+    const line = responseData(await estimate(later.id, later.oneOffLine!, 0.3, key(), binding)).line;
+    assert.equal(line.sourceItemId, null, 'one-off identity is the immutable quotation line, not a fabricated catalog item');
+    assert.equal(line.quotationLineId, later.oneOffLine);
+    responseData(await material(line.id, 'approve'));
+    responseData(await material(line.id, 'purchase', 0.1));
+    assert.equal(responseData(await material(line.id, 'purchase', 0.2)).line.purchasedQty, 0.3);
+    responseData(await material(line.id, 'use', 0.1));
+    responseData(await material(line.id, 'return', 0.1));
+    assert.equal(responseData(await material(line.id, 'use', 0.1)).line.usedQty, 0.2);
+    rejection(await material(line.id, 'use', 0.001), 400, 'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED');
+    const original = await pool.query('SELECT quantity FROM handyman_quotation_lines WHERE id=$1', [originalA]);
+    assert.equal(Number(original.rows[0].quantity), 10);
+    const history = await pool.query(`SELECT event_type, quantity_delta FROM handyman_material_execution_events
+      WHERE line_id=$1 ORDER BY occurred_at, created_at, id`, [addLine]);
+    assert.ok(history.rows.some((e) => e.event_type === 'USE' && Number(e.quantity_delta) === 1));
+    assert.ok(history.rows.some((e) => e.event_type === 'USE' && Number(e.quantity_delta) === 0.6));
   });
 });

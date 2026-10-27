@@ -53,6 +53,8 @@ function toLinePayload(line: HandymanMaterialExecutionLineRecord) {
     quotationVersionId: line.quotationVersionId,
     quotationLineId: line.quotationLineId,
     sourceItemId: line.sourceItemId,
+    ...(line.variationId ? { variationId: line.variationId,
+      approvedVariationVersion: line.approvedVariationVersion, workOrderId: line.workOrderId } : {}),
     status: line.status,
     acquisitionMode: line.acquisitionMode,
     estimatedQty: line.estimatedQty,
@@ -100,6 +102,7 @@ function toEventPayload(event: HandymanMaterialExecutionEventRecord) {
     executionScopeId: event.executionScopeId,
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
+    ...(event.quantityDelta !== null ? { quantityDelta: event.quantityDelta } : {}),
     occurredAt: event.occurredAt,
   };
 }
@@ -237,6 +240,9 @@ export function postEstimateHandler(
           quotationVersionId: body.quotationVersionId,
           quotationLineId: body.quotationLineId,
           estimatedQty: body.estimatedQty,
+          variationId: body.variationId,
+          approvedVariationVersion: body.approvedVariationVersion,
+          workOrderId: body.workOrderId,
           idempotencyKey: body.idempotencyKey,
         }, actor(req))),
         200,
