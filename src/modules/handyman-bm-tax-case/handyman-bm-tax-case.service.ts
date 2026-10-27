@@ -36,6 +36,10 @@ function uuid(value:unknown,field:string):string {
   if(typeof value!=='string' || !isValidUuid(value) || /^(?:0{32}|1{32}|f{32})$/i.test(value.replaceAll('-',''))) throw invalid(field);
   return value.toLowerCase();
 }
+function validEvidence(value:unknown):boolean {
+  return typeof value==='string' && value===value.toLowerCase() && isValidUuid(value) &&
+    !/^(?:0{32}|1{32}|f{32})$/.test(value.replaceAll('-',''));
+}
 function digest(value:unknown,field:string):string {
   if(typeof value!=='string' || !/^[0-9a-f]{64}$/.test(value)) throw invalid(field);
   return value;
@@ -156,7 +160,8 @@ function view(row:Record<string,any>,replayed=false):BmTaxCaseView {
   const snapshot=row.snapshot as BmTaxCaseSnapshot;
   if(!snapshot || row.digest!==hash(snapshot) || snapshot.id!==row.id || snapshot.version!==row.version ||
      snapshot.clientId!==row.client_id || snapshot.buildingId!==row.building_id || snapshot.entitlementId!==row.entitlement_id ||
-     snapshot.previousCaseId!==row.previous_case_id || snapshot.createdByUserId!==row.created_by_user_id || snapshot.idempotencyKey!==row.idempotency_key)
+     snapshot.previousCaseId!==row.previous_case_id || snapshot.createdByUserId!==row.created_by_user_id || snapshot.idempotencyKey!==row.idempotency_key ||
+     !validEvidence(snapshot.transactionEvidenceReferenceId) || !validEvidence(snapshot.ppnEvidenceReferenceId) || !validEvidence(snapshot.pphEvidenceReferenceId))
     throw integrity();
   return Object.freeze({snapshot:Object.freeze(snapshot),digestAlgorithm:'SHA-256',digest:row.digest,createdAt:iso(row.created_at),replayed});
 }
@@ -165,7 +170,7 @@ function decision(row:Record<string,any>,replayed=false):BmTaxCaseDecision {
     version:row.version,caseDigest:row.case_digest,decision:row.decision as 'APPROVE'|'REJECT',
     ppnReviewEvidenceReferenceId:row.ppn_evidence_id,pphReviewEvidenceReferenceId:row.pph_evidence_id,
     actorUserId:row.actor_user_id,occurredAt:iso(row.occurred_at)};
-  if(hash(body)!==row.decision_digest) throw integrity();
+  if(hash(body)!==row.decision_digest || !validEvidence(body.ppnReviewEvidenceReferenceId) || !validEvidence(body.pphReviewEvidenceReferenceId)) throw integrity();
   return Object.freeze({...body,decisionDigest:row.decision_digest,replayed});
 }
 function normalizeIntent(input:ProposeBmTaxCaseInput) {

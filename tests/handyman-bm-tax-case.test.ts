@@ -31,6 +31,8 @@ import { decideHandymanBmTaxCase, proposeHandymanBmTaxCase, requireApprovedHandy
   type BmTaxCaseDecision, type BmTaxCaseView, type ProposeBmTaxCaseInput } from '../src/modules/handyman-bm-tax-case';
 import { requireApprovedBmTaxCaseInSnapshot } from '../src/modules/handyman-bm-tax-case/handyman-bm-tax-case.service';
 import { hash } from '../src/modules/handyman-pph-calculation/handyman-pph-core';
+import { calculateHandymanBmCommissionTaxProjection } from '../src/modules/handyman-bm-tax-projection';
+import { calculateHandymanBmCommissionTaxProjectionInSnapshot } from '../src/modules/handyman-bm-tax-projection/handyman-bm-tax-projection.service';
 
 const DIR='/tmp/hm-bm-tax-02ca-pg',PORT=55541;
 Object.assign(process.env,{NODE_ENV:'test',LOG_LEVEL:'error',DB_HOST:'127.0.0.1',DB_PORT:String(PORT),DB_USER:'postgres',
@@ -63,7 +65,8 @@ async function scopedUser(buildingId:string,permissions:string[]){
 const issuerContent=(clientId:string,legalName:string)=>({clientId,expectedVersion:null,legalName,displayName:'Handyman',
   registeredAddress:'Jl. Merdeka 1',businessAddress:null,city:'Jakarta',province:'Jakarta',postalCode:'10110',email:'issuer@example.test',
   phone:'+62 21 5000 1111',whatsapp:'+62 811 2000 3000',website:null,taxId:null,businessRegistrationId:null,logoReference:null});
-type Options={fractional?:boolean;ppn?:'TAXABLE'|'EXEMPT';pph?:'WITHHOLD'|'NON_WITHHOLD';distinct?:boolean;approvePpn?:boolean};
+type Options={fractional?:boolean;ppn?:'TAXABLE'|'EXEMPT'|'NON_TAXABLE';pph?:'WITHHOLD'|'EXEMPT'|'NON_WITHHOLD';
+  distinct?:boolean;approvePpn?:boolean;ppnNoRounding?:boolean;pphNoRounding?:boolean;pphRatio?:boolean;ruleStartsTomorrow?:boolean};
 async function fixture(options:Options={}){
   const distinct=options.distinct!==false,{realm,scope}=await baseFixture(),crew=await crewFixture(realm);
   await assignHandymanExecutionScopeCrew({executionScopeId:scope.id,providerContextId:crew.providerContext.id,crewId:crew.crew.id},admin);
@@ -97,20 +100,23 @@ async function fixture(options:Options={}){
     return decideHandymanTaxIdentityApproval(checker,{...pin,submissionId:submission.id,decision:'APPROVE',evidenceSource:'TEST_CHECKER',evidenceReference:`decision/${id()}`});
   }
   const identityDecision=await approveIdentity(owner,identity),issuerDecision=await approveIdentity(issuerOwner,issuerIdentity);
-  const common={clientId:realm.client.id,transactionContext:'BM_COMMISSION' as const,effectiveFrom:day(-1),effectiveTo:day(3),
+  const common={clientId:realm.client.id,transactionContext:'BM_COMMISSION' as const,effectiveFrom:day(options.ruleStartsTomorrow?1:-1),effectiveTo:day(3),
     roundingMode:'HALF_UP' as const,legalReference:'TEST ONLY',legalSource:'TEST ONLY',evidenceSource:'TEST',evidenceReference:`rule/${id()}`,expectedVersion:null};
   const ppn=options.ppn??'TAXABLE',pph=options.pph??'WITHHOLD';
-  const ppnInput:CreateHandymanTaxRule={...common,taxCode:'PPN',taxpayerClassification:`P02A_${ppn==='TAXABLE'?'TAX':'EXEMPT'}_E_P_E_P_TEST_CASE`,
+  const ppnInput:CreateHandymanTaxRule={...common,taxCode:'PPN',taxpayerClassification:`P02A_${ppn==='TAXABLE'?'TAX':ppn==='EXEMPT'?'EXEMPT':'NON_TAX'}_E_P_E_P_TEST_CASE`,
     classificationDescription:`P02A_V1|APPLICABILITY=${ppn}|SUPPLIER=ENTITY,PKP|RECIPIENT=ENTITY,PKP|CASE=TEST_CASE`,
-    basisMethodCode:ppn==='TAXABLE'?'PPN02A_EXCLUSIVE_FULL_V1':'PPN02A_EXEMPT_FULL_V1',
+    basisMethodCode:ppn==='TAXABLE'?'PPN02A_EXCLUSIVE_FULL_V1':ppn==='EXEMPT'?'PPN02A_EXEMPT_FULL_V1':'PPN02A_NON_TAXABLE_V1',
     basisDescription:ppn==='TAXABLE'?'P02A_V1|SOURCE=EXCLUSIVE|DPP=SOURCE|PPN=ROUND(DPP*RATE/100)|TOTAL=SOURCE+PPN':
-      'P02A_V1|APPLICABILITY=EXEMPT|SOURCE=EXCLUSIVE|DPP=SOURCE|PPN=0|TOTAL=SOURCE',
-    ratePercent:ppn==='TAXABLE'?'7.500000':'0',roundingScale:0};
-  const pphInput:CreateHandymanTaxRule={...common,taxCode:'PPH_WITHHOLDING',taxpayerClassification:`P02B_${pph==='WITHHOLD'?'TAX':'NON_WITHHOLD'}_E_TEST_CASE`,
+      ppn==='EXEMPT'?'P02A_V1|APPLICABILITY=EXEMPT|SOURCE=EXCLUSIVE|DPP=SOURCE|PPN=0|TOTAL=SOURCE':
+      'P02A_V1|APPLICABILITY=NON_TAXABLE|SOURCE=EXCLUSIVE|DPP=0|PPN=0|TOTAL=SOURCE',
+    ratePercent:ppn==='TAXABLE'?'7.500000':'0',roundingMode:options.ppnNoRounding?'NO_ROUNDING':'HALF_UP',roundingScale:options.ppnNoRounding?null:0};
+  const pphInput:CreateHandymanTaxRule={...common,taxCode:'PPH_WITHHOLDING',taxpayerClassification:`P02B_${pph==='WITHHOLD'?'TAX':pph}_E_TEST_CASE`,
     classificationDescription:`P02B_V1|TREATMENT=${pph}|BENEFICIARY=ENTITY|CASE=TEST_CASE`,
-    basisMethodCode:pph==='WITHHOLD'?'PPH02B_GROSS_V1':'PPH02B_NON_WITHHOLD_V1',
-    basisDescription:pph==='WITHHOLD'?'P02B_V1|BASIS=GROSS|PPH=ROUND(BASIS*RATE/100)|NET=GROSS-PPH':
-      'P02B_V1|TREATMENT=NON_WITHHOLD|BASIS=0|PPH=0|NET=GROSS',ratePercent:pph==='WITHHOLD'?'7.500000':'0',roundingScale:2};
+    basisMethodCode:pph==='WITHHOLD'?(options.pphRatio?'PPH02B_RATIO_1_2_V1':'PPH02B_GROSS_V1'):pph==='EXEMPT'?'PPH02B_EXEMPT_V1':'PPH02B_NON_WITHHOLD_V1',
+    basisDescription:pph==='WITHHOLD'?(options.pphRatio?'P02B_V1|BASIS=ROUND(GROSS*1/2)|PPH=ROUND(BASIS*RATE/100)|NET=GROSS-PPH':
+      'P02B_V1|BASIS=GROSS|PPH=ROUND(BASIS*RATE/100)|NET=GROSS-PPH'):
+      `P02B_V1|TREATMENT=${pph}|BASIS=0|PPH=0|NET=GROSS`,ratePercent:pph==='WITHHOLD'?(options.pphNoRounding?'7.123456':'7.500000'):'0',
+    roundingMode:options.pphNoRounding?'NO_ROUNDING':'HALF_UP',roundingScale:options.pphNoRounding?null:2};
   async function approveRule(input:CreateHandymanTaxRule,approve=true){
     const rule=await createHandymanTaxRule(admin,input),pin={clientId:realm.client.id,ruleId:rule.snapshot.id,ruleVersion:rule.snapshot.version,
       ruleDigest:rule.digest,evidenceSource:'TEST_MAKER',evidenceReference:`submit/${id()}`};
@@ -121,7 +127,7 @@ async function fixture(options:Options={}){
   }
   const ppnRule=await approveRule(ppnInput,options.approvePpn!==false),pphRule=await approveRule(pphInput);await wait();
   const source=await readHandymanBmCommissionSource(admin,{clientId:realm.client.id,entitlementId:earned.bmFee.id});
-  const base=Date.now()+30000,ppnAt=iso(base),pphAt=iso(base+1000);
+  const base=options.ruleStartsTomorrow?Date.parse(`${day(1)}T08:00:00+07:00`):Date.now()+30000,ppnAt=iso(base),pphAt=iso(base+1000);
   const bmPin={owner,profileId:identity.snapshot.id,profileVersion:identity.snapshot.version,profileDigest:identity.digest,approvalDecisionId:identityDecision.id};
   const issuerPin={owner:issuerOwner,profileId:issuerIdentity.snapshot.id,profileVersion:issuerIdentity.snapshot.version,profileDigest:issuerIdentity.digest,approvalDecisionId:issuerDecision.id};
   const input:ProposeBmTaxCaseInput={clientId:realm.client.id,entitlementId:source.entitlementId,sourceChecksum:source.checksum,
@@ -132,7 +138,7 @@ async function fixture(options:Options={}){
     pph:{taxDate:jakarta(base+1000),taxPointAt:pphAt,treatment:pph,taxpayerClassification:pphInput.taxpayerClassification,beneficiary:bmPin,
       rule:{ruleId:pphRule.rule.snapshot.id,ruleVersion:pphRule.rule.snapshot.version,ruleDigest:pphRule.rule.digest,
         approvalDecisionId:pphRule.decision!.id},evidenceReferenceId:id()},expectedVersion:null,idempotencyKey:id()};
-  return {realm,scope,versionId,bm,charge,earned,checker,owner,identity,issuerOwner,issuerIdentity,ppnRule,pphRule,source,input};
+  return {realm,scope,versionId,bm,charge,earned,checker,owner,identity,issuerOwner,issuerIdentity,ppnInput,pphInput,ppnRule,pphRule,source,input};
 }
 function review(f:Awaited<ReturnType<typeof fixture>>,c:BmTaxCaseView,decision:'APPROVE'|'REJECT'='APPROVE'){
   return {clientId:f.input.clientId,entitlementId:f.input.entitlementId,caseId:c.snapshot.id,version:c.snapshot.version,digest:c.digest,
@@ -363,4 +369,206 @@ describe('PART 02C-A independently verified BM commission tax case',()=>{
     assert.equal((await q("SELECT count(*)::int n FROM schema_migrations WHERE id='0500_handyman_bm_commission_tax_cases'")).rows[0].n,1);
   });
 
+});
+
+describe('PART 02C-B consolidated BM commission tax projection',()=>{
+  it('composes existing verified calculators exactly, pins every provenance and replays without financial writes',async()=>{
+    const f=await fixture(),{c,d,cmd}=await approved(f),before=await counts();
+    const caseCount=(await q('SELECT count(*)::int n FROM handyman_bm_tax_cases')).rows[0].n;
+    const [a,b,ppn,pph]=await Promise.all([calculateHandymanBmCommissionTaxProjection(admin,cmd),
+      calculateHandymanBmCommissionTaxProjection(admin,cmd),calculateApprovedHandymanPpn(admin,cmd),calculateApprovedHandymanBmWithholding(admin,cmd)]);
+    assert.deepEqual(a,b);assert.deepEqual(a.ppn,ppn);assert.deepEqual(a.pph,pph);
+    assert.equal(a.commissionGross,'10.00');assert.equal(a.ppnBasis,'10.00');assert.equal(a.ppnAmount,'1.00');
+    assert.equal(a.pphWithholdingBasis,'10.00');assert.equal(a.pphWithheld,'0.75');assert.equal(a.netPayableProjection,'10.25');
+    assert.equal(a.pph.commissionGross,'10.00');assert.equal(a.ppn.totalIncludingPpn,'11.00'); // PPh is not computed on the PPN-inclusive amount.
+    assert.equal(a.ppn.source.entitlementId,f.earned.bmFee.id);assert.equal(a.ppn.source.beneficiary.counterpartyId,f.bm.counterparty.id);
+    assert.equal(a.ppn.source.buildingId,f.realm.building.id);assert.equal(a.ppn.source.agreement.versionId,f.versionId);
+    assert.equal(a.ppn.determination.caseId,c.snapshot.id);assert.equal(a.pph.determination.decisionId,d.id);
+    assert.equal(a.ppn.determination.actorUserId,f.checker);assert.equal(a.ppn.determination.occurredAt,d.occurredAt);
+    assert.equal(a.ppn.rule.digest,f.input.ppn.rule.ruleDigest);assert.equal(a.pph.rule.digest,f.input.pph.rule.ruleDigest);
+    assert.equal(a.ppn.rule.approval.decision.id,f.input.ppn.rule.approvalDecisionId);
+    assert.equal(a.pph.rule.approval.decision.id,f.input.pph.rule.approvalDecisionId);
+    assert.equal(a.inputChecksumAlgorithm,'SHA-256');assert.equal(a.inputChecksum,hash(a.input));
+    const {checksum,checksumAlgorithm,...body}=a;assert.equal(checksumAlgorithm,'SHA-256');assert.equal(checksum,hash(body));
+    const upper={...cmd,clientId:cmd.clientId.toUpperCase(),entitlementId:cmd.entitlementId.toUpperCase(),
+      determination:{...cmd.determination,caseId:cmd.determination.caseId.toUpperCase(),decisionId:cmd.determination.decisionId.toUpperCase()}};
+    assert.deepEqual(await calculateHandymanBmCommissionTaxProjection(admin,upper),a);
+    assert.equal(a.authority,'READ_ONLY_PROJECTION');assert.equal(JSON.stringify(a).includes('012345678901002'),false);
+    assert.deepEqual(await counts(),before);assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_tax_cases')).rows[0].n,caseCount);
+  });
+  it('uses explicitly reviewed exempt, non-taxable and non-withholding treatments independently',async()=>{
+    const examples=[
+      {options:{ppn:'EXEMPT',pph:'WITHHOLD'} as const, ppnBasis:'10.00',ppn:'0.00',basis:'10.00',pph:'0.75',net:'9.25'},
+      {options:{ppn:'TAXABLE',pph:'NON_WITHHOLD'} as const, ppnBasis:'10.00',ppn:'1.00',basis:'0.00',pph:'0.00',net:'11.00'},
+      {options:{ppn:'NON_TAXABLE',pph:'EXEMPT'} as const, ppnBasis:'0.00',ppn:'0.00',basis:'0.00',pph:'0.00',net:'10.00'},
+      {options:{ppn:'NON_TAXABLE',pph:'WITHHOLD'} as const, ppnBasis:'0.00',ppn:'0.00',basis:'10.00',pph:'0.75',net:'9.25'},
+    ];
+    for(const x of examples){const f=await fixture(x.options),{cmd}=await approved(f),r=await calculateHandymanBmCommissionTaxProjection(admin,cmd);
+      assert.equal(r.ppn.applicability,x.options.ppn);assert.equal(r.pph.treatment,x.options.pph);
+      assert.equal(r.ppnBasis,x.ppnBasis);assert.equal(r.ppnAmount,x.ppn);assert.equal(r.pphWithholdingBasis,x.basis);
+      assert.equal(r.pphWithheld,x.pph);assert.equal(r.netPayableProjection,x.net);
+      assert.equal(r.ppn.rule.approval.decision.id,f.input.ppn.rule.approvalDecisionId);
+      assert.equal(r.pph.rule.approval.decision.id,f.input.pph.rule.approvalDecisionId);
+    }
+  });
+  it('uses the approved PPh ratio basis and includes a changed review in both checksums',async()=>{
+    const f=await fixture({pphRatio:true}),{cmd}=await approved(f),before=await counts();
+    const first=await calculateHandymanBmCommissionTaxProjection(admin,cmd);
+    assert.equal(first.ppnAmount,'1.00');assert.equal(first.pphWithholdingBasis,'5.00');assert.equal(first.pphWithheld,'0.38');
+    assert.equal(first.netPayableProjection,'10.62');assert.equal(first.pph.basisMethodCode,'PPH02B_RATIO_1_2_V1');
+    const next=await proposeHandymanBmTaxCase(admin,{...f.input,expectedVersion:1,idempotencyKey:id()});
+    const reviewDecision=await decideHandymanBmTaxCase(f.checker,review(f,next));await wait();
+    const second=await calculateHandymanBmCommissionTaxProjection(admin,command(f,next,reviewDecision));
+    assert.equal(second.netPayableProjection,first.netPayableProjection);
+    assert.notEqual(second.inputChecksum,first.inputChecksum);assert.notEqual(second.checksum,first.checksum);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    assert.deepEqual(await counts(),before);
+  });
+  it('rejects pending, rejected, superseded, foreign or caller-overridden determinations',async()=>{
+    const f=await fixture(),c=await proposeHandymanBmTaxCase(admin,f.input),pending={clientId:f.input.clientId,entitlementId:f.input.entitlementId,
+      determination:{caseId:c.snapshot.id,version:1,digest:c.digest,decisionId:id(),decisionDigest:'0'.repeat(64)}};
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,pending),code('HANDYMAN_BM_TAX_CASE_UNAPPROVED'));
+    const rejected=await decideHandymanBmTaxCase(f.checker,review(f,c,'REJECT'));await wait();
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,command(f,c,rejected)),code('HANDYMAN_BM_TAX_CASE_UNAPPROVED'));
+    const second=await proposeHandymanBmTaxCase(admin,{...f.input,expectedVersion:1,idempotencyKey:id()});
+    const d=await decideHandymanBmTaxCase(f.checker,review(f,second));await wait();const cmd=command(f,second,d);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,command(f,c,rejected)),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    const other=await fixture(),otherCase=await approved(other);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,determination:otherCase.cmd.determination}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,ppnApplicability:'NOT_APPLICABLE'} as never),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,commissionGross:'999.00'} as never),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,determination:{...cmd.determination,decisionDigest:'a'.repeat(64)}}),
+      code('HANDYMAN_BM_TAX_CASE_INTEGRITY_ERROR'));
+  });
+  it('enforces Finance read, exact Building and Client isolation',async()=>{
+    const f=await fixture(),{cmd}=await approved(f),sibling=await buildingService.createBuilding({propertyId:f.realm.property.id,code:`PRJ_${id().slice(0,8)}`,name:'Sibling'});
+    const wrong=await scopedUser(sibling.id,['handyman.finance.read']),noFinance=await scopedUser(f.realm.building.id,[]);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(wrong,cmd),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(noFinance,cmd),code('PERMISSION_DENIED'));
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,clientId:id()}),code('HANDYMAN_BM_TAX_CASE_MISSING'));
+  });
+  it('uses each independent tax date and honors inclusive start and exclusive end rule boundaries',async()=>{
+    const starts=await fixture({ruleStartsTomorrow:true}),startCase=await approved(starts);
+    const atStart=await calculateHandymanBmCommissionTaxProjection(admin,startCase.cmd);
+    assert.equal(atStart.ppn.taxDate,starts.ppnInput.effectiveFrom);assert.equal(atStart.pph.taxDate,starts.pphInput.effectiveFrom);
+    for(const family of ['ppn','pph'] as const){
+      const f=await fixture(),target=day(2),point=new Date(`${target}T08:00:00+07:00`).toISOString();
+      const input={...f.input,[family]:{...f.input[family],taxDate:target,taxPointAt:point}};
+      const c=await proposeHandymanBmTaxCase(admin,input),d=await decideHandymanBmTaxCase(f.checker,review(f,c));await wait();
+      const cmd=command(f,c,d),result=await calculateHandymanBmCommissionTaxProjection(admin,cmd);
+      assert.equal(result[family].taxDate,target);assert.equal(result[family].taxPointAt,point);
+      assert.equal(result[family==='ppn'?'pph':'ppn'].taxDate,f.input[family==='ppn'?'pph':'ppn'].taxDate);
+      await closeHandymanTaxRule(admin,{clientId:f.input.clientId,ruleId:f.input[family].rule.ruleId,effectiveTo:target,reason:'TEST closure'});
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    }
+  });
+  it('preserves a single repeatable-read snapshot across both calculators and rejects weaker transactions',async()=>{
+    const f=await fixture(),{cmd}=await approved(f),tx=await pool.connect();
+    try{
+      // Matching session defaults are not an active transaction: autocommit gives every SELECT a new snapshot.
+      await tx.query('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      await assert.rejects(calculateHandymanBmCommissionTaxProjectionInSnapshot(tx,admin,cmd),code('HANDYMAN_BM_TAX_PROJECTION_SNAPSHOT_REQUIRED'));
+      await tx.query('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED READ WRITE');
+      await tx.query('BEGIN READ ONLY');
+      await assert.rejects(calculateHandymanBmCommissionTaxProjectionInSnapshot(tx,admin,cmd),code('HANDYMAN_BM_TAX_PROJECTION_SNAPSHOT_REQUIRED'));
+      await tx.query('ROLLBACK');await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      await assert.rejects(calculateHandymanBmCommissionTaxProjectionInSnapshot(tx,admin,cmd),code('HANDYMAN_BM_TAX_PROJECTION_SNAPSHOT_REQUIRED'));
+      await tx.query('ROLLBACK');await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      await tx.query('SELECT count(*) FROM handyman_bm_tax_case_heads');
+      await closeHandymanTaxIdentity(admin,{owner:f.owner,profileId:f.identity.snapshot.id,effectiveTo:iso(Date.now()+5000),reason:'TEST closure'});
+      const consistent=await calculateHandymanBmCommissionTaxProjectionInSnapshot(tx,admin,cmd);
+      assert.equal(consistent.netPayableProjection,'10.25');assert.deepEqual(consistent.ppn.source,consistent.pph.source);
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE'));
+      await tx.query('COMMIT');
+    }finally{
+      await tx.query('ROLLBACK').catch(()=>undefined);
+      await tx.query('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED READ WRITE').catch(()=>undefined);
+      tx.release();
+    }
+  });
+  it('rejects invalid case and checker evidence even if their digests are recomputed',async()=>{
+    const f=await fixture(),{c,d,cmd}=await approved(f),zero='00000000-0000-0000-0000-000000000000';
+    const forged={...c.snapshot,ppnEvidenceReferenceId:zero},forgedDigest=hash(forged);
+    await q('ALTER TABLE handyman_bm_tax_cases DISABLE TRIGGER hm_bm_tax_case_immutable');
+    try{
+      await q('UPDATE handyman_bm_tax_cases SET snapshot=$2,digest=$3 WHERE id=$1',[c.snapshot.id,JSON.stringify(forged),forgedDigest]);
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,determination:{...cmd.determination,digest:forgedDigest}}),
+        code('HANDYMAN_BM_TAX_CASE_INTEGRITY_ERROR'));
+    }finally{
+      await q('UPDATE handyman_bm_tax_cases SET snapshot=$2,digest=$3 WHERE id=$1',[c.snapshot.id,JSON.stringify(c.snapshot),c.digest]);
+      await q('ALTER TABLE handyman_bm_tax_cases ENABLE TRIGGER hm_bm_tax_case_immutable');
+    }
+    const {decisionDigest:_old,replayed:_replayed,...body}=d,badBody={...body,pphReviewEvidenceReferenceId:zero},badDigest=hash(badBody);
+    await q('ALTER TABLE handyman_bm_tax_case_decisions DISABLE TRIGGER hm_bm_tax_decision_immutable');
+    try{
+      await q('UPDATE handyman_bm_tax_case_decisions SET pph_evidence_id=$2,decision_digest=$3 WHERE id=$1',[d.id,zero,badDigest]);
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,determination:{...cmd.determination,decisionDigest:badDigest}}),
+        code('HANDYMAN_BM_TAX_CASE_INTEGRITY_ERROR'));
+    }finally{
+      await q('UPDATE handyman_bm_tax_case_decisions SET pph_evidence_id=$2,decision_digest=$3 WHERE id=$1',[d.id,d.pphReviewEvidenceReferenceId,d.decisionDigest]);
+      await q('ALTER TABLE handyman_bm_tax_case_decisions ENABLE TRIGGER hm_bm_tax_decision_immutable');
+    }
+    assert.equal((await calculateHandymanBmCommissionTaxProjection(admin,cmd)).netPayableProjection,'10.25');
+  });
+  it('rejects a mismatched beneficiary even when privileged tampering recomputes the case and decision digests',async()=>{
+    const f=await fixture(),{c,d,cmd}=await approved(f),forged={...c.snapshot,counterpartyId:id()},forgedDigest=hash(forged);
+    const {decisionDigest:_old,replayed:_replayed,...body}=d,badDecision=hash({...body,caseDigest:forgedDigest});
+    await q('ALTER TABLE handyman_bm_tax_cases DISABLE TRIGGER hm_bm_tax_case_immutable');
+    await q('ALTER TABLE handyman_bm_tax_case_decisions DISABLE TRIGGER hm_bm_tax_decision_immutable');
+    try{
+      await q('UPDATE handyman_bm_tax_cases SET snapshot=$2,digest=$3 WHERE id=$1',[c.snapshot.id,JSON.stringify(forged),forgedDigest]);
+      await q('UPDATE handyman_bm_tax_case_decisions SET case_digest=$2,decision_digest=$3 WHERE id=$1',[d.id,forgedDigest,badDecision]);
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,{...cmd,determination:{...cmd.determination,
+        digest:forgedDigest,decisionDigest:badDecision}}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    }finally{
+      await q('UPDATE handyman_bm_tax_cases SET snapshot=$2,digest=$3 WHERE id=$1',[c.snapshot.id,JSON.stringify(c.snapshot),c.digest]);
+      await q('UPDATE handyman_bm_tax_case_decisions SET case_digest=$2,decision_digest=$3 WHERE id=$1',[d.id,c.digest,d.decisionDigest]);
+      await q('ALTER TABLE handyman_bm_tax_cases ENABLE TRIGGER hm_bm_tax_case_immutable');
+      await q('ALTER TABLE handyman_bm_tax_case_decisions ENABLE TRIGGER hm_bm_tax_decision_immutable');
+    }
+    assert.equal((await calculateHandymanBmCommissionTaxProjection(admin,cmd)).netPayableProjection,'10.25');
+  });
+  it('rejects ambiguous approved-rule projections instead of guessing a zero or a rule',async()=>{
+    const f=await fixture(),{cmd}=await approved(f),next=await createHandymanTaxRule(admin,{...f.pphInput,effectiveFrom:day(3),effectiveTo:day(6),expectedVersion:1});
+    const pin={clientId:f.input.clientId,ruleId:next.snapshot.id,ruleVersion:next.snapshot.version,ruleDigest:next.digest,
+      evidenceSource:'TEST_MAKER',evidenceReference:`submit/${id()}`};
+    const submission=await submitHandymanTaxRule(admin,pin);await wait();
+    await decideHandymanTaxRule(f.checker,{...pin,submissionId:submission.id,decision:'APPROVE',sourceValidation:'FINANCE_VALIDATED',
+      evidenceSource:'TEST_CHECKER',evidenceReference:`decision/${id()}`});
+    await q('ALTER TABLE handyman_tax_rule_windows DROP CONSTRAINT hm_tax_rule_window_no_overlap');
+    await q('ALTER TABLE handyman_tax_rule_windows DISABLE TRIGGER hm_tax_rule_window_guard');
+    try{
+      await q('UPDATE handyman_tax_rule_windows SET effective_from=$2 WHERE rule_id=$1',[next.snapshot.id,day(-1)]);
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    }finally{
+      await q('UPDATE handyman_tax_rule_windows SET effective_from=$2 WHERE rule_id=$1',[next.snapshot.id,day(3)]);
+      await q('ALTER TABLE handyman_tax_rule_windows ENABLE TRIGGER hm_tax_rule_window_guard');
+      await q(`ALTER TABLE handyman_tax_rule_windows ADD CONSTRAINT hm_tax_rule_window_no_overlap EXCLUDE USING gist
+        (client_id WITH =,transaction_context WITH =,tax_code WITH =,taxpayer_classification WITH =,daterange(effective_from,effective_to,'[)') WITH &&)`);
+    }
+    assert.equal((await calculateHandymanBmCommissionTaxProjection(admin,cmd)).netPayableProjection,'10.25');
+  });
+  it('fails closed for fractional PPN and inexact NO_ROUNDING in either calculator',async()=>{
+    for(const options of [{fractional:true},{fractional:true,ppn:'NON_TAXABLE' as const}]){
+      const f=await fixture(options),{cmd}=await approved(f);
+      await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_PPN_INVALID'));
+    }
+    const p=await fixture({ppnNoRounding:true}),pc=await approved(p);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,pc.cmd),code('HANDYMAN_PPN_UNSUPPORTED'));
+    const h=await fixture({pphNoRounding:true}),hc=await approved(h);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,hc.cmd),code('HANDYMAN_PPH_UNSUPPORTED'));
+  });
+  it('fails closed after ledger changes/corrections and does not reauthorize a replay',async()=>{
+    const f=await fixture(),{cmd}=await approved(f);
+    await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,amount:'20.00',reason:'TEST adjustment',idempotencyKey:id()},admin);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_PPH_SOURCE_STALE'));
+    await deriveHandymanFinancialEntitlements(f.scope.id,admin,id());
+    assert.equal((await proposeHandymanBmTaxCase(admin,f.input)).replayed,true);
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+  });
+  it('preserves explicitly verified legacy Client entitlements and does not create settlement events',async()=>{
+    const f=await fixture({distinct:false}),{cmd}=await approved(f),before=await counts(),r=await calculateHandymanBmCommissionTaxProjection(admin,cmd);
+    assert.equal(r.ppn.source.beneficiary.kind,'CLIENT_ORGANIZATION');assert.equal(r.pph.source.beneficiary.representedClientId,f.realm.client.id);
+    assert.equal(r.netPayableProjection,'10.25');assert.deepEqual(await counts(),before);
+  });
 });

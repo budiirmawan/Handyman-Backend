@@ -158,17 +158,23 @@ export async function readHandymanBmCommissionSource(actorInput: string, input: 
 /** Only an independently approved, current case can reach this read-only projection. */
 export async function calculateApprovedHandymanBmWithholding(actorInput: string, input: BmVerifiedCalculationInput): Promise<VerifiedBmWithholdingBreakdown> {
   const actor = uuid(actorInput,'actor');
-  const {normalizeBmVerifiedCalculationInput,requireApprovedBmTaxCaseInSnapshot}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
+  const {normalizeBmVerifiedCalculationInput}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
   const n=normalizeBmVerifiedCalculationInput(input), tx=await getPool().connect();
   try {
     await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,n);
-    const pure=calculateBmWithholdingFromResolved(verified.pphInput,verified.source,verified.pphBeneficiary,verified.pphRule,verified.readAt);
-    const {schema:_schema,caseApplicability:_unverified,checksumAlgorithm:_algorithm,checksum:_checksum,...rest}=pure;
-    const body=Object.freeze({...rest,schema:'HANDYMAN_VERIFIED_BM_PPH_WITHHOLDING_V1' as const,
-      caseApplicability:'INDEPENDENTLY_FINANCE_APPROVED' as const,determination:verified.reference});
-    const result=Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
+    const result=await calculateApprovedHandymanBmWithholdingInSnapshot(tx,actor,n);
     await tx.query('COMMIT');return result;
   } catch (err) { await tx.query('ROLLBACK').catch(()=>undefined);throw err; }
   finally { tx.release(); }
+}
+
+/** Internal only: caller must hold one repeatable-read, read-only transaction. */
+export async function calculateApprovedHandymanBmWithholdingInSnapshot(tx:PoolClient,actor:string,input:BmVerifiedCalculationInput):Promise<VerifiedBmWithholdingBreakdown> {
+  const {requireApprovedBmTaxCaseInSnapshot}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
+  const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,input);
+  const pure=calculateBmWithholdingFromResolved(verified.pphInput,verified.source,verified.pphBeneficiary,verified.pphRule,verified.readAt);
+  const {schema:_schema,caseApplicability:_unverified,checksumAlgorithm:_algorithm,checksum:_checksum,...rest}=pure;
+  const body=Object.freeze({...rest,schema:'HANDYMAN_VERIFIED_BM_PPH_WITHHOLDING_V1' as const,
+    caseApplicability:'INDEPENDENTLY_FINANCE_APPROVED' as const,determination:verified.reference});
+  return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
 }
