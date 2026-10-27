@@ -269,6 +269,19 @@ export async function cancelHandymanBmBuildingCoverage(actorUserId: string, inpu
 export async function resolveHandymanBmBuildingCoverageAt(
   clientIdInput: string, buildingIdInput: string, asOf: string, executor: Executor = getPool(),
 ): Promise<ResolvedBmBuildingCoverage> {
+  return resolveCoverage(clientIdInput, buildingIdInput, asOf, executor, true);
+}
+
+/** Trusted read-only callers share a repeatable-read snapshot; mutation callers keep their row locks. */
+export async function resolveHandymanBmBuildingCoverageInSnapshot(
+  tx: PoolClient, clientId: string, buildingId: string, asOf: string,
+): Promise<ResolvedBmBuildingCoverage> {
+  return resolveCoverage(clientId, buildingId, asOf, tx, false);
+}
+
+async function resolveCoverage(
+  clientIdInput: string, buildingIdInput: string, asOf: string, executor: Executor, lock: boolean,
+): Promise<ResolvedBmBuildingCoverage> {
   const clientId = uuid(clientIdInput, 'clientId');
   const buildingId = uuid(buildingIdInput, 'buildingId');
   const at = instant(asOf, 'asOf');
@@ -289,7 +302,7 @@ export async function resolveHandymanBmBuildingCoverageAt(
       AND c.effective_from <= $3 AND (c.effective_to IS NULL OR $3 < c.effective_to)
       AND x.verified_at <= $3 AND v.status IN ('ACTIVE','SUPERSEDED')
       AND v.effective_from <= $3 AND (v.effective_to IS NULL OR $3 < v.effective_to)
-    FOR SHARE OF c, v, b, p`, [clientId, buildingId, at]);
+    ${lock ? 'FOR SHARE OF c, v, b, p' : ''}`, [clientId, buildingId, at]);
   if (result.rows.length !== 1) throw notEffective();
   const r = result.rows[0];
   return { ...coverage(r), agreementId: r.agreement_id, agreementVersionNumber: r.version_number,
