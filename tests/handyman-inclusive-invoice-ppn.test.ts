@@ -10,6 +10,8 @@ import { createAdminUser } from './helpers/access';
 import { api } from './helpers/http';
 import { initHandymanFixtures, realmFixture, locationChain, crewFixture } from './helpers/handyman-fixtures';
 import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
+import { releaseDispatchFixture } from './helpers/handyman-dispatch';
+import { handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { credentialService } from '../src/modules/auth';
 import { userService } from '../src/modules/users';
@@ -17,6 +19,20 @@ import { roleService } from '../src/modules/roles';
 import { permissionRepository, permissionService } from '../src/modules/permissions';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
+import { workforceService } from '../src/modules/workforce';
+import { assignSupervisor } from '../src/modules/workforce-reporting-lines';
+import { workOrderService } from '../src/modules/work-orders';
+import { saveHandymanBuildingGeospatialPolicy } from '../src/modules/handyman-geospatial-policies';
+import { createHandymanArrivalLocationIdentifier } from '../src/modules/handyman-arrival-locations';
+import { createHandymanArrivalChallenge } from '../src/modules/handyman-arrival-challenges';
+import { evaluateHandymanArrivalVerification } from '../src/modules/handyman-arrival-results';
+import { publishHandymanQcChecklistVersion, configureHandymanQcChecklist, openHandymanQcRun,
+  setHandymanQcRunItemOutcome, bindHandymanQcEvidence, finishHandymanQcRun } from '../src/modules/handyman-evidence-qc';
+import { prepareHandymanBast, issueHandymanBast, acceptHandymanBast } from '../src/modules/handyman-bast';
+import { prepareHandymanCommercialAgreement, activateHandymanCommercialAgreementVersion } from '../src/modules/handyman-commercial-agreements';
+import { prepareHandymanMaterialPricingBasis } from '../src/modules/handyman-material-pricing';
+import { estimateHandymanMaterialExecutionLine, approveHandymanMaterialExecutionLine, issueHandymanMaterialExecutionLine,
+  useHandymanMaterialExecutionLine, settleHandymanMaterialExecutionLine } from '../src/modules/handyman-material-execution';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
 import { tenantPicService } from '../src/modules/tenant-pics';
@@ -44,6 +60,7 @@ import { proposeHandymanBuyerBinding, decideHandymanBuyerBinding } from '../src/
 import { captureHandymanTaxIdentity, submitHandymanTaxIdentityForApproval, decideHandymanTaxIdentityApproval } from '../src/modules/handyman-tax-identity';
 import { createHandymanTaxRule, submitHandymanTaxRule, decideHandymanTaxRule } from '../src/modules/handyman-tax-rules';
 import { customerTaxPolicy } from '../src/modules/handyman-customer-tax/handyman-customer-tax.policy';
+import { readInclusiveCommercialSource } from '../src/modules/handyman-customer-tax/handyman-inclusive-source';
 import { proposeCustomerTaxClassification, decideCustomerTaxClassification } from '../src/modules/handyman-customer-tax';
 import { calculateInclusiveHandymanInvoicePpn } from '../src/modules/handyman-ppn-calculation';
 import { calculateInclusivePpnAmounts } from '../src/modules/handyman-ppn-calculation/handyman-ppn-core';
@@ -66,6 +83,8 @@ let manualCorrection: string, addVariation: string, first: string, second: strin
 let firstKey: string, firstBinding: string, firstCorrection: string;
 let settlementBefore: unknown, entitlementBefore: unknown, receiptBefore: unknown;
 let realm: Awaited<ReturnType<typeof realmFixture>>;
+let chain: Awaited<ReturnType<typeof locationChain>>, crew: Awaited<ReturnType<typeof crewFixture>>;
+let customerId: string, picId: string, serviceId: string, disciplineId: string;
 let requestId: string, maker: string, checkerId: string, outsiderId: string, issuer: any, buyer: any, buyerDecision: any, supplier: any;
 let taxRule: any, exemptRule: any, nonTaxRule: any, badRule: any;
 let currentClassification: any, currentDecision: any, taxPoint: string;
@@ -160,8 +179,9 @@ before(async () => {
   await migrateUp(pool);
   const root = await createAdminUser(); admin = root.userId; adminToken = root.token;
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN'); assert.ok(discipline);
+  disciplineId = discipline.id;
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline.id, query: q });
-  realm = await realmFixture('REDUCE finance'); const chain = await locationChain(realm);
+  realm = await realmFixture('REDUCE finance'); chain = await locationChain(realm);
   await clientMonetaryContextService.setClientMonetaryContext({ clientId: realm.client.id, baseCurrencyCode: 'IDR',
     defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   issuer = await updateHandymanDocumentIssuerProfile({ clientId: realm.client.id, expectedVersion: null, legalName: 'PT Issuer',
@@ -177,14 +197,14 @@ before(async () => {
     confirmAccountNumber: '1234567890', verificationReference: 'Verified statement', asDefault: true, authorizeReplacement: false }, admin);
   const tenant = await tenantCompanyService.createTenantCompany({ clientId: realm.client.id, tenantCode: `T_${id().slice(0,8).toUpperCase()}`,
     tenantName: 'Customer', legalName: 'PT Customer' }, admin); tenantId = tenant.id;
-  const customer = await userService.createUser({ email: `${id()}@customer.test`, displayName: 'Tenant PIC' });
+  const customer = await userService.createUser({ email: `${id()}@customer.test`, displayName: 'Tenant PIC' }); customerId = customer.id;
   await grant(customer.id, ['tenant_company.manage']); await buildingAssignmentService.createAssignment(customer.id, { buildingId: realm.building.id });
   picToken = await login(customer);
-  const pic = await tenantPicService.createTenantPic({ tenantCompanyId: tenant.id, picName: 'Customer PIC', userId: customer.id }, admin);
+  const pic = await tenantPicService.createTenantPic({ tenantCompanyId: tenant.id, picName: 'Customer PIC', userId: customer.id }, admin); picId = pic.id;
   await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: tenant.id, buildingId: realm.building.id, spaceId: chain.space.id }, admin);
   await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: tenant.id, buildingId: realm.building.id }, admin);
   const service = await serviceCatalogService.createServiceCatalogEntry({ clientId: realm.client.id, code: `S_${id().slice(0,8).toUpperCase()}`,
-    name: 'Pipe repair', category: 'HANDYMAN' }, admin);
+    name: 'Pipe repair', category: 'HANDYMAN' }, admin); serviceId = service.id;
   uom = id(); await q(`INSERT INTO units_of_measure(id,client_id,code,name,symbol,category) VALUES($1,$2,$3,'piece','pc','COUNT')`,
     [uom, realm.client.id, `U_${id().slice(0,8).toUpperCase()}`]);
   const attr = await createChannelAttribution({ tenantCompanyId: tenant.id, buildingId: realm.building.id, tenantPicId: pic.id,
@@ -206,7 +226,7 @@ before(async () => {
   await issueHandymanQuotationVersion(originalVersion, { validUntil: validUntil() }, admin);
   const decision = await decideHandymanQuotation(originalVersion, { decision: 'APPROVE', tenantPicId: pic.id, idempotencyKey: key() }, customer.id);
   assert.ok(decision.executionScope); scope = decision.executionScope.id;
-  const crew = await crewFixture(realm); leadToken = await login(crew.leadUser);
+  crew = await crewFixture(realm); leadToken = await login(crew.leadUser);
   await assignHandymanExecutionScopeCrew({ executionScopeId: scope, providerContextId: crew.providerContext.id,
     crewId: crew.crew.id, idempotencyKey: key() }, admin);
   const upload = await api().post(`/api/v1/handyman/field/execution-scopes/${scope}/evidence/upload`)
@@ -395,5 +415,270 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       basisDescription:fullDesc,ratePercent:'10.000000',roundingMode:'HALF_UP',roundingScale:0}));
     assert.throws(()=>calculateInclusivePpnAmounts('100.00','TAXABLE',{basisMethodCode:'PPN01B_INCLUSIVE_FULL_V1',
       basisDescription:fullDesc,ratePercent:'10.000000',roundingMode:'NO_ROUNDING',roundingScale:null}));
+  });
+
+  it('projects an eligible ADD and reconciled REDUCE with independently reviewed per-line PPN', async () => {
+    // A separate request keeps this case independent of the preceding stateful
+    // cases, including when the whole focused file is run in the future.
+    const attribution = await createChannelAttribution({ tenantCompanyId: tenantId, buildingId: realm.building.id,
+      tenantPicId: picId, spaceId: chain.space.id, originChannel: 'BM_SUPER_APP',
+      originReference: `bm-handoff:BM_SUPER_APP:${id()}`, createdByUserId: customerId });
+    const request = await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: attribution.id,
+      serviceCatalogId: serviceId, description: 'Independent ADD and REDUCE billing scenario' }, admin);
+    requestId = request.id;
+    await handymanServiceRequestTriageService.recordHandymanRequestTriage({ handymanRequestId: requestId,
+      triageDisposition: 'DIAGNOSIS', triageNote: 'Reviewed' }, admin);
+    await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis({ handymanRequestId: requestId,
+      disciplineId, diagnosis: 'Repair pipes' }, admin);
+    const quote = await createHandymanQuotation({ handymanRequestId: requestId }, admin);
+    quotationId = quote.quotation.id; originalVersion = quote.versions[0].id;
+    originalLabor = (await line(originalVersion, 'LABOR', 1, 100, 'Original labor')).id;
+    originalA = (await line(originalVersion, 'MATERIAL', 10, 25, 'Material A')).id;
+    originalB = (await line(originalVersion, 'MATERIAL', 8, 25, 'Material B')).id;
+    originalFree = (await line(originalVersion, 'LABOR', 1, 0, 'No-charge item')).id;
+    await prepareHandymanTaxProfile({ quotationVersionId: originalVersion }, taxFacts(), admin);
+    await issueHandymanQuotationVersion(originalVersion, { validUntil: validUntil() }, admin);
+    const decision = await decideHandymanQuotation(originalVersion,
+      { decision: 'APPROVE', tenantPicId: picId, idempotencyKey: key() }, customerId);
+    assert.ok(decision.executionScope); scope = decision.executionScope.id;
+    const originalPrices = (await q(`SELECT id, quantity::text, final_quoted_unit_amount::text, line_total::text
+      FROM handyman_quotation_lines WHERE quotation_version_id=$1 ORDER BY id`, [originalVersion])).rows;
+    await assignHandymanExecutionScopeCrew({ executionScopeId: scope, providerContextId: crew.providerContext.id,
+      crewId: crew.crew.id, idempotencyKey: key() }, admin);
+    transactionId = (await openHandymanCustomerTransaction({ executionScopeId: scope, idempotencyKey: key() }, admin)).transaction.id;
+    chargeLabor = (await composeHandymanChargeLine({ executionScopeId: scope, quotationLineId: originalLabor, idempotencyKey: key() }, admin)).chargeLine.id;
+    chargeA = (await composeHandymanChargeLine({ executionScopeId: scope, quotationLineId: originalA, idempotencyKey: key() }, admin)).chargeLine.id;
+    chargeB = (await composeHandymanChargeLine({ executionScopeId: scope, quotationLineId: originalB, idempotencyKey: key() }, admin)).chargeLine.id;
+    chargeFree = (await composeHandymanChargeLine({ executionScopeId: scope, quotationLineId: originalFree, idempotencyKey: key() }, admin)).chargeLine.id;
+    buyer = await proposeHandymanBuyerBinding(maker, { clientId: realm.client.id, requestId, buyerTenantCompanyId: tenantId,
+      expectedVersion: null, evidenceSource: 'TEST', evidenceReference: `buyer/${id()}` });
+    buyerDecision = await decideHandymanBuyerBinding(checkerId, { clientId: realm.client.id, requestId,
+      bindingId: buyer.snapshot.id, bindingVersion: buyer.snapshot.version, bindingDigest: buyer.digest,
+      decision: 'VERIFY', evidenceSource: 'TEST', evidenceReference: `buyer-review/${id()}` });
+
+    await grant(admin, ['handyman.qc.configure']);
+    const supervisor = await userService.createUser({ email: `${id()}@qc.test`, displayName: 'Independent supervisor' });
+    const supervisorProfile = await workforceService.createWorkforceProfile({ organizationId: realm.organization.id,
+      departmentId: realm.department.id, positionId: realm.position.id, employeeCode: `S_${id().slice(0,8)}`,
+      fullName: 'Supervisor', userId: supervisor.id });
+    await assignSupervisor({ workforceProfileId: crew.workerContext.workforceProfileId, supervisorWorkforceProfileId: supervisorProfile.id });
+    await buildingAssignmentService.createAssignment(supervisor.id, { buildingId: realm.building.id });
+    await grant(supervisor.id, ['handyman.qc.manage']); const supervisorToken = await login(supervisor);
+    const template = await publishHandymanQcChecklistVersion({ clientId: realm.client.id, code: 'HANDYMAN_FINAL',
+      versionNumber: 1, requiredItemKeys: ['quality'] }, admin);
+    await configureHandymanQcChecklist({ executionScopeId: scope, templateVersionId: template.version.id }, admin);
+    const workOrder = (await workOrderService.createWorkOrder({ clientId: realm.client.id, buildingId: realm.building.id,
+      workOrderNumber: `WO_${id().slice(0,8)}`, title: 'Consented ADD labor', workType: 'HANDYMAN', createdByUserId: admin })).id;
+    await releaseDispatchFixture({ executionScopeId: scope, handymanCrewId: crew.crew.id, actorUserId: admin, query: q });
+    await saveHandymanBuildingGeospatialPolicy({ buildingId: realm.building.id, referenceLatitude: -6.2,
+      referenceLongitude: 106.816666, geofenceRadiusMeters: 100, maxAccuracyMeters: 40, maxLocationAgeSeconds: 900 }, admin);
+    const location = await createHandymanArrivalLocationIdentifier({ buildingId: realm.building.id, floorId: chain.floor.id,
+      areaId: chain.area.id, roomId: chain.room.id, spaceId: chain.space.id }, admin);
+    const challenge = await createHandymanArrivalChallenge({ executionScopeId: scope }, crew.leadUser.id);
+    const arrival = await evaluateHandymanArrivalVerification({ executionScopeId: scope, challengeToken: challenge.token,
+      qrOpaqueCode: location.value, deviceLocation: { latitude: -6.2, longitude: 106.816666, accuracyMeters: 10,
+        capturedAt: new Date().toISOString() } }, crew.leadUser.id);
+    assert.equal(arrival.status, 'VERIFIED');
+    const sessions = `${base()}/work-sessions`;
+    const action = async (name: string) => data(await post(`${sessions}/${name}`, leadToken, { idempotencyKey: key() }));
+    const session = (await action('check-in')).session.id as string; await action('start-work');
+    const upload = async (purpose: string) => data(await api().post(`/api/v1/handyman/field/execution-scopes/${scope}/evidence/upload`)
+      .set(auth(leadToken)).field('purpose', purpose).field('idempotencyKey', key())
+      .attach('file', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+        { filename: 'work.png', contentType: 'image/png' }), 201).evidence.attachmentReference as string;
+    evidence = await upload('VARIATION_FINDING');
+
+    // The signed REDUCE is posted against the original charge while its own
+    // reviewed offer is current, before the ADD replaces that offer.
+    const reduce = await makeAuthorized('REDUCE', 'MATERIAL', 4, originalA, 25, 6, 8, false);
+    const posted = data(await post(path(reduce), adminToken, { expectedVersion: 5, idempotencyKey: key() }), 201);
+    assert.equal(posted.binding.signedAmount, '-100.00');
+    data(await post(`${field()}/${reduce}/execution`, leadToken,
+      { expectedVersion: 5, evidenceReference: evidence, idempotencyKey: key() }));
+
+    const add = await propose('ADD', 'LABOR', 1); await reviewed(add);
+    const revised = await createHandymanQuotationRevision(quotationId, admin, { dpRequired: false });
+    await line(revised.id, 'LABOR', 1, 100, 'Original labor');
+    await line(revised.id, 'MATERIAL', 6, 25, 'Material A');
+    await line(revised.id, 'MATERIAL', 8, 25, 'Material B');
+    await line(revised.id, 'LABOR', 1, 0, 'No-charge item');
+    const addLine = (await line(revised.id, 'LABOR', 1, 110, 'Additional repair')).id;
+    await prepareHandymanTaxProfile({ quotationVersionId: revised.id }, taxFacts(), admin);
+    await issueHandymanQuotationVersion(revised.id, { validUntil: validUntil() }, admin);
+    const offered = data(await post(`${variations()}/${add}/revised-quotation`, adminToken, { expectedVersion: 2,
+      revisedQuotationVersionId: revised.id, revisedQuotationLineId: addLine, workOrderId: workOrder,
+      quotedUnitAmount: 110, currency: 'IDR', idempotencyKey: key() }));
+    const document = offered.events.find((event: any) => event.eventType === 'REVISED_QUOTATION').metadata.offerDocument;
+    data(await post(`${variations()}/${add}/tenant-decision`, picToken, { expectedVersion: 3,
+      revisedQuotationVersionId: revised.id, revisedQuotationLineId: addLine, workOrderId: workOrder,
+      decision: 'APPROVED', evidenceReference: evidence, offerDocumentId: document.id,
+      offerDocumentVersion: document.version, offerPdfSha256: document.pdfSha256, idempotencyKey: key() }));
+    await authorize(add);
+    const execution = data(await post(`${sessions}/${session}/add-labor-executions`, leadToken, {
+      variationId: add, approvedVariationVersion: 3, quotationLineId: addLine, workOrderId: workOrder,
+      quantity: 1, evidenceReference: await upload('BEFORE_AFTER_WORK'), idempotencyKey: key() })).execution;
+    assert.equal(execution.actualQty, 1); assert.equal(execution.quotationLineId, addLine);
+    data(await post(`${field()}/${add}/execution`, leadToken,
+      { expectedVersion: 5, evidenceReference: evidence, idempotencyKey: key() }));
+    for (const [quotationLineId, actualQty] of [[originalLabor, 1], [originalA, 6], [originalB, 8], [originalFree, 1]] as const) {
+      const declaration = data(await post(`${sessions}/${session}/completion-declarations`, leadToken,
+        { quotationLineId, actualQty, evidenceReference: await upload('BEFORE_AFTER_WORK'), idempotencyKey: key() }));
+      assert.equal(declaration.declaration.status, 'COMPLETED');
+    }
+    await action('complete'); await action('check-out');
+    const opened = await openHandymanQcRun({ executionScopeId: scope, checklistIdentity: 'HANDYMAN_FINAL@v1', idempotencyKey: key() }, supervisor.id);
+    const item = await setHandymanQcRunItemOutcome({ qcRunId: opened.run.id, itemKey: 'quality', outcome: 'PASS',
+      expectedVersion: 1, idempotencyKey: key() }, supervisor.id);
+    const qcEvidence = await upload('QC_EVIDENCE');
+    const bound = await bindHandymanQcEvidence({ qcRunId: opened.run.id, evidenceReference: qcEvidence,
+      expectedVersion: item.runVersion, idempotencyKey: key() }, supervisor.id);
+    const run = (await finishHandymanQcRun({ qcRunId: opened.run.id, outcome: 'PASSED',
+      expectedVersion: bound.runVersion, idempotencyKey: key() }, supervisor.id)).run;
+    for (const variation of [reduce, add]) {
+      const qc = data(await post(`${variations()}/${variation}/qc`, supervisorToken, { expectedVersion: 6,
+        qcOutcome: 'PASSED', qcRunId: run.id, evidenceReference: qcEvidence, idempotencyKey: key() }));
+      assert.equal(qc.variation.qcOutcome, 'PASSED');
+    }
+    const manifests = `${base()}/completion-manifests`;
+    const manifest = data(await post(manifests, leadToken, { idempotencyKey: key() })).manifest;
+    const manifestAdd = manifest.snapshot.items.find((x: any) => x.quotationLineId === addLine);
+    const manifestReduced = manifest.snapshot.items.find((x: any) => x.quotationLineId === originalA);
+    assert.equal(manifestAdd.actualQty, '1'); assert.equal(manifestAdd.status, 'COMPLETED');
+    assert.equal(manifestReduced.approvedQty, '6'); assert.equal(manifestReduced.actualQty, '6');
+    const review = data(await post(`${manifests}/${manifest.id}/verify`, supervisorToken, { qcRunId: run.id,
+      qcRunVersion: run.version, manifestVersion: manifest.version, manifestSha256: manifest.sha256,
+      reviewed: true, idempotencyKey: key() }));
+    assert.ok(review.verificationId);
+    await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'BAST', language: 'id', expectedVersion: null,
+      documentPrefix: 'BAST', termsLines: ['Handover follows verified work'], paymentNote: null, warrantyNote: null,
+      contactNote: null, footerNote: null, signatoryName: 'Manager', signatoryTitle: 'Operations' }, admin);
+    const draft = await prepareHandymanBast(admin, { executionScopeId: scope, idempotencyKey: key() });
+    const issued = await issueHandymanBast(admin, { bastId: draft.bast.id, idempotencyKey: key() });
+    assert.equal(issued.bast.status, 'ISSUED'); assert.equal(issued.bast.acceptedAt, null);
+    const consent = await handymanCustomerConsentInput(draft.bast.id, customerId);
+    const accepted = await acceptHandymanBast(customerId,
+      { bastId: draft.bast.id, signatureDigest: consent.signatureDigest, idempotencyKey: key() });
+    assert.equal(accepted.bast.status, 'ACCEPTED'); assert.ok(accepted.signOff);
+    const eligible = data(await post(`${variations()}/${add}/final-charge-eligibility`, adminToken, { expectedVersion: 7,
+      qcRunId: run.id, bastId: draft.bast.id, evidenceReference: qcEvidence, idempotencyKey: key() }));
+    assert.equal(eligible.variation.status, 'FINAL_CHARGE_ELIGIBILITY');
+    assert.equal(eligible.variation.finalChargeEligible, true);
+    const addCharge = (await composeHandymanChargeLine({ executionScopeId: scope, quotationLineId: addLine, idempotencyKey: key() }, admin)).chargeLine;
+    assert.equal(addCharge.amount, '110.00');
+
+    const proposed = proposal('560.00', null);
+    proposed.invoice.lines.push({ chargeLineId: addCharge.id, taxpayerClassification: taxClass, rule: taxRule, evidenceReferenceId: id() });
+    const classification = await proposeCustomerTaxClassification(maker, proposed);
+    const verified = await verify(classification);
+    const counts = await financialCounts();
+    const result = await calculate(classification, verified);
+    assert.deepEqual(await financialCounts(), counts);
+    assert.equal(result.invoiceIssued, false); assert.equal(result.totalIncludingPpn, '560.00');
+    assert.equal(result.considerationBeforePpn, '541.00'); assert.equal(result.dppAmount, '391.00');
+    assert.equal(result.ppnAmount, '19.00');
+    const amounts = (chargeLineId: string) => {
+      const row = result.lines.find(x => x.chargeLineId === chargeLineId); assert.ok(row);
+      return [row.grossAmount, row.considerationBeforePpn, row.dppAmount, row.ppnAmount, row.applicability];
+    };
+    assert.deepEqual(amounts(chargeLabor), ['100.00', '91.00', '91.00', '9.00', 'TAXABLE']);
+    assert.deepEqual(amounts(chargeA), ['150.00', '150.00', '0.00', '0.00', 'NON_TAXABLE']);
+    assert.deepEqual(amounts(chargeB), ['200.00', '200.00', '200.00', '0.00', 'EXEMPT']);
+    assert.deepEqual(amounts(chargeFree), ['0.00', '0.00', '0.00', '0.00', 'EXEMPT']);
+    assert.deepEqual(amounts(addCharge.id), ['110.00', '100.00', '100.00', '10.00', 'TAXABLE']);
+    const added = result.commercialSource.additions.find(x => x.variationId === add); assert.ok(added);
+    assert.equal(added.approvedVersion, 3); assert.equal(added.quotationLineId, addLine);
+    assert.equal(added.revisedQuotationVersionId, revised.id);
+    const reduced = result.commercialSource.lines.find(x => x.chargeLineId === chargeA); assert.ok(reduced);
+    assert.equal(reduced.chargeAmount, '250.00'); assert.equal(reduced.grossAmount, '150.00');
+    assert.equal(reduced.reductions.length, 1); assert.equal(reduced.reductions[0].correctionId, posted.binding.correctionId);
+    assert.equal(result.commercialSource.profiles.length, 3);
+    assert.deepEqual((await q(`SELECT id, quantity::text, final_quoted_unit_amount::text, line_total::text
+      FROM handyman_quotation_lines WHERE quotation_version_id=$1 ORDER BY id`, [originalVersion])).rows, originalPrices);
+
+    // A real unexplained ledger deduction is rolled back; it cannot be silently
+    // attributed to the approved REDUCE or change the persisted projection.
+    const tx = await pool.connect();
+    try {
+      await tx.query('BEGIN');
+      await adjustHandymanCustomerLedger({ executionScopeId: scope, chargeLineId: chargeB, amount: '1.00',
+        reason: 'unattributed test adjustment', idempotencyKey: key() }, admin, tx);
+      await assert.rejects(readInclusiveCommercialSource(tx, realm.client.id, requestId, scope, jakarta(taxPoint)),
+        (error: any) => error.code === 'HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT' && /Unattributed/.test(error.message));
+    } finally { await tx.query('ROLLBACK'); tx.release(); }
+    assert.deepEqual(await financialCounts(), counts);
+    assert.equal((await calculate(classification, verified)).checksum, result.checksum);
+
+    // Independently produce a genuine partial material charge from settled
+    // usage and an explicitly governed pricing mode, on another Client. Its
+    // legitimate ledger amount is not enough to infer an inclusive tax basis.
+    const partialRealm = await realmFixture('Partial charge'); const partialChain = await locationChain(partialRealm);
+    await clientMonetaryContextService.setClientMonetaryContext({ clientId: partialRealm.client.id, baseCurrencyCode: 'IDR',
+      defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
+    await updateHandymanDocumentIssuerProfile({ clientId: partialRealm.client.id, expectedVersion: null, legalName: 'PT Partial',
+      displayName: 'Handyman', registeredAddress: 'Jl. Merdeka 1', businessAddress: null, city: 'Jakarta', province: 'Jakarta',
+      postalCode: '10110', email: 'partial@example.test', phone: '+62 21 5000 1111', whatsapp: '+62 811 2000 3000',
+      website: null, taxId: null, businessRegistrationId: null, logoReference: null }, admin);
+    await updateHandymanDocumentSettings({ clientId: partialRealm.client.id, documentKind: 'QUOTATION', language: 'id', expectedVersion: null,
+      documentPrefix: 'QTN', termsLines: ['Work after approval'], paymentNote: 'Transfer', warrantyNote: null,
+      contactNote: null, footerNote: null, signatoryName: 'Manager', signatoryTitle: 'Operations' }, admin);
+    const bank = await createHandymanDocumentBankAccount({ clientId: partialRealm.client.id, bankCode: 'BANK', bankName: 'Test Bank',
+      accountNumber: '1234567890', accountHolderName: 'PT Partial', currency: 'IDR' }, admin);
+    await activateHandymanDocumentBankAccount({ clientId: partialRealm.client.id, bankAccountId: bank.bankAccountId,
+      expectedVersion: bank.version, confirmAccountNumber: '1234567890', verificationReference: 'Verified statement',
+      asDefault: true, authorizeReplacement: false }, admin);
+    const tenant = await tenantCompanyService.createTenantCompany({ clientId: partialRealm.client.id,
+      tenantCode: `T_${id().slice(0,8).toUpperCase()}`, tenantName: 'Partial customer', legalName: 'PT Customer' }, admin);
+    const customer = await userService.createUser({ email: `${id()}@partial.test`, displayName: 'Partial customer PIC' });
+    await grant(customer.id, ['tenant_company.manage']);
+    await buildingAssignmentService.createAssignment(customer.id, { buildingId: partialRealm.building.id });
+    const pic = await tenantPicService.createTenantPic({ tenantCompanyId: tenant.id, picName: 'Customer PIC', userId: customer.id }, admin);
+    await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: tenant.id, buildingId: partialRealm.building.id, spaceId: partialChain.space.id }, admin);
+    await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: tenant.id, buildingId: partialRealm.building.id }, admin);
+    const service = await serviceCatalogService.createServiceCatalogEntry({ clientId: partialRealm.client.id,
+      code: `S_${id().slice(0,8).toUpperCase()}`, name: 'Partial material', category: 'HANDYMAN' }, admin);
+    const partialUom = id(); await q(`INSERT INTO units_of_measure(id,client_id,code,name,symbol,category)
+      VALUES($1,$2,$3,'piece','pc','COUNT')`, [partialUom, partialRealm.client.id, `U_${id().slice(0,8).toUpperCase()}`]);
+    const partialAttribution = await createChannelAttribution({ tenantCompanyId: tenant.id, buildingId: partialRealm.building.id,
+      tenantPicId: pic.id, spaceId: partialChain.space.id, originChannel: 'BM_SUPER_APP',
+      originReference: `bm-handoff:BM_SUPER_APP:${id()}`, createdByUserId: customer.id });
+    const partialRequest = await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: partialAttribution.id,
+      serviceCatalogId: service.id, description: 'Partially used material' }, admin);
+    await handymanServiceRequestTriageService.recordHandymanRequestTriage({ handymanRequestId: partialRequest.id,
+      triageDisposition: 'DIAGNOSIS', triageNote: 'Reviewed' }, admin);
+    await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis({ handymanRequestId: partialRequest.id,
+      disciplineId, diagnosis: 'Material repair' }, admin);
+    const partialQuote = await createHandymanQuotation({ handymanRequestId: partialRequest.id }, admin);
+    const partialVersion = partialQuote.versions[0].id;
+    const partialLine = (await addHandymanQuotationLine(partialVersion, { lineType: 'MATERIAL', quantity: 10, uomId: partialUom,
+      currency: 'IDR', finalQuotedUnitAmount: 25, description: 'Material' }, admin)).id;
+    await prepareHandymanTaxProfile({ quotationVersionId: partialVersion }, taxFacts(), admin);
+    await issueHandymanQuotationVersion(partialVersion, { validUntil: validUntil() }, admin);
+    const partialDecision = await decideHandymanQuotation(partialVersion,
+      { decision: 'APPROVE', tenantPicId: pic.id, idempotencyKey: key() }, customer.id);
+    assert.ok(partialDecision.executionScope); const partialScope = partialDecision.executionScope.id;
+    const partialCrew = await crewFixture(partialRealm);
+    await assignHandymanExecutionScopeCrew({ executionScopeId: partialScope, providerContextId: partialCrew.providerContext.id,
+      crewId: partialCrew.crew.id, idempotencyKey: key() }, admin);
+    const estimated = await estimateHandymanMaterialExecutionLine({ executionScopeId: partialScope, quotationVersionId: partialVersion,
+      quotationLineId: partialLine, estimatedQty: 9, supplierReference: null, idempotencyKey: key() }, partialCrew.leadUser.id);
+    const materialId = estimated.line.id;
+    await approveHandymanMaterialExecutionLine({ executionScopeId: partialScope, lineId: materialId, idempotencyKey: key() }, partialCrew.leadUser.id);
+    await issueHandymanMaterialExecutionLine({ executionScopeId: partialScope, lineId: materialId, quantity: 10,
+      supplierReference: null, idempotencyKey: key() }, partialCrew.leadUser.id);
+    await useHandymanMaterialExecutionLine({ executionScopeId: partialScope, lineId: materialId, quantity: 9, idempotencyKey: key() }, partialCrew.leadUser.id);
+    await settleHandymanMaterialExecutionLine({ executionScopeId: partialScope, lineId: materialId, idempotencyKey: key() }, partialCrew.leadUser.id);
+    const agreement = await prepareHandymanCommercialAgreement(admin, { clientId: partialRealm.client.id, idempotencyKey: key() });
+    await prepareHandymanMaterialPricingBasis(admin, { agreementVersionId: agreement.version.id, mode: 'SETTLED_USAGE', idempotencyKey: key() });
+    await activateHandymanCommercialAgreementVersion(admin, { versionId: agreement.version.id,
+      effectiveFrom: new Date(Date.now()-60_000).toISOString(), idempotencyKey: key() });
+    await openHandymanCustomerTransaction({ executionScopeId: partialScope, idempotencyKey: key() }, admin);
+    const partial = await composeHandymanChargeLine({ executionScopeId: partialScope, quotationLineId: partialLine, idempotencyKey: key() }, partialCrew.leadUser.id);
+    assert.equal(partial.basis.compositionKind, 'MATERIAL_SETTLED_USAGE');
+    assert.equal(partial.basis.appliedQty, '9.000'); assert.equal(partial.chargeLine.amount, '225.00');
+    const reader = await pool.connect();
+    try {
+      await assert.rejects(readInclusiveCommercialSource(reader, partialRealm.client.id, partialRequest.id, partialScope, jakarta(taxPoint)),
+        (error: any) => error.code === 'HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT' && /Partial/.test(error.message));
+    } finally { reader.release(); }
   });
 });
