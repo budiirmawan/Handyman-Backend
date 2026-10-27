@@ -286,6 +286,8 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'handyman.tax_identity.approve', name: 'Approve or reject Handyman tax identities' },
   { code: 'handyman.tax_rule.approve', name: 'Approve or reject Handyman tax rules' },
   { code: 'handyman.bm_tax_case.approve', name: 'Approve or reject BM commission tax cases' },
+  { code: 'handyman.bm_bank_account.manage', name: 'Propose BM beneficiary bank account changes' },
+  { code: 'handyman.bm_bank_account.approve', name: 'Approve or reject BM beneficiary bank account changes' },
   {
     code: 'handyman.finance.manage',
     name: 'Execute Handyman finance commands (ledger, allocations, corrections, payment verification)',
@@ -856,6 +858,8 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   'handyman.tax_identity.approve',
   'handyman.tax_rule.approve',
   'handyman.bm_tax_case.approve',
+  'handyman.bm_bank_account.manage',
+  'handyman.bm_bank_account.approve',
   'handyman.customer_tax.read',
   'handyman.settlement.manage',
   // CR-HM-WORKER-COMPETENCY-01 PART 02 — verifying (or rejecting) a worker's

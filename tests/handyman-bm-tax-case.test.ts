@@ -165,7 +165,7 @@ async function counts(){
 
 describe('PART 02C-A independently verified BM commission tax case',()=>{
   it('registers an unassigned checker and verifies separate PPN/PPh pins with no financial writes',async()=>{
-    assert.equal(migrations.at(-1)!.id,'0503_handyman_bm_commission_ledger');
+    assert.equal(migrations.at(-1)!.id,'0504_handyman_bm_beneficiary_bank_accounts');
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_tax_case.approve'));
     const grants=async()=>(await q(`SELECT count(*)::int n FROM role_permission_assignments r JOIN permissions p ON p.id=r.permission_id
       WHERE p.code='handyman.bm_tax_case.approve' AND r.status='ACTIVE'`)).rows[0].n;
@@ -376,6 +376,7 @@ describe('PART 02C-A independently verified BM commission tax case',()=>{
     assert.equal(c.snapshot.intentDigest,hash({schema:'HANDYMAN_BM_TAX_CASE_INTENT_V1',actor:admin,...f.input}));
     const persisted=(await q('SELECT snapshot,digest FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0];
     try{
+      assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
       assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
       assert.equal(await migrateDown(pool),'0502_handyman_bm_correction_tax_approval');
       assert.equal(await migrateDown(pool),'0501_handyman_bm_tax_non_applicability');
@@ -743,6 +744,7 @@ describe('PART 02C-C independently reviewed NOT_APPLICABLE treatment',()=>{
         /BM tax case source, evidence, scope, version or independent tax rules are invalid/);
     }
     // A rollback must wait for concurrent case activity before checking whether V2 history exists.
+    assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
     assert.equal(await migrateDown(pool),'0502_handyman_bm_correction_tax_approval');
     const tx=await pool.connect();
@@ -866,6 +868,7 @@ describe('PART 02D-B1 correction tax approval bridge',()=>{
     assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[old.d.id])).rows[0],oldDecision);
     await assert.rejects(q('UPDATE handyman_bm_correction_tax_cases SET digest=$2 WHERE id=$1',[c.snapshot.id,'0'.repeat(64)]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_correction_tax_decisions WHERE id=$1',[d.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
     await assert.rejects(migrateDown(pool),/Refusing to remove populated BM correction tax approval history/);
     await migrateUp(pool);
@@ -933,7 +936,9 @@ describe('BM-COMMISSION-02 PART 01 gross-to-net ledger',()=>{
     await assert.rejects(postHandymanBmCommissionLedger(wrong,request),code('BUILDING_ACCESS_DENIED'));
     await assert.rejects(q('UPDATE handyman_bm_commission_ledger SET net_payable=0 WHERE id=$1',[s.id]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_commission_ledger WHERE id=$1',[s.id]),/immutable/);
-    await assert.rejects(migrateDown(pool),/Refusing to remove populated BM commission ledger history/);
+    assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
+    try { await assert.rejects(migrateDown(pool),/Refusing to remove populated BM commission ledger history/); }
+    finally { await migrateUp(pool); }
   });
 
   it('blocks future forecasts, unapproved, stale and unlinked sources without creating an entry',async()=>{
