@@ -76,13 +76,30 @@ let workOrder: string, foreignWorkOrder: string, materialItem: string;
 let approvedAdd: string, addLine: string, approvedVersionId: string;
 let crewId: string, leadUserId: string, leadWorkerId: string, helperToken: string;
 let chain: Awaited<ReturnType<typeof locationChain>>;
-let requestId: string, tenantId: string, careLocalToken: string, careToken: string, careActor: string, integrationCode: string;
+let requestId: string, tenantId: string, tenantPicId: string, otherBuildingId: string;
+let careLocalToken: string, careLocalId: string, careReviewerToken: string, careReviewerId: string;
+let careToken: string, careActor: string, workspaceReviewerToken: string, workspaceReviewerActor: string, integrationCode: string;
 let firstOfferBytes: Buffer, firstOfferHash: string;
 const offerPins = new Map<string, { offerDocumentId: string; offerDocumentVersion: number; offerPdfSha256: string }>();
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const careSelection = () => ({ propertyId: realm.property.id, tenantCompanyId: tenantId, buildingId: realm.building.id, spaceId: chain.space.id });
 const carePath = (variationId: string) => `/api/v1/handyman/care/requests/${requestId}/variations/${variationId}/offer.pdf`;
 const localPath = (variationId: string) => `${opsVariations()}/${variationId}/offer.pdf`;
+function deliveryPath(variationId: string, local = false, buildingId = realm.building.id) {
+  const pin = offerPins.get(variationId); assert.ok(pin);
+  const base = local ? `/api/v1/handyman/care/buildings/${buildingId}` : '/api/v1/handyman/care';
+  return `${base}/requests/${requestId}/variations/${variationId}/offers/${pin.offerDocumentId}/versions/${pin.offerDocumentVersion}/delivery-events`;
+}
+async function protectedEvidence(ownerRequest: string) {
+  const evidenceId = id(), storageKey = evidenceStorageKey(evidenceId);
+  const bytes = Buffer.from('%PDF-independent-delivery-proof');
+  await createEvidenceStorage().put(storageKey, { buffer: bytes, mimeType: 'application/pdf' });
+  await pool.query(`INSERT INTO evidence_submissions(id,client_id,execution_type,execution_id,evidence_type,file_reference,original_file_name,
+    mime_type,file_size,submitted_by_user_id,content_sha256,content_hashed_at,hash_algorithm)
+    VALUES($1,$2,'HANDYMAN_REQUEST',$3,'DOCUMENT',$4,'receipt.pdf','application/pdf',$5,$6,$7,NOW(),'SHA-256')`,
+  [evidenceId, realm.client.id, ownerRequest, storageKey, bytes.length, careLocalId, sha(bytes)]);
+  return { evidenceId, storageKey, bytes };
+}
 
 function responseData(response: any, status = 200) {
   assert.equal(response.status, status, JSON.stringify(response.body));
@@ -178,6 +195,101 @@ async function pdfText(bytes: Buffer) {
   }
   return out.join('\n').replace(/\s+/g, ' ');
 }
+async function exerciseVariationDelivery(variationId: string) {
+  const pin = offerPins.get(variationId); assert.ok(pin);
+  const local = deliveryPath(variationId, true), workspace = deliveryPath(variationId);
+  const body = { type: 'SENT', pdfSha256: pin.offerPdfSha256, channel: 'EMAIL', recipientName: 'Customer PIC',
+    recipientContact: 'customer@example.test', recipientPicId: tenantPicId, idempotencyKey: key() };
+
+  // The two PDF downloads above did not claim that a tenant was sent anything.
+  assert.deepEqual(responseData(await api().get(workspace).set(auth(careToken))), []);
+  assert.equal((await api().get(local)).status, 401);
+  assert.equal((await api().get(local).set(auth(picToken))).status, 403);
+  assert.equal((await api().get(deliveryPath(variationId, true, otherBuildingId)).set(auth(careLocalToken))).status, 404);
+  assert.equal((await api().get(workspace).set(auth(careLocalToken))).status, 401);
+  assert.equal((await api().get(workspace).query({ extra: 'ignored' }).set(auth(careToken))).status, 400);
+  assert.equal((await api().get(workspace.replace(`/versions/${pin.offerDocumentVersion}/`, '/versions/999/')).set(auth(careToken))).status, 404);
+  assert.equal((await api().get(workspace.replace(pin.offerDocumentId, id())).set(auth(careToken))).status, 404);
+  assert.equal((await post(local, careLocalToken, { ...body, type: 'DOWNLOADED' })).status, 400);
+  assert.equal((await post(local, careLocalToken, { ...body, approved: true })).status, 400);
+  rejection(await post(local, careLocalToken, { ...body, pdfSha256: '0'.repeat(64) }), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+  rejection(await post(local, careLocalToken, { ...body, recipientPicId: id() }), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+
+  const concurrent = await Promise.all([post(local, careLocalToken, body), post(local, careLocalToken, body)]);
+  assert.deepEqual(concurrent.map(r => r.status).sort(), [200, 201]);
+  const sent = concurrent.find(r => r.status === 201)!.body.data.event;
+  assert.equal(sent.type, 'SENT'); assert.equal(sent.clientId, realm.client.id); assert.equal(sent.buildingId, realm.building.id);
+  assert.equal(sent.requestId, requestId); assert.equal(sent.variationId, variationId); assert.equal(sent.executionScopeId, scope);
+  assert.equal(sent.offerDocumentId, pin.offerDocumentId); assert.equal(sent.offerVersion, pin.offerDocumentVersion);
+  assert.equal(sent.pdfSha256, pin.offerPdfSha256); assert.equal(sent.recipientPicId, tenantPicId);
+  assert.equal(sent.recipientContact, body.recipientContact); assert.equal(sent.recordedByUserId, careLocalId);
+  assert.equal(concurrent.find(r => r.status === 200)!.body.data.event.id, sent.id);
+  rejection(await post(local, careLocalToken, { ...body, recipientName: 'Different recipient' }), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+
+  const lateBody = { ...body, idempotencyKey: key() };
+  const late = responseData(await post(local, careLocalToken, lateBody), 201).event;
+  const proof = await protectedEvidence(requestId), foreignProof = await protectedEvidence(foreignWorkOrder);
+  const confirmation = { type: 'DELIVERED', pdfSha256: pin.offerPdfSha256, sentEventId: sent.id, evidenceId: proof.evidenceId,
+    evidenceKind: 'PROVIDER_RECEIPT', reviewed: true, idempotencyKey: key() };
+  rejection(await post(local, careLocalToken, confirmation), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+  rejection(await post(workspace, careToken, confirmation), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT'); // no cross-realm identity assumption
+  assert.equal((await post(local, careReviewerToken, { ...confirmation, reviewed: false })).status, 400);
+  assert.equal((await post(local, careReviewerToken, { ...confirmation, evidenceId: null })).status, 400);
+  assert.equal((await post(local, careReviewerToken, { ...confirmation, sentEventId: id() })).status, 404);
+  rejection(await post(local, careReviewerToken, { ...confirmation, evidenceId: foreignProof.evidenceId }), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+  await createEvidenceStorage().put(proof.storageKey, { buffer: Buffer.from('tampered'), mimeType: 'application/pdf' });
+  rejection(await post(local, careReviewerToken, confirmation), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+  await createEvidenceStorage().put(proof.storageKey, { buffer: proof.bytes, mimeType: 'application/pdf' });
+  const reviewed = await Promise.all([post(local, careReviewerToken, confirmation), post(local, careReviewerToken, confirmation)]);
+  assert.deepEqual(reviewed.map(r => r.status).sort(), [200, 201]);
+  const delivered = reviewed.find(r => r.status === 201)!.body.data.event;
+  assert.equal(delivered.type, 'DELIVERED'); assert.equal(delivered.sentEventId, sent.id);
+  assert.equal(delivered.recordedByUserId, careReviewerId); assert.equal(delivered.recipientPicId, tenantPicId);
+  assert.equal(delivered.evidenceId, proof.evidenceId); assert.equal(delivered.evidenceSha256, sha(proof.bytes));
+  assert.equal(delivered.evidenceKind, 'PROVIDER_RECEIPT');
+  rejection(await post(local, careReviewerToken, { ...confirmation, idempotencyKey: key() }), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+
+  const workspaceBody = { ...body, channel: 'WHATSAPP', recipientContact: '+621234567', idempotencyKey: key() };
+  const wsSent = responseData(await post(workspace, careToken, workspaceBody), 201).event;
+  assert.equal(wsSent.recordedByCareActorId, careActor); assert.equal(wsSent.recordedByUserId, null);
+  const wsConfirmation = { ...confirmation, sentEventId: wsSent.id, evidenceKind: 'TENANT_ACKNOWLEDGEMENT', idempotencyKey: key() };
+  rejection(await post(workspace, careToken, wsConfirmation), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+  const wsDelivered = responseData(await post(workspace, workspaceReviewerToken, wsConfirmation), 201).event;
+  assert.equal(wsDelivered.recordedByCareActorId, workspaceReviewerActor); assert.equal(wsDelivered.sentEventId, wsSent.id);
+  const history = await api().get(local).set(auth(careReviewerToken));
+  assert.equal(history.headers['cache-control'], 'private, no-store');
+  assert.equal(responseData(history).length, 5); assert.equal(JSON.stringify(history.body).includes('evidence/'), false);
+
+  // Database guards also reject forged bindings, self-review, recipient changes
+  // and all destructive mutations, independently of the HTTP handlers.
+  const insertSent = `INSERT INTO handyman_variation_delivery_events
+    (id,client_id,building_id,request_id,tenant_company_id,execution_scope_id,variation_id,offer_document_id,offer_version,
+     revised_quotation_version_id,pdf_sha256,event_type,channel,recipient_name,recipient_contact,recipient_pic_id,
+     recorded_by_user_id,idempotency_key,payload_sha256)
+    SELECT $1,client_id,building_id,request_id,tenant_company_id,execution_scope_id,variation_id,offer_document_id,offer_version,
+     revised_quotation_version_id,repeat('0',64),'SENT',channel,recipient_name,recipient_contact,recipient_pic_id,
+     recorded_by_user_id,$2,repeat('a',64) FROM handyman_variation_delivery_events WHERE id=$3`;
+  await assert.rejects(pool.query(insertSent, [id(), key(), sent.id]), /exact official offer/);
+  const insertReview = `INSERT INTO handyman_variation_delivery_events
+    (id,client_id,building_id,request_id,tenant_company_id,execution_scope_id,variation_id,offer_document_id,offer_version,
+     revised_quotation_version_id,pdf_sha256,event_type,channel,recipient_name,recipient_contact,recipient_pic_id,
+     sent_event_id,evidence_id,evidence_sha256,evidence_kind,recorded_by_user_id,idempotency_key,payload_sha256)
+    SELECT $1,client_id,building_id,request_id,tenant_company_id,execution_scope_id,variation_id,offer_document_id,offer_version,
+     revised_quotation_version_id,pdf_sha256,'DELIVERED',channel,$2,recipient_contact,recipient_pic_id,
+     id,$3,$4,'PROVIDER_RECEIPT',$5,$6,repeat('a',64) FROM handyman_variation_delivery_events WHERE id=$7`;
+  await assert.rejects(pool.query(insertReview, [id(), body.recipientName, proof.evidenceId, sha(proof.bytes), careLocalId, key(), sent.id]), /independently review/);
+  await assert.rejects(pool.query(insertReview, [id(), 'Forged recipient', proof.evidenceId, sha(proof.bytes), careReviewerId, key(), sent.id]), /independently review/);
+  await assert.rejects(pool.query(insertReview, [id(), body.recipientName, foreignProof.evidenceId, sha(foreignProof.bytes), careReviewerId, key(), sent.id]), /request-owned/);
+  await assert.rejects(pool.query('UPDATE handyman_variation_delivery_events SET recipient_name=$2 WHERE id=$1', [sent.id, 'Rewritten']), /append-only/);
+  await assert.rejects(pool.query('DELETE FROM handyman_variation_delivery_events WHERE id=$1', [sent.id]), /append-only/);
+  await assert.rejects(pool.query('TRUNCATE handyman_variation_delivery_events'), /append-only/);
+  const state = (await pool.query('SELECT status,tenant_decision_outcome FROM handyman_scope_variations WHERE id=$1', [variationId])).rows[0];
+  assert.equal(state.status, 'REVISED_QUOTATION'); assert.equal(state.tenant_decision_outcome, null);
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM handyman_scope_variation_events
+    WHERE variation_id=$1 AND event_type='TENANT_DECISION'`, [variationId])).rows[0].n, 0);
+  return { lateBody, lateSentId: late.id as string, proofId: proof.evidenceId };
+}
+
 // Queue both authenticated commands behind a held scope lock. This makes the
 // authorization-versus-ISSUE race deterministic rather than timing-dependent.
 async function waitForScopeLockWaiters(count: number) {
@@ -218,9 +330,11 @@ before(async () => {
   await credentialService.createInitialCredential({ userId: customer.id, password: PASSWORD });
   picToken = responseData(await api().post('/api/v1/auth/login').send({ email: customer.email, password: PASSWORD })).sessionToken;
   const pic = await tenantPicService.createTenantPic({ tenantCompanyId: tenant.id, picName: 'Customer PIC', userId: customer.id }, admin);
+  tenantPicId = pic.id;
   await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: tenant.id, buildingId: realm.building.id, spaceId: chain.space.id }, admin);
   await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: tenant.id, buildingId: realm.building.id }, admin);
   const careUser = await userService.createUser({ email: `${id()}@care.test`, displayName: 'Building Care' });
+  careLocalId = careUser.id;
   const careRole = await roleService.createRole({ code: `CARE_${id()}`, name: 'Building Care' });
   const carePermission = await permissionRepository.findByCode('handyman.care.building'); assert.ok(carePermission);
   await permissionService.assignPermissionToRole(careRole.id, carePermission.id);
@@ -228,6 +342,12 @@ before(async () => {
   await buildingAssignmentService.createAssignment(careUser.id, { buildingId: realm.building.id });
   await credentialService.createInitialCredential({ userId: careUser.id, password: PASSWORD });
   careLocalToken = responseData(await api().post('/api/v1/auth/login').send({ email: careUser.email, password: PASSWORD })).sessionToken;
+  const reviewer = await userService.createUser({ email: `${id()}@care.test`, displayName: 'Independent Building Care' });
+  careReviewerId = reviewer.id;
+  await roleService.assignRoleToUser(reviewer.id, careRole.id);
+  await buildingAssignmentService.createAssignment(reviewer.id, { buildingId: realm.building.id });
+  await credentialService.createInitialCredential({ userId: reviewer.id, password: PASSWORD });
+  careReviewerToken = responseData(await api().post('/api/v1/auth/login').send({ email: reviewer.email, password: PASSWORD })).sessionToken;
   integrationCode = `VO_${id().slice(0, 8).toUpperCase()}`;
   const secret = 'variation-offer-workspace-test-secret';
   const integration = await handoffRuntimeRepository.createIntegration({ integrationCode, displayName: 'Variation Care' });
@@ -239,6 +359,12 @@ before(async () => {
     issuedAt: new Date(Date.now() - 1000).toISOString(), expiresAt: new Date(Date.now() + 240000).toISOString(),
     actor: { type: 'CUSTOMER_CARE', actorReference: 'care' } };
   careToken = (await admitCareWorkspace(assertion, signCareWorkspaceAssertion(assertion, secret))).workspaceToken;
+  workspaceReviewerActor = (await handymanCareActorService.createCareActor({ integrationId: integration.id,
+    actorReference: 'reviewer', displayName: 'Independent Care' })).id;
+  await grantCareActorProperty({ careActorId: workspaceReviewerActor, propertyId: realm.property.id, clientId: realm.client.id }, admin);
+  const reviewerAssertion: CareWorkspaceAssertion = { ...assertion, assertionId: id(),
+    actor: { type: 'CUSTOMER_CARE', actorReference: 'reviewer' } };
+  workspaceReviewerToken = (await admitCareWorkspace(reviewerAssertion, signCareWorkspaceAssertion(reviewerAssertion, secret))).workspaceToken;
   const service = await serviceCatalogService.createServiceCatalogEntry({ clientId: realm.client.id,
     code: `S_${id().slice(0, 8).toUpperCase()}`, name: 'Pipe repair', category: 'HANDYMAN' }, admin);
   uom = id();
@@ -248,6 +374,7 @@ before(async () => {
     code: `I_${id().slice(0, 8).toUpperCase()}`, name: 'Copper pipe', itemType: 'MATERIAL', uomId: uom }, admin)).id;
   const otherBuilding = await buildingService.createBuilding({ propertyId: realm.property.id,
     code: `B_${id().slice(0, 8).toUpperCase()}`, name: 'Other building' });
+  otherBuildingId = otherBuilding.id;
   await buildingAssignmentService.createAssignment(admin, { buildingId: otherBuilding.id });
   workOrder = (await workOrderService.createWorkOrder({ clientId: realm.client.id, buildingId: realm.building.id,
     workOrderNumber: `WO_${id().slice(0, 8)}`, title: 'Pipe repair', workType: 'HANDYMAN', createdByUserId: admin })).id;
@@ -414,6 +541,7 @@ describe('approved variation and real material execution', () => {
     assert.equal((await api().get(localPath(firstReduce)).set(auth(leadToken))).status, 403);
     const care = await api().get(carePath(firstReduce)).query(careSelection()).set(auth(careToken)).buffer(true);
     assert.equal(care.status, 200, JSON.stringify(care.body)); assert.deepEqual(care.body, firstOfferBytes);
+    const delivery = await exerciseVariationDelivery(firstReduce);
     for (const query of [{ ...careSelection(), tenantCompanyId: id() }, { ...careSelection(), spaceId: id() },
       { ...careSelection(), propertyId: id() }]) {
       assert.equal((await api().get(carePath(firstReduce)).query(query).set(auth(careToken))).status, 404);
@@ -471,6 +599,21 @@ describe('approved variation and real material execution', () => {
     const v3 = await revision(3, 8); await prepare(reduceAgain, v3.id, 25);
     const laterDoc = (await pool.query('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [reduceAgain])).rows[0];
     assert.notEqual(laterDoc.id, pin.offerDocumentId); assert.notEqual(laterDoc.document_number, doc.document_number);
+    // Supersession/approval do not erase an earlier send or prevent a later,
+    // independently reviewed receipt; they do block a fresh send of the old offer.
+    const oldJournal = deliveryPath(firstReduce, true);
+    const deliveryReplay = responseData(await post(oldJournal, careLocalToken, delivery.lateBody));
+    assert.equal(deliveryReplay.replayed, true); assert.equal(deliveryReplay.event.id, delivery.lateSentId);
+    rejection(await post(oldJournal, careLocalToken, { ...delivery.lateBody, idempotencyKey: key() }),
+      409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
+    const lateReview = { type: 'DELIVERED', pdfSha256: pin.offerPdfSha256, sentEventId: delivery.lateSentId,
+      evidenceId: delivery.proofId, evidenceKind: 'PROVIDER_RECEIPT', reviewed: true, idempotencyKey: key() };
+    assert.equal((responseData(await post(oldJournal, careReviewerToken, lateReview), 201)).event.sentEventId, delivery.lateSentId);
+    assert.equal(responseData(await api().get(oldJournal).set(auth(careReviewerToken))).length, 6);
+    assert.equal((await post(deliveryPath(reduceAgain, true), careReviewerToken,
+      { ...lateReview, pdfSha256: laterDoc.pdf_sha256, idempotencyKey: key() })).status, 404);
+    rejection(await post(deliveryPath(reduceAgain, true), careLocalToken,
+      { ...delivery.lateBody, pdfSha256: laterDoc.pdf_sha256 }), 409, 'HANDYMAN_VARIATION_DELIVERY_CONFLICT');
     assert.equal(laterDoc.source_snapshot.reconciliation.mode, 'CUMULATIVE');
     assert.ok(laterDoc.source_snapshot.previousAuthorizedVariations.some((v: any) => v.id === firstReduce));
     const historic = await api().get(localPath(firstReduce)).set(auth(careLocalToken)).buffer(true);
@@ -775,7 +918,11 @@ describe('approved variation and real material execution', () => {
     assert.ok(text.includes('Transfer within seven days')); assert.ok(!text.includes('New payment terms'));
     await revokeCareActorProperty({ careActorId: careActor, propertyId: realm.property.id, clientId: realm.client.id }, admin);
     assert.equal((await api().get(carePath(firstReduce)).query(careSelection()).set(auth(careToken))).status, 404);
-    await assert.rejects(migrateDown(pool), /Refusing to remove issued variation offer documents/);
+    assert.equal((await api().get(deliveryPath(firstReduce)).set(auth(careToken))).status, 404);
+    const pin = offerPins.get(firstReduce)!;
+    assert.equal((await post(deliveryPath(firstReduce), careToken, { type: 'SENT', pdfSha256: pin.offerPdfSha256,
+      channel: 'DIRECT', recipientName: 'Customer', idempotencyKey: key() })).status, 404);
+    await assert.rejects(migrateDown(pool), /Cannot discard variation delivery history/);
   });
 
 });

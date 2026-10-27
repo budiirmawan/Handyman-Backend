@@ -2,6 +2,7 @@ import { createHandymanInspectionWorkLinkRouter } from '../modules/handyman-requ
 import { createHandymanTenantReceiptRouter } from '../modules/handyman-tenant-receipts/handyman-tenant-receipt.routes';
 import { createCommercialConsentBridgeRouter } from '../modules/handyman-commercial-consent/commercial-consent.routes';
 import { createQuotationDeliveryRouter } from '../modules/handyman-quotations/handyman-quotation-delivery.routes';
+import { createVariationDeliveryRouter } from '../modules/handyman-scope-variations/handyman-variation-delivery.routes';
 import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
 import { createHandymanVisitApiRouter } from '../modules/handyman-appointment-contract/handyman-visit-api.routes';
 import { createHandymanTenantSlotConsentRouter } from '../modules/handyman-appointment-contract/handyman-tenant-slot-consent.routes';
@@ -881,6 +882,7 @@ export function createApiRouter(): Router {
   router.use(createCareWorkspaceRouter());
   router.use(createCommercialConsentBridgeRouter());
   router.use(createQuotationDeliveryRouter());
+  router.use(createVariationDeliveryRouter());
   // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
   // attribution-bound request intake, and bounded INTAKE evidence upload
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface

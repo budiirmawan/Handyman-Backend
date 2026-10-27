@@ -31,13 +31,14 @@ type Source = {
   previousAuthorizedVariations: PriorVariation[];
   reconciliation: { mode: 'STANDALONE' | 'CUMULATIVE'; originalQuotedTotal: string; revisedQuotedTotal: string };
 };
-type Stored = {
+export type VariationOfferStored = {
   id: string; client_id: string; request_id: string; execution_scope_id: string; variation_id: string;
   variation_version: number; original_quotation_document_id: string; revised_quotation_document_id: string;
   revised_quotation_version_id: string; document_number: string; issued_by_user_id: string; issued_at: Date;
   source_snapshot: Source; source_canonical: string; source_sha256: string; pdf_filename: string;
   pdf_bytes: Buffer; pdf_size: number; pdf_sha256: string;
 };
+type Stored = VariationOfferStored;
 export type VariationOfferConsent = { offerDocumentId: string; offerDocumentVersion: number; offerPdfSha256: string };
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -260,6 +261,7 @@ function verifyStored(row: Stored): void {
         s.issuance.issuedAt !== row.issued_at.toISOString()) throw integrity();
   } catch { throw integrity(); }
 }
+export { verifyStored as verifyStoredVariationOffer };
 function asDownload(row: Stored) {
   verifyStored(row);
   return { id: row.id, version: row.variation_version, filename: row.pdf_filename, fileSize: row.pdf_size,

@@ -80,13 +80,13 @@ async function hasLocalCareScope(tx: PoolClient, userId: string, clientId: strin
   return result.rowCount === 1;
 }
 
-async function authorize(tx: PoolClient, recorder: Recorder, requestId: string, buildingId?: string) {
+async function authorize(tx: PoolClient, recorder: Recorder, requestId: string, buildingId?: string, notFound: () => AppError = missing) {
   const request = await handymanServiceRequestRepository.findById(tx, requestId);
-  if (!request || (buildingId && request.buildingId !== buildingId)) throw missing();
+  if (!request || (buildingId && request.buildingId !== buildingId)) throw notFound();
   if (recorder.principal) {
     await authorizeCareCommercialRequest(tx, recorder.principal, request);
   } else {
-    if (!recorder.userId || !await hasLocalCareScope(tx, recorder.userId, request.clientId, request.buildingId)) throw missing();
+    if (!recorder.userId || !await hasLocalCareScope(tx, recorder.userId, request.clientId, request.buildingId)) throw notFound();
   }
   return request;
 }
@@ -119,7 +119,8 @@ async function document(tx: PoolClient, requestId: string, versionId: string, qu
 
 /** Only an actual protected request-owned file is accepted. A matching hash
  * verifies bytes, NOT what they mean or whether a delivery really occurred. */
-async function evidenceChecksum(tx: PoolClient, evidenceId: string, clientId: string, requestId: string): Promise<string> {
+async function evidenceChecksum(tx: PoolClient, evidenceId: string, clientId: string, requestId: string,
+  onConflict: (message: string) => AppError = conflict): Promise<string> {
   const result = await tx.query<{ file_reference: string; file_size: string; content_sha256: string }>(`
     SELECT file_reference,file_size,content_sha256 FROM evidence_submissions
     WHERE id=$1 AND client_id=$2 AND execution_type='HANDYMAN_REQUEST' AND execution_id=$3
@@ -127,11 +128,11 @@ async function evidenceChecksum(tx: PoolClient, evidenceId: string, clientId: st
       AND content_sha256 IS NOT NULL AND content_hashed_at IS NOT NULL FOR SHARE`,
   [evidenceId, clientId, requestId, evidenceStorageKey(evidenceId)]);
   const row = result.rows[0];
-  if (!row || !digest.test(row.content_sha256)) throw conflict('Protected, hashed request evidence is required.');
+  if (!row || !digest.test(row.content_sha256)) throw onConflict('Protected, hashed request evidence is required.');
   try {
     const stored = await createEvidenceStorage().get(row.file_reference);
     if (stored.size !== Number(row.file_size) || stored.buffer.length !== stored.size || sha(stored.buffer) !== row.content_sha256) throw new Error('mismatch');
-  } catch { throw conflict('Delivery evidence bytes are unavailable or failed integrity verification.'); }
+  } catch { throw onConflict('Delivery evidence bytes are unavailable or failed integrity verification.'); }
   return row.content_sha256;
 }
 
@@ -271,3 +272,9 @@ export async function workspaceRecorder(authorization: string | undefined): Prom
   if (!match) throw workspaceUnauthorized();
   return { principal: await resolveCareWorkspacePrincipal(match[1]) };
 }
+
+// Share the quotation journal's strict command, authorization and evidence
+// boundaries with other official Care-delivered artifacts.
+export { parseCommand as parseCareDeliveryCommand, authorize as authorizeCareDelivery,
+  recheckWorkspace as recheckCareDeliveryWorkspace, evidenceChecksum as verifyCareDeliveryEvidence };
+export type { Recorder as CareDeliveryRecorder };

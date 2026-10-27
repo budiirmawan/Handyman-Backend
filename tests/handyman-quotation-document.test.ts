@@ -152,6 +152,7 @@ before(async () => {
   db = await startEmbeddedTestDatabase({ dir: DIR, port: PORT });
   pool = await initDatabase({ host: '127.0.0.1', port: PORT, name: 'asentra_test', user: 'postgres', password: '', ssl: false });
   await migrateUp(pool);
+  assert.equal(await migrateDown(pool), '0514_handyman_variation_delivery_events');
   assert.equal(await migrateDown(pool), '0513_handyman_variation_offer_documents');
   assert.equal(await migrateDown(pool), '0512_handyman_add_labor_execution');
   assert.equal(await migrateDown(pool), '0511_handyman_add_material_execution_binding');
