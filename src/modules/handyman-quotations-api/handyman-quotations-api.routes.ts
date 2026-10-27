@@ -1,4 +1,5 @@
 import { Router, type RequestHandler } from 'express';
+import { createQuotationDocumentRouter } from '../handyman-quotations/handyman-quotation-document.routes';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
@@ -52,6 +53,7 @@ import {
  */
 export function createHandymanQuotationsApiRouter(): Router {
   const router = Router();
+  router.use(createQuotationDocumentRouter());
   const auth = authenticationMiddleware;
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');

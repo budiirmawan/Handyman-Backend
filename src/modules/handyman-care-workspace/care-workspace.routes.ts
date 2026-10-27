@@ -1,3 +1,5 @@
+import { downloadQuotationDocumentForCare } from '../handyman-quotations/handyman-quotation-document.service';
+import { sendQuotationDocumentPdf } from '../handyman-quotations/handyman-quotation-document.routes';
 import { downloadTenantPaymentReceiptForCare } from '../handyman-tenant-receipts/handyman-tenant-receipt.service';
 import { sendPaymentReceiptPdf } from '../handyman-tenant-receipts/handyman-tenant-receipt.routes';
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
@@ -137,6 +139,18 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await getCareWorkspaceOperationalProjection(
         match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/quotation-versions/:quotationVersionId/document.pdf', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length)) {
+        throw AppError.validation('Quotation document download does not accept a body.');
+      }
+      sendQuotationDocumentPdf(res, await downloadQuotationDocumentForCare(match[1], req.params.requestId,
+        req.params.quotationVersionId, req.query));
     } catch (error) { next(error); }
   });
   router.get([

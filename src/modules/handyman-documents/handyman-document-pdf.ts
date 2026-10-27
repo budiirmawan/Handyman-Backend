@@ -1140,12 +1140,12 @@ function readKeyValues(value: unknown, path: string, _t: Labels): HandymanDocume
   });
 }
 
-function readLines(value: unknown, path: string, _t: Labels): string[] {
+function readLines(value: unknown, path: string, _t: Labels, maxLines: number = HANDYMAN_DOCUMENT_PDF_LIMITS.maxAddressLines): string[] {
   if (value === undefined || value === null) return [];
-  if (!Array.isArray(value) || value.length > HANDYMAN_DOCUMENT_PDF_LIMITS.maxAddressLines) {
+  if (!Array.isArray(value) || value.length > maxLines) {
     throw new HandymanDocumentPdfError(
       'INVALID_LAYOUT',
-      `${path} must be an array of at most ${HANDYMAN_DOCUMENT_PDF_LIMITS.maxAddressLines} lines.`,
+      `${path} must be an array of at most ${maxLines} lines.`,
     );
   }
   return value
@@ -1231,7 +1231,7 @@ function readTerms(value: unknown, t: Labels) {
     }
     assertKeys(entry, ['heading', 'lines'], `terms[${index}]`);
     const block = entry as Record<string, unknown>;
-    const lines = readLines(block.lines, `terms[${index}].lines`, t);
+    const lines = readLines(block.lines, `terms[${index}].lines`, t, HANDYMAN_DOCUMENT_PDF_LIMITS.maxTermsLines);
     if (lines.length > HANDYMAN_DOCUMENT_PDF_LIMITS.maxTermsLines) {
       throw new HandymanDocumentPdfError(
         'CONTENT_TOO_LARGE',

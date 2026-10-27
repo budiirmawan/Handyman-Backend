@@ -1,3 +1,4 @@
+import { migration0509HandymanQuotationDocuments } from './0509_handyman_quotation_documents';
 import { migration0508HandymanInspectionWorkLinks } from './0508_handyman_inspection_work_links';
 import { migration0507HandymanTenantPaymentReceipts } from './0507_handyman_tenant_payment_receipts';
 import { migration0506HandymanBmDocumentIssuance } from './0506_handyman_bm_document_issuance';
@@ -1064,4 +1065,5 @@ export const migrations: readonly Migration[] = [
   migration0506HandymanBmDocumentIssuance,
   migration0507HandymanTenantPaymentReceipts,
   migration0508HandymanInspectionWorkLinks,
+  migration0509HandymanQuotationDocuments,
 ];

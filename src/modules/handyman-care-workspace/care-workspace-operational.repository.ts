@@ -148,6 +148,10 @@ async function readOperationalProjection(
                     jsonb_build_object(
                       'id', v.id, 'versionNumber', v.version_number,
                       'status', v.status, 'validUntil', v.valid_until,
+                      'officialDocument', CASE WHEN doc.id IS NULL THEN NULL ELSE jsonb_build_object(
+                        'number', doc.document_number, 'issuedAt', doc.issued_at,
+                        'downloadPath', '/api/v1/handyman/care/requests/' || s."requestId"::text ||
+                          '/quotation-versions/' || v.id::text || '/document.pdf') END,
                       'createdAt', v.created_at, 'createdByUserId', v.created_by_user_id,
                       'decision', d.decision, 'decisionId', d.id,
                       'decidedAt', d.decided_at, 'decidedByUserId', d.decided_by_user_id,
@@ -178,6 +182,8 @@ async function readOperationalProjection(
                     FROM handyman_quotation_versions v
                     LEFT JOIN handyman_quotation_decisions d
                       ON d.quotation_version_id = v.id
+                    LEFT JOIN handyman_quotation_documents doc
+                      ON doc.quotation_version_id = v.id AND doc.quotation_id=q.id AND doc.client_id=q.client_id
                    WHERE v.quotation_id = q.id
                    ORDER BY v.version_number DESC LIMIT 20
                 ) v), '[]'::jsonb))

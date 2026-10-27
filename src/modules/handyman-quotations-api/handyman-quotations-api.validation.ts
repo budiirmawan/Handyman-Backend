@@ -255,6 +255,7 @@ export function parseQuotationIssueBody(body: unknown): {
   dpPercentage?: number | null;
   dpAmount?: number | null;
   dpTermsNotes?: string | null;
+  documentLanguage?: 'id' | 'en';
 } {
   const src = (body ?? {}) as Record<string, unknown>;
   const validUntil =
@@ -269,9 +270,13 @@ export function parseQuotationIssueBody(body: unknown): {
       { field: 'validUntil', message: 'validUntil must be a valid ISO date.' },
     ]);
   }
+  if (src.documentLanguage !== undefined && src.documentLanguage !== 'id' && src.documentLanguage !== 'en') {
+    fail('Request validation failed.', [{ field: 'documentLanguage', message: 'documentLanguage must be id or en.' }]);
+  }
   return {
     validUntil,
     ...parseQuotationDpTermsBody(body),
+    ...(src.documentLanguage ? { documentLanguage: src.documentLanguage as 'id' | 'en' } : {}),
   };
 }
 

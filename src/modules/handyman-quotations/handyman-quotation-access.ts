@@ -144,13 +144,11 @@ export async function assertQuotationVersionCustomerVisibility(
  *      deliberately checked FIRST so a dual-role actor (a PIC who also holds
  *      `tenant_company.manage`) fails closed rather than being treated as
  *      Operations.
- *   2. OPERATIONS AUTHORITY — otherwise the actor must hold
- *      `tenant_company.manage`, the repository's existing vocabulary for an
- *      authorized Handyman commercial writer (the same code the quotation and
- *      unlisted-intake Operations routes already require, and the code
- *      `assertHandymanCustomerScopeAuthority` uses for the tenant side). An
- *      actor with no such grant is refused: no quotation write is implied by
- *      Building access, ownership, a Care permission or an internal call.
+ *   2. OPERATIONS AUTHORITY — otherwise the actor must hold both
+ *      `tenant_company.manage` and `handyman.commercial.manage`. The former
+ *      opens the quotation surface; the latter is the explicit pricing
+ *      authority. Building access, Care permission, ownership or an internal
+ *      call alone never grant a commercial write.
  *
  * What this law never touches: the customer's OWN commercial acts — the
  * APPROVE/REJECT decision on an ISSUED version (which stays PIC-personal and
@@ -197,12 +195,12 @@ export async function assertHandymanQuotationPricingAuthority(
     context.actorUserId,
     executor as never,
   );
-  if (!permissions.includes('tenant_company.manage')) {
+  if (!permissions.includes('tenant_company.manage') || !permissions.includes('handyman.commercial.manage')) {
     throw new AppError({
       statusCode: 403,
       code: ERROR_CODES.PERMISSION_DENIED,
       message:
-        'Quotation commercial writes require an explicitly authorized Handyman Operations actor (tenant_company.manage with exact-Building access).',
+        'Quotation commercial writes require tenant_company.manage and explicit handyman.commercial.manage with exact-Building access.',
     });
   }
 }

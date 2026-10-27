@@ -1,4 +1,6 @@
 import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
+import { createIssuedQuotationDocument } from './handyman-quotation-document.service';
+import { permissionRepository } from '../permissions';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -198,6 +200,7 @@ export async function issueHandymanQuotationVersion(
     dpPercentage?: number | null;
     dpAmount?: number | null;
     dpTermsNotes?: string | null;
+    documentLanguage?: 'id' | 'en';
   },
   actorUserId: string,
 ): Promise<PublicHandymanQuotationVersion> {
@@ -209,6 +212,8 @@ export async function issueHandymanQuotationVersion(
   }
 
   return withTransaction(async (tx) => {
+    // The ISSUE and its document read one consistent source view.
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     const version = await handymanQuotationRepository.lockVersionById(
       tx,
       quotationVersionId,
@@ -221,6 +226,12 @@ export async function issueHandymanQuotationVersion(
     );
     if (version.status !== 'DRAFT') {
       throw handymanQuotationInvalidTransitionError();
+    }
+    const permissions = await permissionRepository.listActivePermissionCodesForUser(actorUserId, tx);
+    const actor = (await tx.query<{ status: string }>('SELECT status FROM users WHERE id=$1', [actorUserId])).rows[0];
+    if (actor?.status !== 'ACTIVE' || !permissions.includes('handyman.commercial.manage')) {
+      throw new AppError({ statusCode: 403, code: 'PERMISSION_DENIED',
+        message: 'Issuing an official quotation requires Handyman commercial authority.' });
     }
     await assertHandymanQuotationInspectionReady(tx, quotation.handymanRequestId);
     const lines = await handymanQuotationLineRepository.listLines(
@@ -299,6 +310,9 @@ export async function issueHandymanQuotationVersion(
         resolvedDpTerms,
       );
     if (!issued) throw handymanQuotationVersionNotFoundError();
+    // The transition, frozen source, number and PDF are one commit. Any
+    // renderer, master-data or storage failure rolls the transition back.
+    await createIssuedQuotationDocument(tx, quotation, issued, actorUserId, input.documentLanguage);
     await recordOperationalEvent(
       {
         clientId: quotation.clientId,
