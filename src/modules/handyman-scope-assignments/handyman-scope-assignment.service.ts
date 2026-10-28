@@ -1,3 +1,4 @@
+import { assertWarrantyReworkOperations } from '../handyman-service-warranty-reworks/handyman-warranty-rework-authority';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -205,6 +206,9 @@ async function requireAssignableScope(
   status: string;
   buildingId: string;
 }> {
+  const parent = (await tx.query<{original_scope_id:string}>(
+    'SELECT original_scope_id FROM handyman_warranty_rework_executions WHERE execution_scope_id=$1',[executionScopeId])).rows[0];
+  if (parent) await tx.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR SHARE',[parent.original_scope_id]);
   const scope = await handymanScopeAssignmentRepository.lockScopeById(
     tx,
     executionScopeId,
@@ -217,6 +221,12 @@ async function requireAssignableScope(
   if (fee.rowCount) throw handymanInspectionFeeWorkNotAuthorizedError();
   if (!(await hasApprovedScopeQuotation(tx, scope.id))) throw handymanAssignmentScopeNotAuthorizedError();
   return scope;
+}
+
+// Rework assignment belongs to documented Operations, never a tenant PIC.
+async function assertReworkOperations(tx: PoolClient, scope: {id:string; clientId:string; buildingId:string; handymanRequestId:string}, actorUserId:string): Promise<void> {
+  const rework = await tx.query('SELECT 1 FROM handyman_warranty_rework_executions WHERE execution_scope_id=$1', [scope.id]);
+  if (rework.rowCount) await assertWarrantyReworkOperations(tx,scope,actorUserId);
 }
 
 type ValidatedTarget = {
@@ -371,6 +381,7 @@ export async function assignHandymanExecutionScopeCrew(
       clientId: scope.clientId,
       buildingId: scope.buildingId,
     });
+    await assertReworkOperations(tx, scope, actorUserId);
     const existing =
       await handymanScopeAssignmentRepository.lockActiveAssignmentByScope(
         tx,
@@ -501,6 +512,7 @@ export async function reassignHandymanExecutionScopeCrew(
       clientId: scope.clientId,
       buildingId: scope.buildingId,
     });
+    await assertReworkOperations(tx, scope, actorUserId);
 
     // P0-B: Active session guard — cannot transfer an in-progress PIC.
     if (
@@ -953,6 +965,10 @@ export async function respondToHandymanExecutionScopeAssignment(
     if (scope.status !== 'AUTHORIZED') {
       throw handymanAssignmentResponseLateError();
     }
+    const reworkStarted=await tx.query(`SELECT 1 FROM handyman_warranty_rework_executions x
+      JOIN handyman_service_warranty_reworks r ON r.id=x.rework_id
+      WHERE x.execution_scope_id=$1 AND r.status IN ('REWORK_IN_PROGRESS','REWORK_COMPLETE')`,[executionScopeId]);
+    if (reworkStarted.rowCount) throw handymanAssignmentResponseLateError();
     const sessionRes = await tx.query(
       `SELECT 1
          FROM handyman_work_sessions

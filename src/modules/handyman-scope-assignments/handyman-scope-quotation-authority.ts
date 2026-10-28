@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { readCoveredWarrantyClaimApproval } from '../handyman-service-warranty-claims/handyman-warranty-claim-assessment.service';
 
 /**
  * A scope's individual foreign keys do not prove that its decision, version,
@@ -9,9 +10,16 @@ import type { PoolClient } from 'pg';
  * create or reinterpret a tenant decision.
  */
 export async function hasApprovedScopeQuotation(
-  db: Pick<PoolClient, 'query'>,
+  db: PoolClient,
   scopeId: string,
 ): Promise<boolean> {
+  // A rework is authorized by the approved, certificate-bound claim, not
+  // by attributing the customer's earlier quotation decision to Operations.
+  const child = (await db.query<{original_scope_id:string; claim_id:string; current:boolean}>(
+    `SELECT x.original_scope_id,x.claim_id,hm_warranty_rework_scope_current(x.execution_scope_id) AS current
+       FROM handyman_warranty_rework_executions x WHERE x.execution_scope_id=$1`, [scopeId])).rows[0];
+  if (child) return child.current && !!(await readCoveredWarrantyClaimApproval(db, child.claim_id))
+    && await hasApprovedScopeQuotation(db, child.original_scope_id);
   const result = await db.query(
     `SELECT v.id
        FROM handyman_execution_scopes s

@@ -1,3 +1,4 @@
+import { assertReworkQcBinding } from './handyman-rework-qc-binding';
 import type { PoolClient } from 'pg';
 import { assertVerifiedManagedEvidenceReference }
   from '../handyman-field-evidence/handyman-field-evidence.service';
@@ -37,6 +38,7 @@ export async function assertCurrentGuardedHandymanQcPass(
       || (expectedRunId && expectedRunId !== run.id)) {
     throw handymanQcPassBlockedError('latest QC run is not the required PASS');
   }
+  await assertReworkQcBinding(tx,scope.id,run.id);
   const manifest = await tx.query<{
     required_item_keys: string[]; checklist_version_id: string;
   }>(
@@ -94,7 +96,8 @@ export async function assertCurrentGuardedHandymanQcPass(
       WHERE execution_scope_id = $1 AND client_id = $2 FOR SHARE`,
     [scope.id, scope.clientId],
   );
-  if (!sessions.rows.length || sessions.rows.some((row) =>
+  const isRework = (await tx.query<{scope_kind:string}>('SELECT scope_kind FROM handyman_execution_scopes WHERE id=$1',[scope.id])).rows[0]?.scope_kind==='WARRANTY_REWORK';
+  if ((!isRework && !sessions.rows.length) || sessions.rows.some((row) =>
     !row.completed_at
       || !['COMPLETED', 'CHECKED_OUT'].includes(row.status))) {
     throw handymanQcPassBlockedError('Work Sessions not completed');

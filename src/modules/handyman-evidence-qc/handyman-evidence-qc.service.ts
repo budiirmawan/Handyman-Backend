@@ -1,3 +1,4 @@
+import { assertReworkQcBinding } from './handyman-rework-qc-binding';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import type { AppError } from '../../shared/errors';
@@ -935,6 +936,12 @@ export async function openHandymanQcRun(
         || spec.requiredItemKeys.length === 0) {
       throw handymanQcChecklistNotConfiguredError();
     }
+    const reworkReady = (await tx.query<{ready:boolean}>(`SELECT EXISTS (
+      SELECT 1 FROM handyman_warranty_rework_completions c
+      JOIN handyman_service_warranty_reworks r ON r.id=c.rework_id AND r.status='REWORK_COMPLETE'
+      WHERE c.execution_scope_id=x.execution_scope_id AND hm_warranty_rework_scope_current(x.execution_scope_id)) AS ready
+      FROM handyman_warranty_rework_executions x WHERE x.execution_scope_id=$1`, [scopeUuid])).rows[0];
+    if (reworkReady && !reworkReady.ready) throw handymanQcPassBlockedError('rework completion required before QC');
     const run = await handymanEvidenceQcRepository
       .createQcRun(tx, {
         clientId: scope.clientId,
@@ -942,6 +949,7 @@ export async function openHandymanQcRun(
         sessionId: boundSessionId,
         checklistIdentity,
       });
+    await assertReworkQcBinding(tx,scopeUuid,run.id);
     for (const itemKey of spec.requiredItemKeys) {
       await handymanEvidenceQcRepository.setQcRunItemOutcome(tx, {
         runId: run.id, itemKey, outcome: 'NOT_CHECKED', note: null,
@@ -1260,6 +1268,7 @@ export async function finishHandymanQcRun(
 
     const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
       tx, run.executionScopeId);
+    await assertReworkQcBinding(tx,run.executionScopeId,run.id);
     if (input.outcome === 'PASSED') {
       if (!spec || spec.clientId !== run.clientId
           || spec.checklistIdentity !== run.checklistIdentity
@@ -1289,7 +1298,8 @@ export async function finishHandymanQcRun(
           FOR SHARE`,
         [run.executionScopeId, run.clientId],
       );
-      if (sessions.rows.length === 0 || sessions.rows.some((session) =>
+      const isRework = (await tx.query<{scope_kind:string}>('SELECT scope_kind FROM handyman_execution_scopes WHERE id=$1',[run.executionScopeId])).rows[0]?.scope_kind==='WARRANTY_REWORK';
+      if ((!isRework && sessions.rows.length === 0) || sessions.rows.some((session) =>
         !session.completed_at
           || !['COMPLETED', 'CHECKED_OUT'].includes(session.status))) {
         throw handymanQcPassBlockedError('Work Sessions not completed');

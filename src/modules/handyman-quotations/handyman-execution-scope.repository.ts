@@ -112,7 +112,7 @@ async function findScopeByApprovedVersion(
   approvedQuotationVersionId: string,
 ): Promise<HandymanExecutionScopeRecord | null> {
   const result = await executor.query<Row>(
-    `${SCOPE_SELECT} WHERE approved_quotation_version_id = $1`,
+    `${SCOPE_SELECT} WHERE approved_quotation_version_id = $1 AND scope_kind='ORIGINAL'`,
     [approvedQuotationVersionId],
   );
   return result.rows[0] ? map(result.rows[0]) : null;

@@ -1,21 +1,4 @@
-/**
- * CR-HM-15 PART 03 — FREE WARRANTY REWORK types ONLY (FROZEN
- * `CR-HM-15_START_GOVERNANCE.md` §4/§5/§6/§7, §8 row 03).
- *
- * Free rework lifecycle (warranty only):
- *   REWORK_DRAFT -> REWORK_AUTHORIZED -> REWORK_IN_PROGRESS ->
- *   REWORK_COMPLETE -> REWORK_VERIFIED
- * It exists ONLY for an APPROVED claim, and chargeable additional work is
- * a SEPARATE concern (PART 04) that never shares this record.
- *
- * The verification pass closes the claim: `REWORK_VERIFIED` on this
- * record IS the closure, because the claim record's frozen vocabulary has
- * no separate "closed" value and the warranty head's frozen vocabulary
- * has no post-verification state.
- *
- * NO pricing/payment/settlement/ledger, NO chargeable separation, NO FM
- * asset warranty or SaaS coupling.
- */
+/** Historical lifecycle states are retained; new VERIFY/claim resolution is not implemented. */
 
 export const HANDYMAN_SERVICE_WARRANTY_REWORK_STATUSES = [
   'REWORK_DRAFT',
@@ -149,6 +132,8 @@ export type CompleteHandymanServiceWarrantyReworkInput = {
   reworkId: string;
   idempotencyKey: string;
   completionNote?: string | null;
+  /** Fresh managed BEFORE_AFTER_WORK bytes from the assigned Lead. */
+  evidenceReference?: string | null;
 };
 
 export type VerifyHandymanServiceWarrantyReworkInput = {

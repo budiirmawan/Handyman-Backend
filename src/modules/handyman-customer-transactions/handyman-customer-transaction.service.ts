@@ -1,4 +1,4 @@
-import { withTransaction } from '../../database';
+import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
@@ -100,6 +100,11 @@ async function authorityPreamble(scopeUuid: string, actorUserId: string) {
   }))) {
     throw handymanCustomerTransactionNotAuthorizedError();
   }
+  // An approved claim authorizes free remedial work, not a second use of
+  // the original quotation as a new customer ledger/charge authority.
+  const kind=(await getPool().query<{scope_kind:string}>(
+    'SELECT scope_kind FROM handyman_execution_scopes WHERE id=$1',[scopeUuid])).rows[0]?.scope_kind;
+  if (kind==='WARRANTY_REWORK') throw handymanCustomerTransactionBasisInvalidError('warranty-rework-noncommercial');
   return scope;
 }
 

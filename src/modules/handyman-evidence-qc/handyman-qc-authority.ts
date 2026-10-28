@@ -23,6 +23,9 @@ export async function lockHandymanQcScope(
 ) {
   // Assignment/reassignment and QC commands use this same scope-row lock.
   // Always acquire it before locking a run or defect to avoid lock inversion.
+  const parent=(await tx.query<{original_scope_id:string}>(
+    'SELECT original_scope_id FROM handyman_warranty_rework_executions WHERE execution_scope_id=$1',[executionScopeId])).rows[0];
+  if (parent) await tx.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR SHARE',[parent.original_scope_id]);
   const scope = await handymanScopeAssignmentRepository.lockScopeById(
     tx, executionScopeId,
   );

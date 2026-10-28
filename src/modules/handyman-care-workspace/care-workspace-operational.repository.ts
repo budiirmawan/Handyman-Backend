@@ -34,7 +34,7 @@ async function readOperationalProjection(
              es.id AS "executionScopeId"
         FROM handyman_service_requests r
         LEFT JOIN handyman_execution_scopes es
-          ON es.handyman_request_id = r.id AND es.client_id = r.client_id
+          ON es.handyman_request_id = r.id AND es.client_id = r.client_id AND es.scope_kind = 'ORIGINAL'
        WHERE $5::text IS NULL AND $6::integer = 1
          AND r.id = $10
          AND r.tenant_company_id = $7

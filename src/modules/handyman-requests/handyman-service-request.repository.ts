@@ -74,6 +74,7 @@ const CUSTOMER_CARE_PROJECTION_FROM = `
   LEFT JOIN handyman_execution_scopes es
     ON es.handyman_request_id = r.id
    AND es.client_id = r.client_id
+   AND es.scope_kind = 'ORIGINAL'
 `;
 
 async function insertRequest(
