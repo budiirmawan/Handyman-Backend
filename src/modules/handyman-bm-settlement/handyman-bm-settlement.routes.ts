@@ -1,15 +1,18 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import multer from 'multer';
 import { getPool } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import { getHandymanBmSettlementDetail, listHandymanBmSettlements,
-  prepareHandymanBmSettlement, supersedeHandymanBmSettlement, approveHandymanBmSettlement } from './handyman-bm-settlement.service';
+  prepareHandymanBmSettlement, supersedeHandymanBmSettlement, approveHandymanBmSettlement,
+  recordHandymanBmSettlementPayment } from './handyman-bm-settlement.service';
 
 const base = '/handyman/clients/:clientId/buildings/:buildingId/bm-settlements';
 const readScope = requirePermission('handyman.finance.read');
 const makerScope = [requirePermission('handyman.finance.manage'), requirePermission('handyman.settlement.manage')];
+const PAYMENT_FIELDS = ['transferReference', 'amount', 'transferredAt', 'idempotencyKey'];
 const settlementMissing = () => new AppError({
   code: ERROR_CODES.HANDYMAN_BM_SETTLEMENT_NOT_FOUND, statusCode: 404,
   message: 'BM settlement not found in this Client and Building.',
@@ -139,6 +142,71 @@ export function createHandymanBmSettlementRouter(): Router {
         const result = await approveHandymanBmSettlement(req.auth.userId, {
           clientId, settlementId, settlementDigest: text(b.settlementDigest, 'settlementDigest'),
           evidenceReference: text(b.evidenceReference, 'evidenceReference'),
+        });
+        res.status(result.replayed ? 200 : 201).json({ data: result });
+      } catch (error) { next(error); }
+    });
+  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-3 — record actual outgoing transfer
+  // evidence over HTTP, thin over recordHandymanBmSettlementPayment: the
+  // service alone validates the approved settlement, exact net payable,
+  // pinned approved beneficiary, approval-time window, idempotent replay
+  // and duplicate payouts. Evidence arrives as multipart form-data (field
+  // "file", ≤10 MB) or a JSON file.contentBase64 object, mirroring the
+  // payment-proof upload convention. Recording returns PAYMENT_RECORDED
+  // only — verification and SETTLED stay a separate authorized action.
+  router.post(`${base}/:settlementId/payments`, authenticationMiddleware, ...makerScope,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        if (Object.keys(req.query).length) throw AppError.validation('No query fields are accepted.');
+        const clientId = req.params.clientId as string, buildingId = req.params.buildingId as string,
+          settlementId = req.params.settlementId as string;
+        if (!isValidUuid(clientId) || !isValidUuid(settlementId)) throw AppError.validation('Invalid settlement scope.');
+        const multipart = String(req.headers['content-type'] ?? '').startsWith('multipart/form-data');
+        let file: { buffer: Buffer; mimeType: string };
+        let fields: Record<string, unknown>;
+        if (multipart) {
+          const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+          await new Promise<void>((resolve, reject) => {
+            upload.single('file')(req, res, error => {
+              if (error) reject(error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
+                ? AppError.validation('Payout evidence exceeds the 10 MB limit.')
+                : AppError.validation('Payout evidence upload failed.'));
+              else if (!(req as typeof req & { file?: Express.Multer.File }).file)
+                reject(AppError.validation('Multipart field "file" is required.'));
+              else resolve();
+            });
+          });
+          const uploaded = (req as typeof req & { file: Express.Multer.File }).file;
+          file = { buffer: uploaded.buffer, mimeType: uploaded.mimetype };
+          fields = (req.body ?? {}) as Record<string, unknown>;
+        } else {
+          const b = body(req.body, [...PAYMENT_FIELDS, 'file']);
+          const f = b.file;
+          if (!f || typeof f !== 'object' || Array.isArray(f) ||
+              typeof (f as Record<string, unknown>).contentBase64 !== 'string') {
+            throw AppError.validation('A file with contentBase64 and mimeType is required.');
+          }
+          const fo = f as Record<string, unknown>;
+          file = { buffer: Buffer.from(String(fo.contentBase64), 'base64'),
+            mimeType: typeof fo.mimeType === 'string' ? fo.mimeType : '' };
+          fields = b;
+        }
+        if (multipart && Object.keys(fields).some(k => !PAYMENT_FIELDS.includes(k))) {
+          throw AppError.validation('Unexpected settlement payout fields.');
+        }
+        // Exact Client/Building path scope against the authoritative row.
+        const row = (await getPool().query<{ building_id: string }>(
+          'SELECT building_id FROM handyman_bm_settlements WHERE id=$1 AND client_id=$2',
+          [settlementId, clientId])).rows[0];
+        if (!row || row.building_id !== buildingId) throw settlementMissing();
+        const result = await recordHandymanBmSettlementPayment(req.auth.userId, {
+          clientId, settlementId,
+          transferReference: text(fields.transferReference, 'transferReference'),
+          amount: text(fields.amount, 'amount'),
+          transferredAt: text(fields.transferredAt, 'transferredAt'),
+          idempotencyKey: text(fields.idempotencyKey, 'idempotencyKey'),
+          file,
         });
         res.status(result.replayed ? 200 : 201).json({ data: result });
       } catch (error) { next(error); }
