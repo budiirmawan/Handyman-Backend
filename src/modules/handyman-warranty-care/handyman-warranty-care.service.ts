@@ -5,7 +5,8 @@ import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { stableJson } from '../../shared/stable-json';
 import { isValidUuid } from '../clients';
-import { resolveBuildingCareAuthority } from '../handyman-care-authority';
+import { careAuthorityDeniedError, resolveBuildingCareAuthority } from '../handyman-care-authority';
+import { assertCurrentGuardedHandymanQcPass } from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { createEvidenceStorage, evidenceStorageKey } from '../evidence/storage';
 import { computeEvidenceSha256 } from '../evidence/evidence-integrity';
 import { applyRetentionToEvidence } from '../evidence-retention-policies/evidence-retention-application.service';
@@ -259,6 +260,262 @@ export async function getComplaintDetail(actor: ComplaintActor, buildingId: stri
     events:events.map(e=>({type:e.event_type,actorUserId:e.actor_user_id,referenceId:e.reference_id,occurredAt:iso(e.occurred_at)})),
     assessmentHistory:assessmentHistory.map(a=>({id:a.id,revision:a.revision,result:a.result,reason:a.reason,
       reviewerUserId:a.reviewer_user_id,assessedAt:iso(a.assessed_at)})) };
+}
+
+/**
+ * One Care-only projection of existing facts. A repeatable-read snapshot keeps
+ * authorization, the complaint link and the downstream lineage consistent.
+ * The QC pass gate may take its usual row locks and re-hash evidence, but this
+ * endpoint never creates or changes any domain record.
+ */
+export async function getComplaintTracking(actor: ComplaintActor, buildingId: string, complaintInput: string) {
+  const scope = await careScope(actor, buildingId), complaintId = uuid(complaintInput, 'complaintId');
+  return withTransaction(async tx => {
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    const authorized = await tx.query(`SELECT 1 FROM buildings b
+      JOIN properties p ON p.id=b.property_id JOIN clients c ON c.id=p.client_id
+      WHERE b.id=$2 AND c.id=$3 AND b.status='ACTIVE' AND p.status='ACTIVE' AND c.status='ACTIVE'
+        AND hm_warranty_complaint_care_authorized($1,$3,$2) FOR SHARE OF b,p,c`, [actor.userId, scope.buildingId, scope.clientId]);
+    if (!authorized.rowCount) throw careAuthorityDeniedError();
+    // Hold the exact Care grant and Building assignment against revocation
+    // until the snapshot has been consumed, as for the existing writes.
+    await lockCareAuthority(tx,scope,actor);
+    const complaint = await loadComplaint(tx, scope, complaintId);
+    // The complaint link, not the request or a user-supplied identifier, is
+    // the only way to reach a claim. Fail closed on a historical broken link.
+    const claim = complaint.claim_id ? (await tx.query<{
+      id:string; execution_scope_id:string; decision_assessment_id:string|null;
+      certificate_id:string; item_line_id:string; coverage_kind:string; certificate_current:boolean;
+    }>(`SELECT cl.id,cl.execution_scope_id,cl.decision_assessment_id,b.certificate_id,b.item_line_id,b.coverage_kind,
+          hm_warranty_certificate_is_current(d.id) AS certificate_current
+        FROM handyman_warranty_complaint_claim_links l
+        JOIN handyman_warranty_complaints c ON c.id=l.complaint_id
+        JOIN handyman_service_warranty_claims cl ON cl.id=l.claim_id AND cl.client_id=c.client_id
+        JOIN handyman_execution_scopes s ON s.id=cl.execution_scope_id AND s.client_id=c.client_id
+          AND s.building_id=c.building_id AND s.handyman_request_id=c.handyman_request_id
+          AND s.tenant_company_id=c.tenant_company_id AND s.space_id IS NOT DISTINCT FROM c.space_id
+          AND s.scope_kind='ORIGINAL'
+        JOIN handyman_warranty_claim_bindings b ON b.claim_id=cl.id
+        JOIN handyman_warranty_certificates d ON d.id=b.certificate_id AND d.client_id=c.client_id
+          AND d.building_id=c.building_id AND d.request_id=c.handyman_request_id
+          AND d.tenant_company_id=c.tenant_company_id AND d.execution_scope_id=s.id
+          AND d.warranty_id=cl.warranty_id AND d.bast_id=cl.bast_id
+        WHERE c.id=$1 AND c.client_id=$2 AND c.building_id=$3`,
+    [complaint.id, scope.clientId, scope.buildingId])).rows[0] : undefined;
+    const view = statusView(complaint);
+    const referenceStatus = !claim ? 'UNVERIFIED' : claim.certificate_current ? 'LINKED' : 'HISTORICAL';
+    const rework = claim ? (await tx.query<{
+      id:string; status:string; child_id:string|null; scope_current:boolean|null;
+    }>(`SELECT r.id,r.status,s.id AS child_id,
+          CASE WHEN s.id IS NOT NULL THEN hm_warranty_rework_scope_current(s.id) ELSE NULL END AS scope_current
+        FROM handyman_service_warranty_reworks r
+        LEFT JOIN handyman_warranty_rework_executions x ON x.rework_id=r.id AND x.claim_id=$1
+          AND x.original_scope_id=$3 AND x.assessment_id=$4 AND x.certificate_id=$5
+          AND x.item_line_id=$6 AND x.coverage_kind=$7 AND x.client_id=$2 AND x.building_id=$8
+        LEFT JOIN handyman_execution_scopes s ON s.id=x.execution_scope_id AND s.scope_kind='WARRANTY_REWORK'
+          AND s.warranty_rework_id=r.id AND s.client_id=$2 AND s.building_id=$8
+          AND s.handyman_request_id=$9 AND s.tenant_company_id=$10 AND s.space_id IS NOT DISTINCT FROM $11::uuid
+        WHERE r.claim_id=$1 AND r.client_id=$2 AND r.execution_scope_id=$3`,
+    [claim.id, scope.clientId, claim.execution_scope_id, claim.decision_assessment_id, claim.certificate_id,
+      claim.item_line_id, claim.coverage_kind, scope.buildingId, complaint.handyman_request_id,
+      complaint.tenant_company_id, complaint.space_id])).rows[0] : undefined;
+    const child = rework?.child_id ?? null;
+    const lineage = !child ? 'UNVERIFIED' : rework?.scope_current ? 'BOUND' : 'HISTORICAL';
+
+    type Appointment = {id:string; state:string; version:number; start_at:Date; end_at:Date; timezone:string;
+      assignment_id:string|null; bound_lead_user_id:string|null; bound:boolean; consent_present:boolean; consent_id:string|null;
+      tenant_user_id:string|null; accepted_at:Date|null; confirmed_by_user_id:string|null; confirmed_at:Date|null;
+      created_by_user_id:string; created_at:Date};
+    const appointmentRows = child ? (await tx.query<Appointment>(`SELECT a.id,a.state,a.version,a.start_at,a.end_at,a.timezone,
+        v.assignment_id,v.lead_user_id AS bound_lead_user_id,(v.appointment_id IS NOT NULL) AS bound,co.id AS consent_id,co.tenant_user_id,co.accepted_at,
+        EXISTS(SELECT 1 FROM handyman_warranty_rework_visit_consents recorded WHERE recorded.appointment_id=a.id) AS consent_present,
+        a.confirmed_by_user_id,a.confirmed_at,a.created_by_user_id,a.created_at
+      FROM handyman_visit_appointments a
+      LEFT JOIN handyman_warranty_rework_visit_bindings v ON v.appointment_id=a.id AND v.rework_id=$2
+        AND v.execution_scope_id=$1 AND v.claim_id=$3 AND v.assessment_id=$4 AND v.certificate_id=$5
+        AND v.item_line_id=$6 AND v.client_id=$7 AND v.building_id=$8 AND a.warranty_rework_id=$2
+        AND a.kind='EXECUTION' AND a.resource_type='CREW' AND a.resource_id=v.crew_id
+      LEFT JOIN handyman_warranty_rework_visit_consents co ON co.appointment_id=a.id AND co.rework_id=$2
+        AND co.execution_scope_id=$1 AND co.claim_id=$3 AND co.assessment_id=$4
+        AND co.client_id=$7 AND co.building_id=$8 AND co.start_at=a.start_at AND co.end_at=a.end_at
+        AND co.id::text=a.tenant_choice_evidence_ref AND co.accepted_at>=a.created_at
+        AND (a.confirmed_at IS NULL OR co.accepted_at<=a.confirmed_at)
+        AND co.tenant_pic_id=(SELECT tenant_pic_id FROM handyman_execution_scopes WHERE id=$1)
+        AND EXISTS (SELECT 1 FROM user_sessions sess WHERE sess.id=co.tenant_session_id AND sess.user_id=co.tenant_user_id)
+        AND EXISTS (SELECT 1 FROM tenant_pics pic WHERE pic.id=co.tenant_pic_id
+          AND pic.tenant_company_id=$10 AND pic.user_id=co.tenant_user_id)
+        AND ((a.state='TENANT_SELECTED' AND a.version=co.appointment_version+1)
+          OR (a.state='CONFIRMED' AND a.version=co.appointment_version+2)
+          OR (a.state='IN_PROGRESS' AND a.version=co.appointment_version+3)
+          OR (a.state='COMPLETED' AND a.version=co.appointment_version+4)
+          OR (a.state='CANCELLED' AND ((a.confirmed_at IS NULL AND a.version=co.appointment_version+2)
+            OR (a.confirmed_at IS NOT NULL AND a.version IN (co.appointment_version+3,co.appointment_version+4)))))
+      WHERE a.execution_scope_id=$1 AND a.client_id=$7 AND a.building_id=$8
+        AND a.handyman_request_id=$9 AND a.tenant_company_id=$10
+        AND (a.warranty_rework_id=$2 OR a.warranty_rework_id IS NULL)
+      ORDER BY a.created_at DESC,a.id DESC`, [child,rework!.id,claim!.id,claim!.decision_assessment_id,
+      claim!.certificate_id,claim!.item_line_id,scope.clientId,scope.buildingId,
+      complaint.handyman_request_id,complaint.tenant_company_id])).rows : [];
+    const appointments = appointmentRows.map(a => ({
+      appointmentId:a.id, state:a.state, version:a.version, startAt:iso(a.start_at), endAt:iso(a.end_at), timezone:a.timezone,
+      bindingStatus:a.bound ? lineage : 'UNVERIFIED',
+      consentStatus:!a.bound ? 'UNVERIFIED' : a.consent_id ? 'RECORDED' :
+        (a.consent_present || ['TENANT_SELECTED','CONFIRMED','IN_PROGRESS','COMPLETED'].includes(a.state)) ? 'UNVERIFIED' : 'NOT_RECORDED',
+      consentedByUserId:a.consent_id ? a.tenant_user_id : null, consentedAt:a.consent_id ? iso(a.accepted_at) : null,
+      confirmationStatus:!a.bound || (a.confirmed_at && !a.consent_id) ||
+        (['CONFIRMED','IN_PROGRESS','COMPLETED'].includes(a.state) && (!a.consent_id || !a.confirmed_at)) ? 'UNVERIFIED' :
+        a.confirmed_at ? (a.state === 'CANCELLED' ? 'CONFIRMED_BEFORE_CANCELLATION' : 'CONFIRMED') : 'NOT_CONFIRMED',
+      confirmedByUserId:a.confirmed_at ? a.confirmed_by_user_id : null, confirmedAt:iso(a.confirmed_at),
+      createdByUserId:a.created_by_user_id, createdAt:iso(a.created_at),
+    }));
+    type Dispatch = {id:string; appointment_id:string|null; assignment_id:string; status:string;
+      released_by_user_id:string; released_at:Date; cancelled_by_user_id:string|null; cancelled_at:Date|null;
+      confirmed_before_release:boolean|null};
+    const dispatchRows = child ? (await tx.query<Dispatch>(`SELECT d.id,d.appointment_id,d.assignment_id,d.status,d.released_by_user_id,
+      d.released_at,d.cancelled_by_user_id,d.cancelled_at,
+      (SELECT a.confirmed_at<=d.released_at FROM handyman_visit_appointments a WHERE a.id=d.appointment_id) AS confirmed_before_release
+      FROM handyman_dispatch_releases d WHERE d.execution_scope_id=$1 AND d.client_id=$2
+      ORDER BY d.released_at DESC,d.id DESC`,[child,scope.clientId])).rows : [];
+    const dispatches = dispatchRows.map(d => {
+      const appointment=appointmentRows.find(a=>a.id===d.appointment_id);
+      const bound=appointment?.bound && appointment.consent_id && d.confirmed_before_release &&
+        appointment.assignment_id===d.assignment_id;
+      return {dispatchId:d.id,appointmentId:d.appointment_id,status:d.status,bindingStatus:bound ? lineage : 'UNVERIFIED',
+        releasedByUserId:d.released_by_user_id,releasedAt:iso(d.released_at),
+        cancelledByUserId:d.cancelled_by_user_id,cancelledAt:iso(d.cancelled_at)};
+    });
+    type Session = {id:string;assignment_id:string;lead_user_id:string;status:string;checked_in_at:Date;
+      started_work_at:Date|null;completed_at:Date|null;checked_out_at:Date|null;dispatch_id:string|null};
+    const sessionRows = child ? (await tx.query<Session>(`SELECT s.id,s.assignment_id,s.lead_user_id,s.status,s.checked_in_at,
+      s.started_work_at,s.completed_at,s.checked_out_at,
+      (SELECT d.id FROM handyman_dispatch_releases d WHERE d.execution_scope_id=s.execution_scope_id
+        AND d.client_id=s.client_id AND d.assignment_id=s.assignment_id AND d.released_at<=s.checked_in_at
+        AND (d.cancelled_at IS NULL OR d.cancelled_at>=s.checked_in_at)
+        ORDER BY d.released_at DESC,d.id DESC LIMIT 1) AS dispatch_id
+      FROM handyman_work_sessions s WHERE s.execution_scope_id=$1 AND s.client_id=$2
+      ORDER BY s.checked_in_at DESC,s.id DESC`,[child,scope.clientId])).rows : [];
+    const sessions = sessionRows.map(s => {
+      const dispatch=dispatchRows.find(d=>d.id===s.dispatch_id);
+      const appointment=appointmentRows.find(a=>a.id===dispatch?.appointment_id);
+      const bound=appointment?.bound_lead_user_id===s.lead_user_id ?
+        dispatches.find(x=>x.dispatchId===s.dispatch_id)?.bindingStatus : undefined;
+      return {sessionId:s.id,status:s.status,bindingStatus:bound || 'UNVERIFIED',leadUserId:s.lead_user_id,
+        checkedInAt:iso(s.checked_in_at),startedWorkAt:iso(s.started_work_at),completedAt:iso(s.completed_at),checkedOutAt:iso(s.checked_out_at)};
+    });
+    const completion = child ? (await tx.query<{id:string;session_id:string|null;assignment_id:string;lead_user_id:string;
+      completed_at:Date;session_matches:boolean;dispatch_id:string|null}>(`SELECT c.id,c.session_id,c.assignment_id,c.lead_user_id,c.completed_at,
+        EXISTS (SELECT 1 FROM handyman_work_sessions s WHERE s.id=c.session_id AND s.execution_scope_id=c.execution_scope_id
+          AND s.client_id=$3 AND s.assignment_id=c.assignment_id AND s.lead_user_id=c.lead_user_id AND s.completed_at<=c.completed_at
+          AND s.status IN ('COMPLETED','CHECKED_OUT')) AS session_matches,
+        (SELECT d.id FROM handyman_dispatch_releases d WHERE d.execution_scope_id=c.execution_scope_id AND d.client_id=$3
+          AND d.assignment_id=c.assignment_id AND d.released_at<=c.completed_at
+          AND (d.cancelled_at IS NULL OR d.cancelled_at>=c.completed_at)
+          ORDER BY d.released_at DESC,d.id DESC LIMIT 1) AS dispatch_id
+      FROM handyman_warranty_rework_completions c WHERE c.rework_id=$1 AND c.execution_scope_id=$2`,[rework!.id,child,scope.clientId])).rows[0] : undefined;
+    const completionSession = completion?.session_matches ? sessions.find(s=>s.sessionId===completion.session_id) : undefined;
+    const completionDispatch = completion?.session_id === null ? dispatchRows.find(d=>d.id===completion.dispatch_id) : undefined;
+    const completionAppointment = appointmentRows.find(a=>a.id===completionDispatch?.appointment_id);
+    const completionLineage = completionSession?.bindingStatus ??
+      (completionDispatch && completionAppointment?.bound_lead_user_id===completion?.lead_user_id ?
+        dispatches.find(d=>d.dispatchId===completionDispatch.id)?.bindingStatus : undefined) ?? 'UNVERIFIED';
+    type Qc = {id:string;status:string;created_at:Date;updated_at:Date;bound:boolean;finish_outcome:string|null};
+    const qcRows = child ? (await tx.query<Qc>(`SELECT q.id,q.status,q.created_at,q.updated_at,
+        (b.qc_run_id IS NOT NULL AND c.completed_at<=q.created_at) AS bound,
+        (SELECT e.metadata->>'outcome' FROM handyman_qc_run_events e
+          WHERE e.run_id=q.id AND e.event_type='FINISH' ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1) AS finish_outcome
+      FROM handyman_qc_runs q
+      LEFT JOIN handyman_warranty_rework_qc_bindings b ON b.qc_run_id=q.id AND b.execution_scope_id=q.execution_scope_id
+        AND b.completion_id=$3
+      LEFT JOIN handyman_warranty_rework_completions c ON c.id=b.completion_id AND c.execution_scope_id=q.execution_scope_id
+        AND c.rework_id=$2
+      WHERE q.execution_scope_id=$1 AND q.client_id=$4 ORDER BY q.created_at DESC,q.id DESC`,
+      [child,rework!.id,completion?.id ?? null,scope.clientId])).rows : [];
+    const latestQc = qcRows[0];
+    const qcLineage = latestQc?.bound ? completionLineage : 'UNVERIFIED';
+    let qcVerification = 'UNVERIFIED';
+    if (latestQc?.bound && qcLineage==='BOUND') {
+      if (latestQc.status==='OPEN') qcVerification='PENDING';
+      else if (latestQc.status==='FAILED' && latestQc.finish_outcome==='FAILED') qcVerification='RECORDED_FAILURE';
+      else if (latestQc.status==='PASSED' && latestQc.finish_outcome==='PASSED') {
+        try {
+          // This is the same exact-child, latest-run and byte-verification gate
+          // used by the existing rework execution read, not a new QC authority.
+          await assertCurrentGuardedHandymanQcPass(tx,{id:child!,clientId:scope.clientId,buildingId:scope.buildingId},latestQc.id);
+          qcVerification='CURRENT_GUARDED_PASS';
+        } catch (error) {
+          if (!(error instanceof AppError) || error.statusCode!==409) throw error;
+        }
+      }
+    }
+    type Event = {id:string;source:string;type:string;subject_id:string;actor_user_id:string|null;
+      occurred_at_text:string;result:string|null};
+    // Every timeline entry is either an existing append-only event or the
+    // immutable assessment/completion record itself; no event is inferred from
+    // a status change. Sort in PostgreSQL before formatting microseconds.
+    const events = (await tx.query<Event>(`WITH timeline AS (
+      SELECT e.id,'COMPLAINT'::text AS source,e.event_type AS type,e.complaint_id AS subject_id,e.actor_user_id,
+        e.occurred_at,NULL::text AS result FROM handyman_warranty_complaint_events e
+        JOIN handyman_warranty_complaints c ON c.id=e.complaint_id
+        WHERE e.complaint_id=$1 AND c.client_id=$7 AND c.building_id=$8
+      UNION ALL SELECT e.id,'CLAIM',e.event_type,e.claim_id,e.actor_user_id,e.occurred_at,NULL::text
+        FROM handyman_service_warranty_claim_events e WHERE e.claim_id=$2 AND e.client_id=$7
+      UNION ALL SELECT a.id,'ASSESSMENT','RECORDED',a.claim_id,a.reviewer_user_id,a.assessed_at,a.result
+        FROM handyman_warranty_claim_assessments a WHERE a.claim_id=$2
+      UNION ALL SELECT e.id,'REWORK',e.event_type,e.rework_id,e.actor_user_id,e.occurred_at,NULL::text
+        FROM handyman_service_warranty_rework_events e WHERE e.rework_id=$3 AND e.claim_id=$2 AND e.client_id=$7
+      UNION ALL SELECT o.id,'APPOINTMENT',o.event_type,o.entity_id,o.actor_user_id,o.occurred_at,NULL::text
+        FROM operational_events o WHERE o.client_id=$7 AND o.building_id=$8 AND o.entity_type='HANDYMAN_VISIT_APPOINTMENT'
+          AND o.entity_id=ANY($5::uuid[]) AND o.event_type IN ('HANDYMAN_REWORK_VISIT_PROPOSED',
+            'HANDYMAN_REWORK_VISIT_TENANT_CONSENT','HANDYMAN_VISIT_CONFIRMED','HANDYMAN_REWORK_VISIT_CANCELLED')
+      UNION ALL SELECT o.id,'DISPATCH',o.event_type,o.entity_id,o.actor_user_id,o.occurred_at,NULL::text
+        FROM operational_events o WHERE o.client_id=$7 AND o.building_id=$8 AND o.entity_type='HANDYMAN_DISPATCH_RELEASE'
+          AND o.entity_id=ANY($6::uuid[]) AND o.event_type IN ('HANDYMAN_DISPATCH_RELEASED','HANDYMAN_DISPATCH_CANCELLED')
+      UNION ALL SELECT e.id,'WORK_SESSION',e.event_type,e.session_id,e.actor_user_id,e.occurred_at,NULL::text
+        FROM handyman_work_session_events e JOIN handyman_work_sessions s ON s.id=e.session_id
+          AND s.execution_scope_id=e.execution_scope_id AND s.client_id=e.client_id
+        WHERE s.execution_scope_id=$4 AND s.client_id=$7
+      UNION ALL SELECT c.id,'COMPLETION','RECORDED',c.rework_id,c.lead_user_id,c.completed_at,NULL::text
+        FROM handyman_warranty_rework_completions c WHERE c.rework_id=$3 AND c.execution_scope_id=$4
+      UNION ALL SELECT e.id,'QC',e.event_type,e.run_id,e.actor_user_id,e.occurred_at,e.metadata->>'outcome'
+        FROM handyman_qc_run_events e JOIN handyman_qc_runs q ON q.id=e.run_id AND q.client_id=e.client_id
+        WHERE q.execution_scope_id=$4 AND q.client_id=$7
+      ) SELECT id,source,type,subject_id,actor_user_id,result,
+        to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS occurred_at_text
+        FROM timeline ORDER BY occurred_at,source,id`,
+    [complaint.id,claim?.id ?? null,rework?.id ?? null,child,appointmentRows.map(a=>a.id),
+      dispatchRows.map(d=>d.id),scope.clientId,scope.buildingId])).rows;
+    const timeline = events.map(e=>{
+      let bindingStatus='RECORDED';
+      if ((e.source==='CLAIM' || e.source==='ASSESSMENT') && referenceStatus==='HISTORICAL') bindingStatus='HISTORICAL';
+      else if (e.source==='REWORK') bindingStatus=lineage;
+      else if (e.source==='APPOINTMENT') bindingStatus=appointments.find(a=>a.appointmentId===e.subject_id)?.bindingStatus ?? 'UNVERIFIED';
+      else if (e.source==='DISPATCH') bindingStatus=dispatches.find(d=>d.dispatchId===e.subject_id)?.bindingStatus ?? 'UNVERIFIED';
+      else if (e.source==='WORK_SESSION') bindingStatus=sessions.find(s=>s.sessionId===e.subject_id)?.bindingStatus ?? 'UNVERIFIED';
+      else if (e.source==='COMPLETION') bindingStatus=completionLineage;
+      else if (e.source==='QC') {
+        const q=qcRows.find(r=>r.id===e.subject_id);
+        bindingStatus=!q?.bound ? 'UNVERIFIED' : completionLineage!=='BOUND' ? completionLineage :
+          q.id!==latestQc?.id ? 'HISTORICAL' : qcLineage;
+      }
+      return {id:e.id,source:e.source,type:e.type,subjectId:e.subject_id,actorUserId:e.actor_user_id,
+        occurredAt:e.occurred_at_text,result:e.result,bindingStatus};
+    });
+    return {
+      complaint:{complaintId:view.complaintId,complaintNumber:view.complaintNumber,
+        status:complaint.claim_id && !claim ? null : view.status,referenceStatus,
+        complaintDate:complaint.complaint_date_text,recordedAt:iso(complaint.created_at),
+        recordedByUserId:complaint.recorded_by_user_id},
+      claim:claim ? {claimId:claim.id,status:view.claimStatus,bindingStatus:referenceStatus} : null,
+      assessment:claim ? view.assessment : null,
+      rework:rework ? {reworkId:rework.id,status:rework.status,bindingStatus:lineage,executionScopeId:child,
+        appointments,dispatch:dispatches[0] ?? null,workSession:sessions[0] ?? null,
+        completion:completion ? {id:completion.id,sessionId:completion.session_id,leadUserId:completion.lead_user_id,
+          completedAt:iso(completion.completed_at),bindingStatus:completionLineage} : null,
+        qc:latestQc ? {runId:latestQc.id,status:latestQc.status,createdAt:iso(latestQc.created_at),
+          updatedAt:iso(latestQc.updated_at),bindingStatus:qcLineage,verification:qcVerification} : null} : null,
+      timeline,
+    };
+  });
 }
 
 /** Preauthorize before multer allocates any file buffer; the write rechecks again. */

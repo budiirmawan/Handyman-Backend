@@ -435,6 +435,25 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     assert.equal(initial.spaceId,chain.space.id); assert.equal(initial.recordedByUserId,care.id);
     assert.equal(initial.internalCareNotes,'Private Care follow-up note');
     assert.deepEqual(initial.events.map((e:any)=>e.type),['REGISTERED']);
+    const tracking=()=>api().get(`${path}/tracking`).set(auth(careToken));
+    const pendingResponse=await tracking();
+    assert.equal(pendingResponse.headers['cache-control'],'private, no-store');
+    const pending=data(pendingResponse);
+    assert.equal(pending.complaint.status,'PENDING_VERIFICATION'); assert.equal(pending.complaint.referenceStatus,'UNVERIFIED');
+    assert.equal(pending.complaint.complaintNumber,created.complaintNumber); assert.equal(pending.complaint.complaintDate,complaintDate);
+    assert.equal(pending.complaint.recordedByUserId,care.id); assert.ok(pending.complaint.recordedAt);
+    assert.equal(pending.claim,null); assert.equal(pending.assessment,null); assert.equal(pending.rework,null);
+    assert.deepEqual(pending.timeline.map((e:any)=>[e.source,e.type,e.actorUserId]),[['COMPLAINT','REGISTERED',care.id]]);
+    assert.match(pending.timeline[0].occurredAt,/\.\d{6}Z$/);
+    assert.ok(!JSON.stringify(pending).includes('Private Care follow-up note'));
+    rejected(await api().get(`${path}/tracking`),401);
+    rejected(await api().get(`${path}/tracking`).set(auth(customerToken)),403);
+    rejected(await api().get(`${path}/tracking`).set(auth(foreignToken)),403);
+    rejected(await api().get(`${path}/tracking`).query({clientId:otherRealm.client.id}).set(auth(careToken)),400);
+    rejected(await api().get(`${path}/tracking`).set(auth(careToken)).send({actorUserId:customerId}),400);
+    rejected(await api().get(`${base}/${id()}/tracking`).set(auth(careToken)),404);
+    rejected(await api().get(`/api/v1/handyman/care/buildings/${otherBuildingId}/warranty-complaints/${complaintId}/tracking`).set(auth(careToken)),404);
+    rejected(await api().get(`/api/v1/handyman/care/buildings/${otherRealm.building.id}/warranty-complaints/${complaintId}/tracking`).set(auth(careToken)),404);
     assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_service_warranty_claims')).rows[0].n,0);
     rejected(await api().get(path).set(auth(foreignToken)),403);
     rejected(await api().get(`${path}/status`).set(auth(foreignToken)),403);
@@ -532,9 +551,11 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     await buildingAssignmentService.createAssignment(temporaryCare.id,{buildingId:realm.building.id});
     const temporaryToken=await token(temporaryCare);
     assert.equal(data(await listLookup({requestId},temporaryToken)).items[0].certificateId,certificateId);
+    assert.equal(data(await api().get(`${path}/tracking`).set(auth(temporaryToken))).complaint.complaintId,complaintId);
     await buildingAssignmentService.deactivateAssignment(temporaryCare.id,realm.building.id,admin);
     rejected(await listLookup({requestId},temporaryToken),403);
     rejected(await detailLookup(certificateId,{requestId},temporaryToken),403);
+    rejected(await api().get(`${path}/tracking`).set(auth(temporaryToken)),403);
     // Pins come from the actual lookup; the existing claim endpoint still makes
     // its independent, evidence-bound filing decision.
     const submitBody={certificateId:found.certificateId,certificateSourceSha256:found.certificateSourceSha256,
@@ -579,6 +600,11 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     assert.equal(linked.certificateBinding.itemLineId,originalLabor);
     assert.equal(linked.certificateBinding.certificatePdfSha256,artifact.pdf_sha256);
     const claimId=linked.claimId, recordId=linked.assessmentEvidenceRecordId;
+    const submittedTracking=data(await tracking());
+    assert.equal(submittedTracking.complaint.status,'PENDING_ASSESSMENT');
+    assert.equal(submittedTracking.complaint.referenceStatus,'LINKED'); assert.equal(submittedTracking.claim.claimId,claimId);
+    assert.equal(submittedTracking.assessment,null); assert.equal(submittedTracking.rework,null);
+    assert.ok(submittedTracking.timeline.some((e:any)=>e.source==='CLAIM' && e.type==='SUBMIT' && e.actorUserId===submitter.id));
     assert.equal(data(await post(`${path}/submit-claim`,submitterToken,submitBody)).replayed,true);
     rejected(await post(`${path}/submit-claim`,submitterToken,{...submitBody,idempotencyKey:key()}),409,'IDEMPOTENCY_CONFLICT');
     const provenance=(await pool.query(`SELECT c.opened_by_user_id,c.claimant_user_id,c.submitted_at,
@@ -622,6 +648,10 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     const need=data(await post(assessmentPath,assessorToken,assessmentBody(recordId,'NEEDS_EVIDENCE',0)),201).assessment;
     assert.equal(need.result,'NEEDS_EVIDENCE'); assert.equal(need.reviewerUserId,assessorId);
     assert.equal(data(await api().get(`${path}/status`).set(auth(careToken))).status,'NEEDS_EVIDENCE');
+    const needTracking=data(await tracking());
+    assert.equal(needTracking.complaint.status,'NEEDS_EVIDENCE'); assert.equal(needTracking.assessment.reason,need.reason);
+    assert.equal(needTracking.assessment.reviewerUserId,assessorId); assert.equal(needTracking.assessment.assessedAt,need.assessedAt);
+    assert.ok(needTracking.timeline.some((e:any)=>e.source==='ASSESSMENT' && e.result==='NEEDS_EVIDENCE' && e.actorUserId===assessorId));
     await grant(assessorId,['handyman.care.building']);
     rejected(await uploadComplaint(assessorToken,PNG,key()),403); // an assessor cannot become an uploader
 
@@ -641,6 +671,166 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     assert.deepEqual(await commercialAndExecutionCounts(),stableCounts,'Complaint intake/assessment did not mutate commercial, dispatch, BAST or QC history');
     await assert.rejects(pool.query('UPDATE handyman_warranty_complaints SET tenant_description=$1 WHERE id=$2',['altered',complaintId]),/immutable/i);
     await assert.rejects(pool.query('UPDATE evidence_submissions SET submitted_by_user_id=$1 WHERE id=$2',[care.id,evidenceId]),/immutable/i);
+
+    const approvedTracking=data(await tracking());
+    assert.equal(approvedTracking.complaint.status,'APPROVED'); assert.equal(approvedTracking.claim.status,'CLAIM_APPROVED');
+    assert.equal(approvedTracking.assessment.id,covered.id); assert.equal(approvedTracking.assessment.reason,covered.reason);
+    assert.ok(!JSON.stringify(approvedTracking).includes('RESOLVED'));
+
+    // Use the real approved claim, PIC authorization, Operations, current Lead,
+    // exact appointment consent, dispatch, work session, completion and QC.
+    // Before a child execution exists the real rework is explicitly unbound.
+    const reworkId=data(await post(`${claimBase(claimId)}/reworks`,adminToken,{scopeNote:'Covered repair',idempotencyKey:key()})).rework.id;
+    const reworkBase=`/api/v1/handyman/service-warranty-reworks/${reworkId}`;
+    let progress=data(await tracking());
+    assert.equal(progress.rework.reworkId,reworkId); assert.equal(progress.rework.status,'REWORK_DRAFT');
+    assert.equal(progress.rework.bindingStatus,'UNVERIFIED'); assert.equal(progress.rework.executionScopeId,null);
+    assert.ok(progress.timeline.some((e:any)=>e.source==='REWORK' && e.bindingStatus==='UNVERIFIED'));
+    data(await post(`${reworkBase}/authorize`,customerToken,{idempotencyKey:key()}));
+    const child=data(await post(`${reworkBase}/execution`,adminToken,{idempotencyKey:key()}),201).executionScopeId;
+    const reworkCrew=await crewFixture(realm), reworkLeadToken=await token(reworkCrew.leadUser);
+    await assignSupervisor({workforceProfileId:reworkCrew.workerContext.workforceProfileId,supervisorWorkforceProfileId:supervisorProfileId});
+    await assignHandymanExecutionScopeCrew({executionScopeId:child,providerContextId:reworkCrew.providerContext.id,
+      crewId:reworkCrew.crew.id,idempotencyKey:key()},admin);
+    const template=(await pool.query(`SELECT id FROM handyman_qc_checklist_versions WHERE client_id=$1 AND code='HANDYMAN_FINAL'`,[realm.client.id])).rows[0].id;
+    await configureHandymanQcChecklist({executionScopeId:child,templateVersionId:template},admin);
+    // An independent reader has Care only; tracking must not grant write or
+    // independent assessment/dispatch powers.
+    const reader=await userService.createUser({email:`${id()}@care.test`,displayName:'Tracking reader'});
+    await grant(reader.id,['handyman.care.building']);
+    await buildingAssignmentService.createAssignment(reader.id,{buildingId:realm.building.id});
+    const readerToken=await token(reader);
+    assert.equal(data(await api().get(`${path}/tracking`).set(auth(readerToken))).complaint.complaintId,complaintId);
+    rejected(await post(assessmentPath,readerToken,assessmentBody(recordId,'COVERED',0)),403);
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1",[realm.building.id]);
+    let startAt=new Date(Date.now()+10_000).toISOString(),endAt=new Date(Date.now()+3_610_000).toISOString();
+    const visits=`${reworkBase}/appointments`, dispatch=`/api/v1/handyman/execution-scopes/${child}/dispatch`;
+    rejected(await post(visits,readerToken,{startAt,endAt,idempotencyKey:key()}),403);
+    let appointmentId=data(await post(visits,adminToken,{startAt,endAt,idempotencyKey:key()}),201).appointmentId;
+    progress=data(await tracking());
+    assert.equal(progress.rework.bindingStatus,'BOUND'); assert.equal(progress.rework.executionScopeId,child);
+    assert.equal(progress.rework.appointments[0].appointmentId,appointmentId);
+    assert.equal(progress.rework.appointments[0].consentStatus,'NOT_RECORDED');
+    assert.equal(progress.rework.appointments[0].confirmationStatus,'NOT_CONFIRMED'); assert.equal(progress.rework.dispatch,null);
+    rejected(await post(`${dispatch}/release`,readerToken,{appointmentId}),403);
+    data(await post(`${visits}/${appointmentId}/consent`,customerToken,{version:1,idempotencyKey:key()}));
+    progress=data(await tracking());
+    assert.equal(progress.rework.appointments[0].consentStatus,'RECORDED');
+    assert.equal(progress.rework.appointments[0].consentedByUserId,customerId);
+    assert.equal(progress.rework.appointments[0].confirmationStatus,'NOT_CONFIRMED');
+    data(await post(`/api/v1/handyman/requests/${requestId}/visits/${appointmentId}/confirm`,adminToken,{version:2}));
+    progress=data(await tracking());
+    assert.equal(progress.rework.appointments[0].confirmationStatus,'CONFIRMED');
+    assert.equal(progress.rework.appointments[0].confirmedByUserId,admin); assert.ok(progress.rework.appointments[0].confirmedAt);
+    // A rescheduled slot never inherits the previous PIC consent or confirmation.
+    const firstAppointment=appointmentId;
+    data(await post(`${visits}/${firstAppointment}/cancel`,adminToken,{version:3,reason:'Customer rescheduled'}));
+    startAt=new Date(Date.parse(startAt)+1000).toISOString(); endAt=new Date(Date.parse(endAt)+1000).toISOString();
+    appointmentId=data(await post(visits,adminToken,{startAt,endAt,supersedesAppointmentId:firstAppointment,idempotencyKey:key()}),201).appointmentId;
+    progress=data(await tracking());
+    const oldVisit=progress.rework.appointments.find((a:any)=>a.appointmentId===firstAppointment);
+    const newVisit=progress.rework.appointments.find((a:any)=>a.appointmentId===appointmentId);
+    assert.equal(oldVisit.state,'CANCELLED'); assert.equal(oldVisit.confirmationStatus,'CONFIRMED_BEFORE_CANCELLATION');
+    assert.equal(newVisit.consentStatus,'NOT_RECORDED'); assert.equal(newVisit.confirmationStatus,'NOT_CONFIRMED');
+    data(await post(`${visits}/${appointmentId}/consent`,customerToken,{version:1,idempotencyKey:key()}));
+    data(await post(`/api/v1/handyman/requests/${requestId}/visits/${appointmentId}/confirm`,adminToken,{version:2}));
+    progress=data(await tracking());
+    assert.equal(progress.rework.appointments.find((a:any)=>a.appointmentId===appointmentId).confirmationStatus,'CONFIRMED');
+    const challenge=await createHandymanArrivalChallenge({executionScopeId:child},reworkCrew.leadUser.id);
+    const arrival=await evaluateHandymanArrivalVerification({executionScopeId:child,challengeToken:challenge.token,qrOpaqueCode:qrValue,
+      deviceLocation:{latitude:-6.2,longitude:106.816666,accuracyMeters:10,capturedAt:new Date().toISOString()}},reworkCrew.leadUser.id);
+    assert.equal(arrival.status,'VERIFIED');
+    const released=data(await post(`${dispatch}/release`,adminToken,{appointmentId}),201);
+    progress=data(await tracking());
+    assert.equal(progress.rework.dispatch.dispatchId,released.id); assert.equal(progress.rework.dispatch.status,'RELEASED');
+    assert.equal(progress.rework.dispatch.bindingStatus,'BOUND'); assert.equal(progress.rework.dispatch.releasedByUserId,admin);
+    const wait=Date.parse(startAt)-Date.now()+100;
+    if (wait>0) await new Promise(resolve=>setTimeout(resolve,wait));
+    data(await post(`${reworkBase}/start`,reworkLeadToken,{idempotencyKey:key()}));
+    const childSessions=`/api/v1/handyman/execution-scopes/${child}/work-sessions`;
+    const checkin=data(await post(`${childSessions}/check-in`,reworkLeadToken,{idempotencyKey:key()}));
+    data(await post(`${childSessions}/start-work`,reworkLeadToken,{idempotencyKey:key()}));
+    progress=data(await tracking());
+    assert.equal(progress.rework.status,'REWORK_IN_PROGRESS'); assert.equal(progress.rework.workSession.status,'IN_PROGRESS');
+    assert.equal(progress.rework.workSession.leadUserId,reworkCrew.leadUser.id); assert.equal(progress.rework.qc,null);
+    const childUpload=async(purpose:string)=>data(await api().post(`/api/v1/handyman/field/execution-scopes/${child}/evidence/upload`)
+      .set(auth(reworkLeadToken)).field('purpose',purpose).field('idempotencyKey',key())
+      .attach('file',PNG,{filename:'rework.png',contentType:'image/png'}),201).evidence.attachmentReference as string;
+    const completionPhoto=await childUpload('BEFORE_AFTER_WORK');
+    data(await post(`${childSessions}/complete`,reworkLeadToken,{idempotencyKey:key()}));
+    data(await post(`${childSessions}/check-out`,reworkLeadToken,{idempotencyKey:key()}));
+    data(await post(`${reworkBase}/complete`,reworkLeadToken,{evidenceReference:completionPhoto,completionNote:'Repair completed',idempotencyKey:key()}));
+    progress=data(await tracking());
+    assert.equal(progress.rework.status,'REWORK_COMPLETE'); assert.equal(progress.rework.workSession.status,'CHECKED_OUT');
+    assert.equal(progress.rework.workSession.sessionId,checkin.session.id); assert.equal(progress.rework.completion.leadUserId,reworkCrew.leadUser.id);
+    assert.equal(progress.rework.completion.bindingStatus,'BOUND'); assert.equal(progress.rework.qc,null);
+    assert.equal(progress.claim.status,'CLAIM_APPROVED'); // Completion is not claim resolution.
+    await assert.rejects(()=>openHandymanQcRun({executionScopeId:child,checklistIdentity:'HANDYMAN_FINAL@v1',idempotencyKey:key()},reader.id),
+      (error:any)=>error.statusCode===403);
+    const run=(await openHandymanQcRun({executionScopeId:child,checklistIdentity:'HANDYMAN_FINAL@v1',idempotencyKey:key()},supervisorId)).run;
+    progress=data(await tracking());
+    assert.equal(progress.rework.qc.runId,run.id); assert.equal(progress.rework.qc.status,'OPEN');
+    assert.equal(progress.rework.qc.verification,'PENDING');
+    const item=await setHandymanQcRunItemOutcome({qcRunId:run.id,itemKey:'quality',outcome:'PASS',expectedVersion:1,idempotencyKey:key()},supervisorId);
+    const qcPhoto=await childUpload('QC_EVIDENCE');
+    const bound=await bindHandymanQcEvidence({qcRunId:run.id,evidenceReference:qcPhoto,expectedVersion:item.runVersion,idempotencyKey:key()},supervisorId);
+    await finishHandymanQcRun({qcRunId:run.id,outcome:'PASSED',expectedVersion:bound.runVersion,idempotencyKey:key()},supervisorId);
+    const beforeRead=await commercialAndExecutionCounts();
+    const beforeEvents=(await pool.query(`SELECT (SELECT count(*)::int FROM handyman_warranty_complaint_events) AS complaint_events,
+      (SELECT count(*)::int FROM handyman_service_warranty_claim_events) AS claim_events,
+      (SELECT count(*)::int FROM handyman_service_warranty_rework_events) AS rework_events,
+      (SELECT count(*)::int FROM handyman_work_session_events) AS session_events,
+      (SELECT count(*)::int FROM handyman_qc_run_events) AS qc_events,
+      (SELECT count(*)::int FROM operational_events) AS operational_events`)).rows[0];
+    progress=data(await tracking());
+    assert.deepEqual(await commercialAndExecutionCounts(),beforeRead,'Tracking never changes domain state');
+    assert.deepEqual((await pool.query(`SELECT (SELECT count(*)::int FROM handyman_warranty_complaint_events) AS complaint_events,
+      (SELECT count(*)::int FROM handyman_service_warranty_claim_events) AS claim_events,
+      (SELECT count(*)::int FROM handyman_service_warranty_rework_events) AS rework_events,
+      (SELECT count(*)::int FROM handyman_work_session_events) AS session_events,
+      (SELECT count(*)::int FROM handyman_qc_run_events) AS qc_events,
+      (SELECT count(*)::int FROM operational_events) AS operational_events`)).rows[0],beforeEvents);
+    assert.equal(progress.rework.qc.runId,run.id); assert.equal(progress.rework.qc.status,'PASSED');
+    assert.equal(progress.rework.qc.verification,'CURRENT_GUARDED_PASS'); assert.equal(progress.claim.status,'CLAIM_APPROVED');
+    assert.ok(!JSON.stringify(progress).includes('RESOLVED'));
+    const originalRuns=(await pool.query('SELECT id FROM handyman_qc_runs WHERE execution_scope_id=$1',[scope])).rows.map(r=>r.id);
+    assert.ok(progress.timeline.filter((e:any)=>e.source==='QC').every((e:any)=>!originalRuns.includes(e.subjectId)));
+    assert.ok(progress.timeline.some((e:any)=>e.source==='QC' && e.type==='FINISH' && e.result==='PASSED' && e.actorUserId===supervisorId));
+    assert.ok(progress.timeline.some((e:any)=>e.source==='WORK_SESSION' && e.type==='START_WORK' && e.actorUserId===reworkCrew.leadUser.id));
+    assert.ok(progress.timeline.some((e:any)=>e.source==='COMPLETION' && e.actorUserId===reworkCrew.leadUser.id));
+    const times=progress.timeline.map((e:any)=>e.occurredAt);
+    assert.deepEqual(times,[...times].sort(),'Events are ordered using their real microsecond timestamps');
+    const factSources:Record<string,{table:string;actor:string;time:string}>={
+      COMPLAINT:{table:'handyman_warranty_complaint_events',actor:'actor_user_id',time:'occurred_at'},
+      CLAIM:{table:'handyman_service_warranty_claim_events',actor:'actor_user_id',time:'occurred_at'},
+      ASSESSMENT:{table:'handyman_warranty_claim_assessments',actor:'reviewer_user_id',time:'assessed_at'},
+      REWORK:{table:'handyman_service_warranty_rework_events',actor:'actor_user_id',time:'occurred_at'},
+      APPOINTMENT:{table:'operational_events',actor:'actor_user_id',time:'occurred_at'},
+      DISPATCH:{table:'operational_events',actor:'actor_user_id',time:'occurred_at'},
+      WORK_SESSION:{table:'handyman_work_session_events',actor:'actor_user_id',time:'occurred_at'},
+      COMPLETION:{table:'handyman_warranty_rework_completions',actor:'lead_user_id',time:'completed_at'},
+      QC:{table:'handyman_qc_run_events',actor:'actor_user_id',time:'occurred_at'},
+    };
+    for (const event of progress.timeline) {
+      const source=factSources[event.source]; assert.ok(source);
+      const actual=(await pool.query(`SELECT ${source.actor} AS actor_user_id,
+        to_char(${source.time} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM ${source.table} WHERE id=$1`,[event.id])).rows[0];
+      assert.equal(event.actorUserId,actual.actor_user_id); assert.equal(event.occurredAt,actual.at);
+    }
+    // A recorded PASS must not masquerade as a current guarded pass if any
+    // of its original evidence, the completion evidence or claim bytes change.
+    const qcStorage=(await pool.query('SELECT storage_key FROM handyman_field_evidence_uploads WHERE attachment_reference=$1',[qcPhoto])).rows[0].storage_key;
+    await createEvidenceStorage().put(qcStorage,{buffer:Buffer.from('tampered'),mimeType:'image/png'});
+    assert.equal(data(await tracking()).rework.qc.verification,'UNVERIFIED');
+    await createEvidenceStorage().put(qcStorage,{buffer:PNG,mimeType:'image/png'});
+    const completionStorage=(await pool.query('SELECT storage_key FROM handyman_field_evidence_uploads WHERE attachment_reference=$1',[completionPhoto])).rows[0].storage_key;
+    await createEvidenceStorage().put(completionStorage,{buffer:Buffer.from('tampered'),mimeType:'image/png'});
+    assert.equal(data(await tracking()).rework.qc.verification,'UNVERIFIED');
+    await createEvidenceStorage().put(completionStorage,{buffer:PNG,mimeType:'image/png'});
+    await createEvidenceStorage().put(submission.file_reference,{buffer:Buffer.from('tampered'),mimeType:'image/png'});
+    assert.equal(data(await tracking()).rework.qc.verification,'UNVERIFIED');
+    await createEvidenceStorage().put(submission.file_reference,{buffer:PNG,mimeType:'image/png'});
+    assert.equal(data(await tracking()).rework.qc.verification,'CURRENT_GUARDED_PASS');
 
     // Even a supplied real certificate/item remains a reported reference until the claim engine verifies it.
     const knownBody={...createBody,channelReference:`message-${id()}`,idempotencyKey:key(),reportedCertificateId:certificateId,
@@ -667,5 +857,10 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     assert.equal(data(await listLookup({requestId})).items[0].currentness,'HISTORICAL');
     rejected(await api().get(`${certificates()}/${certificateId}.pdf`).set(auth(careToken)),409);
     assert.equal(data(await api().get(`${base}/${known.complaintId}/status`).set(auth(careToken))).status,'PENDING_VERIFICATION');
+    const historical=data(await tracking());
+    assert.equal(historical.complaint.referenceStatus,'HISTORICAL');
+    assert.equal(historical.rework.bindingStatus,'HISTORICAL'); assert.equal(historical.rework.qc.verification,'UNVERIFIED');
+    assert.equal(historical.claim.status,'CLAIM_APPROVED');
+    assert.equal(data(await api().get(`${base}/${known.complaintId}/tracking`).set(auth(careToken))).complaint.referenceStatus,'UNVERIFIED');
   });
 });

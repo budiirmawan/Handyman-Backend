@@ -79,6 +79,43 @@ certificate is reported. Subsequent tracking states are `PENDING_ASSESSMENT`,
 `WITHDRAWN`. The projection includes the real claim status and latest assessment;
 intake and submission themselves do not establish warranty entitlement.
 
+### Complaint tracking (read only)
+
+`GET /handyman/care/buildings/{buildingId}/warranty-complaints/{complaintId}/tracking`
+requires an active local Care user with `handyman.care.building` and the exact
+Client/Building assignment. It accepts no query selectors or body, returns
+`Cache-Control: private, no-store`, and never performs a lifecycle transition.
+It returns `complaint` (ticket, existing status, complaint/recorded dates and
+recorder), the linked `claim` and latest `assessment` (result, reason, reviewer
+and time), and, when present, the exact claim's `rework`: appointments and
+recorded PIC consent/confirmation, latest dispatch and work session, completion,
+and latest child-scope QC. `null` means no corresponding fact was found.
+
+`referenceStatus` is `UNVERIFIED` without a sound claim link, `LINKED` for the
+exact linked claim/certificate, or `HISTORICAL` when that certificate's source
+is no longer current. A broken historical claim link is not followed, and its
+complaint status is `null` rather than invented. Rework and related facts are
+`BOUND`, `HISTORICAL` or `UNVERIFIED`; these labels describe recorded lineage,
+not present-day scheduling or dispatch readiness. An unbound legacy visit is
+never presented as an authenticated consent or confirmation. A reported
+certificate, appointment proposal, or Care entry is not itself verification.
+
+QC `status` is the recorded run status. `verification` is `PENDING` for an open
+bound run, `RECORDED_FAILURE` for a recorded bound failure, `CURRENT_GUARDED_PASS`
+only if the existing latest-run, exact-completion/claim and byte-verification
+gate still succeeds, and otherwise `UNVERIFIED`. Earlier/original-scope or
+unbound QC is never presented as a fresh verified pass. No claim is marked
+resolved merely because rework or QC completed.
+
+The chronological `timeline` contains persisted complaint, claim, rework,
+appointment, dispatch, work-session and QC events plus immutable assessment
+and completion records, with their real actor IDs and microsecond UTC times.
+Ties are sorted deterministically. Timeline binding labels reflect lineage, not
+an additional authorization decision; historical records remain historical.
+Private Care notes, evidence storage keys and authentication sessions are not
+included. Care receives no assessment, scheduling, dispatch, execution or QC
+write authority from this endpoint.
+
 ## Reporter and assessor
 
 `POST /handyman/warranty-complaints/{complaintId}/reporter-confirmation` with

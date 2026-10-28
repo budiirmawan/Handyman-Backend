@@ -8,7 +8,7 @@ import { runSingleFileUpload } from '../handyman-api/handyman-api.controller';
 import { getCareWarrantyCertificate, listCareWarrantyCertificates } from './handyman-warranty-care-certificate.service';
 import {
   authorizeComplaintUpload, confirmComplaintReporter, createComplaint, getAssessorComplaint,
-  getComplaintDetail, getComplaintStatus, listComplaints, readAssessorComplaintEvidence,
+  getComplaintDetail, getComplaintStatus, getComplaintTracking, listComplaints, readAssessorComplaintEvidence,
   readCareComplaintEvidence, submitComplaintClaim, uploadComplaintEvidence,
 } from './handyman-warranty-care.service';
 
@@ -50,6 +50,13 @@ export function createHandymanWarrantyCareRouter(): Router {
   });
   router.get(`${detail}/status`,auth,care,async(req,res,next)=>{
     try { sendSuccess(res,await getComplaintStatus(req.auth,param(req.params.buildingId),param(req.params.complaintId))); } catch(e){next(e);}
+  });
+  router.get(`${detail}/tracking`,noStore,auth,care,async(req,res,next)=>{
+    try {
+      if (Object.keys(req.query).length || (req.body && (typeof req.body!=='object' || Array.isArray(req.body) || Object.keys(req.body).length)))
+        throw AppError.validation('Tracking accepts no caller-supplied scope or identity.');
+      sendSuccess(res,await getComplaintTracking(req.auth,param(req.params.buildingId),param(req.params.complaintId)));
+    } catch(e){next(e);}
   });
   router.post(`${detail}/evidence`,auth,care,async(req,res,next)=>{
     try {
