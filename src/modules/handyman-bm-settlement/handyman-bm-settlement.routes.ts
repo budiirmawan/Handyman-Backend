@@ -212,18 +212,54 @@ export function createHandymanBmSettlementRouter(): Router {
         res.status(result.replayed ? 200 : 201).json({ data: result });
       } catch (error) { next(error); }
     });
-  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-4 — the ONE independent payout
-  // verification action. The handler first pulls the protected evidence as
-  // the calling verifier (readHandymanBmSettlementEvidence: exact settlement
-  // + payment, independent actor separate from creator/recorder, byte
-  // integrity, evidence-read receipt bound to this actor), then attests via
-  // verifyHandymanBmSettlementPayment with the reviewer's submitted amount,
-  // transfer reference/date, confirmed beneficiary account number and
-  // attestation — the service alone compares them against the recorded
-  // payment and inserts the single verification row. Only then does the
-  // authoritative status become SETTLED; an uploaded claim alone stays
-  // PAYMENT_RECORDED. Self-verification, duplicates, concurrency, stale
-  // settlements and cross-scope access all remain service/DB walls.
+  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-4A — the ONE authenticated
+  // evidence-read door: an authorized independent verifier pulls the actual
+  // protected payout bytes for this exact settlement/payment before
+  // attesting. readHandymanBmSettlementEvidence enforces the verifier
+  // permission (finance.read + bm_settlement.verify_payment), Client and
+  // Building scope, payment presence, creator/recorder self-read rejection
+  // and byte integrity against the recorded SHA-256, then issues an
+  // evidenceReadId bound to this verifier, this payment and this digest.
+  // Reading alone never advances PAYMENT_RECORDED — SETTLED stays behind
+  // the separate POST verifications attestation.
+  router.get(`${base}/:settlementId/payment-evidence`, authenticationMiddleware,
+    requirePermission('handyman.finance.read'), requirePermission('handyman.bm_settlement.verify_payment'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        if (Object.keys(req.query).length) throw AppError.validation('No query fields are accepted.');
+        const clientId = req.params.clientId as string, buildingId = req.params.buildingId as string,
+          settlementId = req.params.settlementId as string;
+        if (!isValidUuid(clientId) || !isValidUuid(settlementId)) throw AppError.validation('Invalid settlement scope.');
+        const row = (await getPool().query<{ building_id: string }>(
+          'SELECT building_id FROM handyman_bm_settlements WHERE id=$1 AND client_id=$2',
+          [settlementId, clientId])).rows[0];
+        if (!row || row.building_id !== buildingId) throw settlementMissing();
+        const receipt = await readHandymanBmSettlementEvidence(req.auth.userId, { clientId, settlementId });
+        const ext = receipt.mimeType === 'application/pdf' ? 'pdf' : receipt.mimeType.split('/')[1] || 'bin';
+        res.status(200)
+          .set('Content-Type', receipt.mimeType)
+          .set('Content-Length', String(receipt.buffer.byteLength))
+          .set('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(`bm-payout-evidence.${ext}`)}`)
+          .set('X-Evidence-Read-Id', receipt.evidenceReadId)
+          .set('X-Content-Sha256', receipt.contentSha256)
+          .send(receipt.buffer);
+      } catch (error) { next(error); }
+    });
+  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-4 — the independent payout
+  // verification action; hardened by PART 01B-4A: this handler NEVER mints
+  // the evidence-read receipt. Blind attestation is closed — the verifier
+  // must first read the actual bytes through GET payment-evidence and
+  // re-send that receipt. The service proves the receipt's actor, payment
+  // and digest binding, so forged, foreign, mismatched or cross-settlement
+  // receipts conflict while only an exact authorized re-send replays; then
+  // verifyHandymanBmSettlementPayment alone compares the reviewer's
+  // attested amount, transfer reference/date, confirmed beneficiary account
+  // number and attestation and inserts the single verification row. Only
+  // then does the authoritative status become SETTLED; an uploaded claim
+  // alone stays PAYMENT_RECORDED. Self-verification, duplicates,
+  // concurrency, stale settlements and cross-scope access remain
+  // service/DB walls.
   router.post(`${base}/:settlementId/verifications`, authenticationMiddleware,
     requirePermission('handyman.finance.read'), requirePermission('handyman.bm_settlement.verify_payment'),
     async (req: Request, res: Response, next: NextFunction) => {
@@ -239,23 +275,14 @@ export function createHandymanBmSettlementRouter(): Router {
           'SELECT building_id FROM handyman_bm_settlements WHERE id=$1 AND client_id=$2',
           [settlementId, clientId])).rows[0];
         if (!row || row.building_id !== buildingId) throw settlementMissing();
-        // First call mints this verifier's evidence-read receipt (protected
-        // bytes + integrity). A retry or duplicate re-sends that receipt —
-        // the service proves its actor/payment/sha binding, so replay stays
-        // exact while a forged or foreign receipt can never verify.
-        let evidenceReadId: string, contentSha256: string;
-        if (b.evidenceReadId !== undefined || b.contentSha256 !== undefined) {
-          if (typeof b.evidenceReadId !== 'string' || !isValidUuid(b.evidenceReadId) ||
-              typeof b.contentSha256 !== 'string') {
-            throw AppError.validation('Invalid evidence receipt.');
-          }
-          evidenceReadId = b.evidenceReadId;
-          contentSha256 = b.contentSha256;
-        } else {
-          const receipt = await readHandymanBmSettlementEvidence(req.auth.userId, { clientId, settlementId });
-          evidenceReadId = receipt.evidenceReadId;
-          contentSha256 = receipt.contentSha256;
+        // A previously issued receipt is mandatory: no server-side minting
+        // here, so verification is impossible without the evidence-read step.
+        if (typeof b.evidenceReadId !== 'string' || !isValidUuid(b.evidenceReadId) ||
+            typeof b.contentSha256 !== 'string') {
+          throw AppError.validation('A previously issued evidence read receipt (evidenceReadId and contentSha256) is required.');
         }
+        const evidenceReadId = b.evidenceReadId;
+        const contentSha256 = b.contentSha256;
         const result = await verifyHandymanBmSettlementPayment(req.auth.userId, {
           clientId, settlementId, evidenceReadId, contentSha256,
           transferReference: text(b.transferReference, 'transferReference'),

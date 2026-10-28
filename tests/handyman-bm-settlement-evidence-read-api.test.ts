@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import EmbeddedPostgres from 'embedded-postgres';
@@ -36,7 +36,7 @@ import { prepareHandymanBmSettlement, supersedeHandymanBmSettlement, approveHand
   recordHandymanBmSettlementPayment, readHandymanBmSettlementEvidence, verifyHandymanBmSettlementPayment,
   getHandymanBmSettlement } from '../src/modules/handyman-bm-settlement';
 
-const DIR='/tmp/hm-bm-verify-api-pg',EVIDENCE_DIR='/tmp/hm-bm-verify-api-evidence',PORT=55567;
+const DIR='/tmp/hm-bm-evid-api-pg',EVIDENCE_DIR='/tmp/hm-bm-evid-api-evidence',PORT=55568;
 Object.assign(process.env,{NODE_ENV:'test',LOG_LEVEL:'error',DB_HOST:'127.0.0.1',DB_PORT:String(PORT),DB_USER:'postgres',
   DB_PASSWORD:'postgres',DB_NAME:'asentra_test',DB_SSL:'false',EVIDENCE_STORAGE_DIR:EVIDENCE_DIR});
 let pool:Pool,pg:EmbeddedPostgres,admin:string;
@@ -184,7 +184,8 @@ function prepareInput(x:Awaited<ReturnType<typeof settlementFixture>>) {
     bankVersionId:x.bank.id,idempotencyKey:id(),evidenceReference:`prepare/${id()}`};
 }
 
-const PASSWORD='BmVerifyApi123!';
+
+const PASSWORD='BmEvidApi123!';
 const auth=(token:string)=>({Authorization:`Bearer ${token}`});
 async function tokenFor(userId:string){
   const email=(await q('SELECT email FROM users WHERE id=$1',[userId])).rows[0].email;
@@ -195,100 +196,116 @@ async function tokenFor(userId:string){
 }
 const get=(path:string,token:string)=>api().get(path).set(auth(token));
 const post=(path:string,token:string,body:unknown)=>api().post(path).set(auth(token)).send(body as object);
+const sha256=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
+const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const utcDay=(offset=0)=>{const d=new Date();return new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()+offset)).toISOString().slice(0,10);};
 const makerPerms=['handyman.finance.read','handyman.finance.manage','handyman.settlement.manage'];
 const verifierPerms=['handyman.finance.read','handyman.bm_settlement.verify_payment'];
 
-/** CR-HM-BM-SETTLEMENT-API-01 PART 01B-4 — the ONE independent payout
- *  verification HTTP action. Evidence upload (01B-3) stays
- *  PAYMENT_RECORDED; only an independently authorized verification whose
- *  attested amount/reference/date/beneficiary match the recorded payment
- *  turns the authoritative status into SETTLED. */
-describe('CR-HM-BM-SETTLEMENT-API-01 PART 01B-4 independent payout verification HTTP',()=>{
-  it('settles a recorded payout only through independent verification over HTTP',async()=>{
+/** CR-HM-BM-SETTLEMENT-API-01 PART 01B-4A — secure payout evidence read.
+ *  The verifier must fetch the actual bytes through GET payment-evidence
+ *  (server-calculated SHA-256 + verifier-bound receipt); POST /verifications
+ *  never mints a receipt, so blind attestation is impossible and only an
+ *  exact authorized receipt replay is idempotent. */
+describe('CR-HM-BM-SETTLEMENT-API-01 PART 01B-4A secure payout evidence read',()=>{
+  it('settles only after an authorized evidence read; blind and forged receipts are blocked',async()=>{
     const x=await settlementFixture(),input=prepareInput(x);
     const base=`/api/v1/handyman/clients/${input.clientId}/buildings/${x.f.realm.building.id}/bm-settlements`;
-    // Creator also holds verify permission so the self-verification wall is
-    // the identity check, not a missing permission.
     const creator=await scopedUser(x.f.realm.building.id,[...makerPerms,'handyman.bm_settlement.verify_payment']);
     const checker=await scopedUser(x.f.realm.building.id,verifierPerms);
     const prepared=(await prepareHandymanBmSettlement(creator,input)).settlement;
     const settlementId=prepared.snapshot.id;
+    const evPath=`${base}/${settlementId}/payment-evidence`;
     const verifyPath=`${base}/${settlementId}/verifications`;
     await approveHandymanBmSettlement(x.checker,{clientId:input.clientId,settlementId,
       settlementDigest:prepared.digest,evidenceReference:`approve/${id()}`});
     await wait(20);
+    const evidenceBytes=Buffer.from('%PDF-1.4\nbank transfer evidence\n%%EOF');
     const transferReference=`bank-txn/${id()}`,transferredAt=iso(Date.now()),net=prepared.snapshot.netPayable;
     const verifyBody={transferReference,amount:net,transferredAt,confirmedAccountNumber:x.bankNumber,
       attestedActualPayment:true,evidenceReference:`api-verify/${id()}`};
     const ledgerBefore=(await q('SELECT * FROM handyman_bm_commission_ledger WHERE entitlement_id=$1 ORDER BY sequence',
       [input.entitlementId])).rows;
-    // Before any recorded transfer there is nothing to verify.
     const token=await tokenFor(checker);
-    const noPayment=await post(verifyPath,token,verifyBody);
-    assert.equal(noPayment.status,409,JSON.stringify(noPayment.body));
-    // Record the payout (existing service contract from part 01B-3).
+    // No payment, no receipt: reading fails and blind attestation is closed.
+    assert.equal((await get(evPath,token)).status,409);
+    assert.equal((await post(verifyPath,token,verifyBody)).status,400);
     const recorded=await recordHandymanBmSettlementPayment(creator,{clientId:input.clientId,settlementId,
       transferReference,amount:net,transferredAt,idempotencyKey:id(),
-      file:{buffer:Buffer.from('%PDF-1.4\nbank transfer evidence\n%%EOF'),mimeType:'application/pdf'}});
+      file:{buffer:evidenceBytes,mimeType:'application/pdf'}});
     assert.equal(recorded.settlement.status,'PAYMENT_RECORDED');
-    // Evidence upload alone is never SETTLED — by detail or list.
     const reader=await scopedUser(x.f.realm.building.id,['handyman.finance.read']);
     const readerToken=await tokenFor(reader);
-    let res=await get(`${base}/${settlementId}`,readerToken);
+    // Direct blind POST stays blocked: missing, half and malformed receipts.
+    assert.equal((await post(verifyPath,token,verifyBody)).status,400);
+    assert.equal((await post(verifyPath,token,{...verifyBody,contentSha256:sha256(evidenceBytes)})).status,400);
+    assert.equal((await post(verifyPath,token,{...verifyBody,evidenceReadId:id()})).status,400);
+    assert.equal((await post(verifyPath,token,{...verifyBody,extra:'x'})).status,400);
+    // Evidence read returns the actual bytes, server-calculated digest and receipt.
+    let res=await get(evPath,token).responseType('buffer');
+    assert.equal(res.status,200,JSON.stringify(res.headers));
+    assert.equal(res.headers['content-type'],'application/pdf');
+    assert.ok(Buffer.isBuffer(res.body));
+    assert.deepEqual(res.body,evidenceBytes);
+    const readId=res.headers['x-evidence-read-id'],sha=res.headers['x-content-sha256'];
+    assert.match(readId,UUID_RE);
+    assert.equal(sha,sha256(evidenceBytes));
+    assert.equal(res.headers['content-length'],String(evidenceBytes.byteLength));
+    assert.match(String(res.headers['content-disposition']),/inline/);
+    // Reading alone never advances the settlement.
+    res=await get(`${base}/${settlementId}`,readerToken);
     assert.equal(res.status,200,JSON.stringify(res.body));
     assert.equal(res.body.data.status,'PAYMENT_RECORDED');
     assert.equal(res.body.data.verification,null);
     res=await get(base,readerToken);
     assert.equal(res.body.data.items[0].status,'PAYMENT_RECORDED');
-    // Verification authority, exact scope and attestation walls.
-    assert.equal((await post(verifyPath,'',verifyBody)).status,401);
-    const denied=await post(verifyPath,readerToken,verifyBody);
-    assert.equal(denied.status,403);
-    assert.equal(denied.body.error.code,'PERMISSION_DENIED');
+    // Evidence-read authority and scope: auth, permission, scope, self-read.
+    assert.equal((await get(evPath,'')).status,401);
+    res=await get(evPath,readerToken);
+    assert.equal(res.status,403);
+    assert.equal(res.body.error.code,'PERMISSION_DENIED');
     const sibling=await buildingService.createBuilding({propertyId:x.f.realm.property.id,
       code:`SIB_${id().slice(0,8)}`,name:'Sibling'});
-    assert.equal((await post(`/api/v1/handyman/clients/${input.clientId}/buildings/${sibling.id}/bm-settlements/${settlementId}/verifications`,
-      token,verifyBody)).status,404);
-    assert.equal((await post(`/api/v1/handyman/clients/${id()}/buildings/${x.f.realm.building.id}/bm-settlements/${settlementId}/verifications`,
-      token,verifyBody)).status,404);
     const foreignVerifier=await scopedUser(sibling.id,verifierPerms);
-    const cross=await post(verifyPath,await tokenFor(foreignVerifier),verifyBody);
-    assert.equal(cross.status,403);
-    assert.equal(cross.body.error.code,'BUILDING_ACCESS_DENIED');
-    assert.equal((await post(verifyPath,token,{...verifyBody,extra:'x'})).status,400);
-    assert.equal((await post(verifyPath,token,{...verifyBody,attestedActualPayment:false})).status,400);
-    // Wrong amount, reference, date or beneficiary account never settle.
-    assert.equal((await post(verifyPath,token,{...verifyBody,amount:'10.24'})).status,409);
-    assert.equal((await post(verifyPath,token,{...verifyBody,transferReference:`bank-txn/${id()}`})).status,409);
-    assert.equal((await post(verifyPath,token,{...verifyBody,transferredAt:iso(Date.now()-600000)})).status,409);
-    assert.equal((await post(verifyPath,token,{...verifyBody,confirmedAccountNumber:'999888777665'})).status,409);
-    // A forged or foreign evidence receipt can never verify.
-    assert.equal((await post(verifyPath,token,
-      {...verifyBody,evidenceReadId:id(),contentSha256:'a'.repeat(64)})).status,409);
-    // Self-verification by the creator/recorder is refused.
-    const self=await post(verifyPath,await tokenFor(creator),verifyBody);
-    assert.equal(self.status,409,JSON.stringify(self.body));
-    // Concurrent identical verifications yield exactly one authoritative row.
-    const race=await Promise.all(Array.from({length:3},()=>post(verifyPath,token,verifyBody)));
+    res=await get(evPath,await tokenFor(foreignVerifier));
+    assert.equal(res.status,403);
+    assert.equal(res.body.error.code,'BUILDING_ACCESS_DENIED');
+    assert.equal((await get(`/api/v1/handyman/clients/${input.clientId}/buildings/${sibling.id}/bm-settlements/${settlementId}/payment-evidence`,token)).status,404);
+    assert.equal((await get(`/api/v1/handyman/clients/${id()}/buildings/${x.f.realm.building.id}/bm-settlements/${settlementId}/payment-evidence`,token)).status,404);
+    assert.equal((await get(`${evPath}?limit=1`,token)).status,400);
+    const creatorToken=await tokenFor(creator);
+    res=await get(evPath,creatorToken); // recorder/creator self-read
+    assert.equal(res.status,409,JSON.stringify(res.body));
+    // Attestation walls with the real receipt (blindness already blocked above).
+    const receipt={evidenceReadId:readId,contentSha256:sha};
+    assert.equal((await post(verifyPath,token,{...verifyBody,...receipt,attestedActualPayment:false})).status,400);
+    assert.equal((await post(verifyPath,token,{...verifyBody,...receipt,amount:'10.24'})).status,409);
+    assert.equal((await post(verifyPath,token,{...verifyBody,...receipt,transferReference:`bank-txn/${id()}`})).status,409);
+    assert.equal((await post(verifyPath,token,{...verifyBody,...receipt,transferredAt:iso(Date.now()-600000)})).status,409);
+    assert.equal((await post(verifyPath,token,{...verifyBody,...receipt,confirmedAccountNumber:'999888777665'})).status,409);
+    // Forged, mismatched, cross-user and self receipts never attest.
+    assert.equal((await post(verifyPath,token,{...verifyBody,evidenceReadId:id(),contentSha256:sha})).status,409);
+    assert.equal((await post(verifyPath,token,{...verifyBody,evidenceReadId:readId,contentSha256:'a'.repeat(64)})).status,409);
+    const verifier2=await scopedUser(x.f.realm.building.id,verifierPerms);
+    assert.equal((await post(verifyPath,await tokenFor(verifier2),{...verifyBody,evidenceReadId:readId,contentSha256:sha})).status,409);
+    assert.equal((await post(verifyPath,creatorToken,{...verifyBody,evidenceReadId:readId,contentSha256:sha})).status,409);
+    // Concurrent attestation with the same receipt yields exactly one winner.
+    const race=await Promise.all(Array.from({length:3},()=>post(verifyPath,token,{...verifyBody,...receipt})));
     assert.ok(race.every(r=>[200,201,409].includes(r.status)),JSON.stringify(race.map(r=>r.status)));
     assert.equal(race.filter(r=>r.status===201&&r.body?.data?.replayed===false).length,1);
     assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_settlement_verifications WHERE settlement_id=$1',
       [settlementId])).rows[0].n,1);
     const winner=race.find(r=>r.status===201)!;
     assert.equal(winner.body.data.settlement.status,'SETTLED');
-    assert.match(winner.body.data.evidence.contentSha256,/^[0-9a-f]{64}$/);
-    const receipt=winner.body.data.evidence as {evidenceReadId:string;contentSha256:string};
-    // Exact duplicate (re-sending the evidence receipt) replays; a retry
-    // that mints a fresh receipt can never double-verify.
+    assert.deepEqual(winner.body.data.evidence,receipt);
+    // Exact authorized receipt replay is idempotent; drift and blind are not.
     const replay=await post(verifyPath,token,{...verifyBody,...receipt});
     assert.equal(replay.status,200,JSON.stringify(replay.body));
     assert.equal(replay.body.data.replayed,true);
     assert.equal(replay.body.data.settlement.status,'SETTLED');
-    assert.equal((await post(verifyPath,token,verifyBody)).status,409);
-    const drift=await post(verifyPath,token,{...verifyBody,...receipt,evidenceReference:`api-verify/${id()}`});
-    assert.equal(drift.status,409);
-    // GET detail: the independent verifier, method and settlement status.
+    assert.equal((await post(verifyPath,token,{...verifyBody,...receipt,evidenceReference:`api-verify/${id()}`})).status,409);
+    assert.equal((await post(verifyPath,token,verifyBody)).status,400);
+    // GET detail: independent verifier, method, settlement status, no leaks.
     res=await get(`${base}/${settlementId}`,token);
     assert.equal(res.status,200,JSON.stringify(res.body));
     assert.equal(res.body.data.status,'SETTLED');
@@ -298,16 +315,20 @@ describe('CR-HM-BM-SETTLEMENT-API-01 PART 01B-4 independent payout verification 
     assert.ok(!JSON.stringify(res.body).includes(x.bankNumber));
     res=await get(base,token);
     assert.equal(res.body.data.items[0].status,'SETTLED');
-    // Official BM Statement history reflects PAID; ledger/tax/history intact.
+    // Official BM Statement PAID; ledger, receipt history and immutability intact.
     const manager=await scopedUser(x.f.realm.building.id,['handyman.commercial.manage','handyman.finance.read']);
     const statement=await downloadHandymanBmStatement(manager,{clientId:input.clientId,
       buildingId:x.f.realm.building.id,counterpartyId:x.f.bm.counterparty.id,agreementVersionId:x.f.versionId,
       dateFrom:utcDay(),dateTo:utcDay()});
     assert.equal(statement.snapshot.settlements[0]!.status,'PAID');
     assert.equal(statement.snapshot.settlements[0]!.verifiedPayment!.method,'FINANCE_MANUAL_DOCUMENT_REVIEW');
-    assert.ok(!JSON.stringify(statement.snapshot).includes(x.bankNumber));
     assert.deepEqual((await q('SELECT * FROM handyman_bm_commission_ledger WHERE entitlement_id=$1 ORDER BY sequence',
       [input.entitlementId])).rows,ledgerBefore);
+    const reads=(await q(`SELECT r.* FROM handyman_bm_settlement_evidence_reads r
+      JOIN handyman_bm_settlement_payments p ON p.id=r.payment_id WHERE p.settlement_id=$1`,[settlementId])).rows;
+    assert.equal(reads.length,1);
+    assert.equal(reads[0].actor_user_id,checker);
+    assert.equal(reads[0].content_sha256,sha);
     const verificationRow=(await q('SELECT id FROM handyman_bm_settlement_verifications WHERE settlement_id=$1',
       [settlementId])).rows[0];
     await assert.rejects(q('UPDATE handyman_bm_settlement_verifications SET evidence_reference=$2 WHERE id=$1',
