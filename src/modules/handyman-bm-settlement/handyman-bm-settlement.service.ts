@@ -357,3 +357,87 @@ export async function getHandymanBmSettlement(actorInput:string,input:Scope) {
   keys(input,['clientId','settlementId']);const actor=uuid(actorInput,'actorUserId'),clientId=uuid(input.clientId,'clientId'),settlementId=uuid(input.settlementId,'settlementId');
   return withTransaction(async tx=>publicView(tx,await load(tx,actor,clientId,settlementId,'read')));
 }
+
+export type ListBmSettlementsInput=Readonly<{clientId:string;buildingId:string;limit?:number;after?:string}>;
+export type BmSettlementDetailInput=Readonly<{clientId:string;buildingId:string;settlementId:string}>;
+const STATEMENT_REFERENCE_LIMIT=20;
+const utcDateOf=(value:Date)=>value.toISOString().slice(0,10);
+/** PG parses date-only columns to a LOCAL-midnight Date; recover the literal. */
+const dateKeyOf=(value:Date|string)=>typeof value==='string'?value.slice(0,10):
+  `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
+
+/** Read-only Operations/Manager projection over the exact settlement facts:
+ *  lifecycle status comes from the same child-row derivation as publicView
+ *  (SETTLED only when a verified review row exists — never from an uploaded
+ *  claim), amounts are the stored authoritative ledger columns of the pinned
+ *  entries, and official statement references are exact issued-document rows
+ *  whose period covers every entry of this settlement. No recalculation. */
+async function settlementView(tx:PoolClient,actor:string,input:BmSettlementDetailInput,withStatements:boolean) {
+  const s=await load(tx,actor,input.clientId,input.settlementId,'read');
+  if(s.building_id!==input.buildingId)throw missing();
+  const view=await publicView(tx,s);
+  const rows=(await tx.query(`SELECT id,created_at,gross,ppn,pph_withholding_projection,net_payable
+    FROM handyman_bm_commission_ledger WHERE id=ANY($1::uuid[])`,
+    [[s.original_entry_id,s.latest_entry_id]])).rows;
+  const entries=s.snapshot.ledgerEntries.map((e:{id:string})=>rows.find(r=>r.id===e.id)).filter(Boolean) as
+    Readonly<{id:string;created_at:Date;gross:string;ppn:string;pph_withholding_projection:string;net_payable:string}>[];
+  if(!entries.length)throw stale();
+  const times=entries.map(e=>e.created_at.getTime()),last=entries[entries.length-1]!;
+  const base={...view,
+    scope:Object.freeze({clientId:s.client_id as string,buildingId:s.building_id as string,
+      counterpartyId:s.counterparty_id as string,agreementVersionId:s.agreement_version_id as string,
+      entitlementId:s.entitlement_id as string}),
+    period:Object.freeze({from:new Date(Math.min(...times)).toISOString(),to:new Date(Math.max(...times)).toISOString()}),
+    amounts:Object.freeze({currency:s.currency as string,gross:last.gross,ppn:last.ppn,
+      pphWithholdingProjection:last.pph_withholding_projection,netPayable:last.net_payable})};
+  if(!withStatements)return base;
+  const days=entries.map(e=>utcDateOf(e.created_at));
+  const docs=(await tx.query(`SELECT id,period_from,period_to,issued_at,source_sha256,pdf_sha256,pdf_filename
+    FROM handyman_bm_issued_documents WHERE client_id=$1 AND building_id=$2 AND document_type='COMMISSION_STATEMENT'
+      AND counterparty_id=$3 AND agreement_version_id=$4
+    ORDER BY issued_at DESC,id DESC LIMIT $5`,
+    [s.client_id,s.building_id,s.counterparty_id,s.agreement_version_id,STATEMENT_REFERENCE_LIMIT])).rows;
+  const statements=docs.filter(d=>days.every(day=>dateKeyOf(d.period_from)<=day&&day<=dateKeyOf(d.period_to))).map(d=>Object.freeze({
+    documentId:d.id as string,documentType:'COMMISSION_STATEMENT' as const,periodFrom:dateKeyOf(d.period_from),
+    periodTo:dateKeyOf(d.period_to),issuedAt:(d.issued_at as Date).toISOString(),
+    sourceChecksum:d.source_sha256 as string,pdfChecksum:d.pdf_sha256 as string,filename:d.pdf_filename as string,
+    downloadPath:`/api/v1/handyman/clients/${s.client_id}/buildings/${s.building_id}/bm-documents/${d.id}.pdf`}));
+  return Object.freeze({...base,statements:Object.freeze(statements)});
+}
+
+/** Bounded, stably ordered (created_at DESC, id DESC) cursor page of one
+ *  Building's BM settlements; the cursor is a settlement id inside the scope. */
+export async function listHandymanBmSettlements(actorInput:string,input:ListBmSettlementsInput) {
+  keys(input,['clientId','buildingId','limit','after']);
+  const actor=uuid(actorInput,'actorUserId'),clientId=uuid(input.clientId,'clientId'),buildingId=uuid(input.buildingId,'buildingId');
+  const limit=input.limit??50;
+  if(!Number.isInteger(limit)||limit<1||limit>100)throw AppError.validation('limit must be between 1 and 100.');
+  const after=input.after===undefined?null:uuid(input.after,'after');
+  return withTransaction(async tx=>{
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    await access(tx,actor,clientId,buildingId,'read');
+    let anchor:Date|null=null;
+    if(after){
+      const a=(await tx.query<{created_at:Date}>(`SELECT created_at FROM handyman_bm_settlements
+        WHERE id=$1 AND client_id=$2 AND building_id=$3`,[after,clientId,buildingId])).rows[0];
+      if(!a)throw AppError.validation('Invalid settlement cursor for this scope.');
+      anchor=a.created_at;
+    }
+    const rows=(await tx.query<{id:string}>(`SELECT id,created_at FROM handyman_bm_settlements
+      WHERE client_id=$1 AND building_id=$2
+        AND ($3::timestamptz IS NULL OR (created_at,id)<($3::timestamptz,$4::uuid))
+      ORDER BY created_at DESC,id DESC LIMIT $5`,[clientId,buildingId,anchor,after,limit+1])).rows;
+    const page=rows.slice(0,limit),items=[];
+    for(const row of page)
+      items.push(await settlementView(tx,actor,{clientId,buildingId,settlementId:row.id},false));
+    return Object.freeze({items:Object.freeze(items),
+      nextAfter:rows.length>limit?page[page.length-1]!.id:null});
+  });
+}
+
+export async function getHandymanBmSettlementDetail(actorInput:string,input:BmSettlementDetailInput) {
+  keys(input,['clientId','buildingId','settlementId']);
+  const actor=uuid(actorInput,'actorUserId'),clientId=uuid(input.clientId,'clientId'),
+    buildingId=uuid(input.buildingId,'buildingId'),settlementId=uuid(input.settlementId,'settlementId');
+  return withTransaction(async tx=>settlementView(tx,actor,{clientId,buildingId,settlementId},true));
+}

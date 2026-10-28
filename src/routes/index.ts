@@ -65,6 +65,7 @@ import { createHandymanDocumentIssuerProfileRouter } from '../modules/handyman-d
 import { createHandymanBmStatementRouter } from '../modules/handyman-bm-statement/handyman-bm-statement.routes';
 import { createHandymanBmReportRouter } from '../modules/handyman-bm-report/handyman-bm-report.routes';
 import { createHandymanBmDocumentsRouter } from '../modules/handyman-bm-documents/handyman-bm-documents.routes';
+import { createHandymanBmSettlementRouter } from '../modules/handyman-bm-settlement';
 import { createHandymanDocumentBankAccountRouter } from '../modules/handyman-documents';
 import { createHandymanDocumentSettingsRouter } from '../modules/handyman-documents';
 import { createHandymanWorkSessionsApiRouter }
@@ -922,6 +923,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanBmStatementRouter()); // CR-HM-BM-COMMISSION-04 PART 01 — scoped, non-issued statement preview
   router.use(createHandymanBmReportRouter()); // CR-HM-BM-REPORT-05 — Building-wide, non-issued monthly preview
   router.use(createHandymanBmDocumentsRouter()); // CR-HM-BM-DOCUMENT-06 — immutable issued BM PDFs
+  router.use(createHandymanBmSettlementRouter()); // CR-HM-BM-SETTLEMENT-API-01 PART 01A — read-only settlement list & detail
   router.use(createHandymanWarrantyCertificateRouter());
   router.use(createHandymanOfficialInvoiceRouter()); // Immutable inclusive tenant invoice
   router.use(createHandymanTenantReceiptRouter()); // Independently verified tenant payment receipts
