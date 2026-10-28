@@ -5,7 +5,7 @@ import { isValidUuid } from '../clients';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import { getHandymanBmSettlementDetail, listHandymanBmSettlements,
-  prepareHandymanBmSettlement, supersedeHandymanBmSettlement } from './handyman-bm-settlement.service';
+  prepareHandymanBmSettlement, supersedeHandymanBmSettlement, approveHandymanBmSettlement } from './handyman-bm-settlement.service';
 
 const base = '/handyman/clients/:clientId/buildings/:buildingId/bm-settlements';
 const readScope = requirePermission('handyman.finance.read');
@@ -112,6 +112,32 @@ export function createHandymanBmSettlementRouter(): Router {
           ledgerEntryIds: strings(b.ledgerEntryIds, 'ledgerEntryIds'),
           bankVersionId: text(b.bankVersionId, 'bankVersionId'),
           idempotencyKey: text(b.idempotencyKey, 'idempotencyKey'),
+          evidenceReference: text(b.evidenceReference, 'evidenceReference'),
+        });
+        res.status(result.replayed ? 200 : 201).json({ data: result });
+      } catch (error) { next(error); }
+    });
+  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-2 — independent Manager/Finance
+  // approval: thin over approveHandymanBmSettlement, which enforces the
+  // maker-checker split, digest/currentness (fresh anchors, non-superseded)
+  // and approval replay inside the same transaction. Nothing else moves:
+  // approval never records a transfer or advances status past APPROVED.
+  router.post(`${base}/:settlementId/approve`, authenticationMiddleware,
+    requirePermission('handyman.finance.read'), requirePermission('handyman.bm_settlement.approve'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        if (Object.keys(req.query).length) throw AppError.validation('No query fields are accepted.');
+        const clientId = req.params.clientId as string, buildingId = req.params.buildingId as string,
+          settlementId = req.params.settlementId as string;
+        if (!isValidUuid(clientId) || !isValidUuid(settlementId)) throw AppError.validation('Invalid settlement scope.');
+        const b = body(req.body, ['settlementDigest', 'evidenceReference']);
+        const row = (await getPool().query<{ building_id: string }>(
+          'SELECT building_id FROM handyman_bm_settlements WHERE id=$1 AND client_id=$2',
+          [settlementId, clientId])).rows[0];
+        if (!row || row.building_id !== buildingId) throw settlementMissing();
+        const result = await approveHandymanBmSettlement(req.auth.userId, {
+          clientId, settlementId, settlementDigest: text(b.settlementDigest, 'settlementDigest'),
           evidenceReference: text(b.evidenceReference, 'evidenceReference'),
         });
         res.status(result.replayed ? 200 : 201).json({ data: result });
