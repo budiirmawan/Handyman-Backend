@@ -1,11 +1,36 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { AppError } from '../../shared/errors';
+import { getPool } from '../../database';
+import { AppError, ERROR_CODES } from '../../shared/errors';
+import { isValidUuid } from '../clients';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
-import { getHandymanBmSettlementDetail, listHandymanBmSettlements } from './handyman-bm-settlement.service';
+import { getHandymanBmSettlementDetail, listHandymanBmSettlements,
+  prepareHandymanBmSettlement, supersedeHandymanBmSettlement } from './handyman-bm-settlement.service';
 
 const base = '/handyman/clients/:clientId/buildings/:buildingId/bm-settlements';
 const readScope = requirePermission('handyman.finance.read');
+const makerScope = [requirePermission('handyman.finance.manage'), requirePermission('handyman.settlement.manage')];
+const settlementMissing = () => new AppError({
+  code: ERROR_CODES.HANDYMAN_BM_SETTLEMENT_NOT_FOUND, statusCode: 404,
+  message: 'BM settlement not found in this Client and Building.',
+});
+function body(value: unknown, allowed: string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(k => !allowed.includes(k))) {
+    throw AppError.validation('Unexpected settlement action fields.');
+  }
+  return value as Record<string, unknown>;
+}
+function text(value: unknown, field: string): string {
+  if (typeof value !== 'string') throw AppError.validation(`Invalid ${field}.`);
+  return value;
+}
+function strings(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2 || value.some(v => typeof v !== 'string')) {
+    throw AppError.validation(`Invalid ${field}.`);
+  }
+  return value as string[];
+}
 
 /** Read-only Operations/Manager settlement contract: scoped, cursor-paginated
  *  list plus the authoritative detail projection. No write or action routes. */
@@ -38,6 +63,58 @@ export function createHandymanBmSettlementRouter(): Router {
           settlementId: req.params.settlementId as string,
         });
         res.json({ data: detail });
+      } catch (error) { next(error); }
+    });
+  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-1 — exactly two scoped write actions,
+  // thin over the existing services: their validation, locks, idempotency and
+  // audit identity are the single source of truth. The path Client/Building
+  // is resolved against the authoritative entitlement/settlement before the
+  // service runs, so the URI scope is never merely decorative.
+  router.post(base, authenticationMiddleware, ...makerScope,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        if (Object.keys(req.query).length) throw AppError.validation('No query fields are accepted.');
+        const clientId = req.params.clientId as string, buildingId = req.params.buildingId as string;
+        const b = body(req.body, ['entitlementId', 'ledgerEntryIds', 'bankVersionId', 'idempotencyKey', 'evidenceReference']);
+        const entitlementId = text(b.entitlementId, 'entitlementId');
+        if (!isValidUuid(clientId) || !isValidUuid(entitlementId)) throw AppError.validation('Invalid settlement scope.');
+        const scope = (await getPool().query<{ building_id: string }>(`SELECT x.building_id
+          FROM handyman_entitlement_facts f
+          JOIN handyman_execution_scopes x ON x.id=f.execution_scope_id AND x.client_id=f.client_id
+          WHERE f.id=$1 AND f.client_id=$2 AND f.entitlement_kind='BM_FEE'`,
+          [entitlementId, clientId])).rows[0];
+        if (!scope || scope.building_id !== buildingId) throw settlementMissing();
+        const result = await prepareHandymanBmSettlement(req.auth.userId, {
+          clientId, entitlementId, ledgerEntryIds: strings(b.ledgerEntryIds, 'ledgerEntryIds'),
+          bankVersionId: text(b.bankVersionId, 'bankVersionId'),
+          idempotencyKey: text(b.idempotencyKey, 'idempotencyKey'),
+          evidenceReference: text(b.evidenceReference, 'evidenceReference'),
+        });
+        res.status(result.replayed ? 200 : 201).json({ data: result });
+      } catch (error) { next(error); }
+    });
+  router.post(`${base}/:settlementId/supersede`, authenticationMiddleware, ...makerScope,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        if (Object.keys(req.query).length) throw AppError.validation('No query fields are accepted.');
+        const clientId = req.params.clientId as string, buildingId = req.params.buildingId as string,
+          settlementId = req.params.settlementId as string;
+        if (!isValidUuid(clientId) || !isValidUuid(settlementId)) throw AppError.validation('Invalid settlement scope.');
+        const b = body(req.body, ['supersessionReason', 'ledgerEntryIds', 'bankVersionId', 'idempotencyKey', 'evidenceReference']);
+        const row = (await getPool().query<{ building_id: string }>(
+          'SELECT building_id FROM handyman_bm_settlements WHERE id=$1 AND client_id=$2',
+          [settlementId, clientId])).rows[0];
+        if (!row || row.building_id !== buildingId) throw settlementMissing();
+        const result = await supersedeHandymanBmSettlement(req.auth.userId, {
+          clientId, settlementId, supersessionReason: text(b.supersessionReason, 'supersessionReason'),
+          ledgerEntryIds: strings(b.ledgerEntryIds, 'ledgerEntryIds'),
+          bankVersionId: text(b.bankVersionId, 'bankVersionId'),
+          idempotencyKey: text(b.idempotencyKey, 'idempotencyKey'),
+          evidenceReference: text(b.evidenceReference, 'evidenceReference'),
+        });
+        res.status(result.replayed ? 200 : 201).json({ data: result });
       } catch (error) { next(error); }
     });
   return router;
