@@ -682,6 +682,10 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     // Before a child execution exists the real rework is explicitly unbound.
     const reworkId=data(await post(`${claimBase(claimId)}/reworks`,adminToken,{scopeNote:'Covered repair',idempotencyKey:key()})).rework.id;
     const reworkBase=`/api/v1/handyman/service-warranty-reworks/${reworkId}`;
+    const resolutionBase=`${claimBase(claimId)}/resolution`;
+    assert.equal(data(await api().get(resolutionBase).set(auth(customerToken))).resolutionStatus,'OPEN');
+    rejected(await api().get(resolutionBase).set(auth(careToken)),403);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{reworkId,qcRunId:id(),qcRunVersion:1,idempotencyKey:key()}),409);
     let progress=data(await tracking());
     assert.equal(progress.rework.reworkId,reworkId); assert.equal(progress.rework.status,'REWORK_DRAFT');
     assert.equal(progress.rework.bindingStatus,'UNVERIFIED'); assert.equal(progress.rework.executionScopeId,null);
@@ -831,6 +835,109 @@ describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
     assert.equal(data(await tracking()).rework.qc.verification,'UNVERIFIED');
     await createEvidenceStorage().put(submission.file_reference,{buffer:PNG,mimeType:'image/png'});
     assert.equal(data(await tracking()).rework.qc.verification,'CURRENT_GUARDED_PASS');
+
+    // Resolution is not QC itself: an Operations proposal and the exact
+    // request PIC's authenticated response are separate immutable facts.
+    const financeBefore=(await pool.query(`SELECT
+      (SELECT count(*)::int FROM handyman_customer_transactions) AS transactions,
+      (SELECT count(*)::int FROM handyman_customer_payments) AS payments,
+      (SELECT count(*)::int FROM handyman_payment_allocations) AS allocations,
+      (SELECT count(*)::int FROM handyman_official_invoices) AS invoices,
+      (SELECT count(*)::int FROM handyman_charge_lines) AS charges,
+      (SELECT source_sha256 FROM handyman_warranty_certificates WHERE id=$1) AS certificate_hash,
+      (SELECT status FROM handyman_service_warranties WHERE id=$2) AS warranty_status`,[certificateId,warrantyId])).rows[0];
+    const originalQc=(await pool.query('SELECT id,version FROM handyman_qc_runs WHERE execution_scope_id=$1 ORDER BY created_at DESC LIMIT 1',[scope])).rows[0];
+    const firstPin={reworkId,qcRunId:run.id,qcRunVersion:(await pool.query('SELECT version FROM handyman_qc_runs WHERE id=$1',[run.id])).rows[0].version};
+    const firstKey=key(),firstBody={...firstPin,idempotencyKey:firstKey};
+    rejected(await post(`${resolutionBase}/proposals`,readerToken,firstBody),403);
+    rejected(await post(`${resolutionBase}/proposals`,customerToken,firstBody),403);
+    rejected(await post(`${resolutionBase}/proposals`,foreignToken,firstBody),403);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...firstBody,actorUserId:customerId}),400);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...firstBody,qcRunId:originalQc.id,qcRunVersion:originalQc.version}),409);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...firstBody,reworkId:id()}),409);
+    await createEvidenceStorage().put(qcStorage,{buffer:Buffer.from('tampered'),mimeType:'image/png'});
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,firstBody),409);
+    await createEvidenceStorage().put(qcStorage,{buffer:PNG,mimeType:'image/png'});
+    const firstProposal=data(await post(`${resolutionBase}/proposals`,adminToken,firstBody),201).proposal;
+    assert.equal(firstProposal.qcRunId,run.id); assert.equal(firstProposal.reworkId,reworkId);
+    assert.equal(data(await post(`${resolutionBase}/proposals`,adminToken,firstBody)).replayed,true);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...firstBody,qcRunId:originalQc.id}),409);
+    const firstResponse=`${resolutionBase}/proposals/${firstProposal.proposalId}/response`;
+    const firstFinalize=`${resolutionBase}/proposals/${firstProposal.proposalId}/finalize`;
+    const firstFinalBody={...firstPin,idempotencyKey:key()};
+    rejected(await post(firstFinalize,adminToken,firstFinalBody),409);
+    const disputeBody={...firstPin,decision:'DISPUTE',note:'The leak is still present.',idempotencyKey:key()};
+    rejected(await post(firstResponse,readerToken,disputeBody),403);
+    rejected(await post(firstResponse,foreignToken,disputeBody),403);
+    rejected(await post(firstResponse,customerToken,{...disputeBody,qcRunVersion:firstPin.qcRunVersion+1}),409);
+    const dispute=data(await post(firstResponse,customerToken,disputeBody),201);
+    assert.equal(dispute.event.type,'DISPUTED'); assert.equal(dispute.event.actorUserId,customerId);
+    assert.equal(data(await post(firstResponse,customerToken,disputeBody)).replayed,true);
+    rejected(await post(firstResponse,customerToken,{...disputeBody,decision:'ACKNOWLEDGE',note:null,idempotencyKey:key()}),409);
+    rejected(await post(firstFinalize,adminToken,firstFinalBody),409);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...firstPin,idempotencyKey:key()}),409);
+    assert.equal(data(await api().get(resolutionBase).set(auth(customerToken))).resolutionStatus,'OPEN');
+    progress=data(await tracking()); assert.equal(progress.complaint.status,'APPROVED');
+    assert.equal(progress.resolution.status,'DISPUTED'); assert.equal(progress.resolution.response.actorUserId,customerId);
+    assert.ok(progress.timeline.some((e:any)=>e.source==='RESOLUTION' && e.type==='DISPUTED' && e.actorUserId===customerId));
+    const persistedProposal=(await pool.query('SELECT proposed_session_id FROM handyman_warranty_resolution_proposals WHERE id=$1',[firstProposal.proposalId])).rows[0];
+    await assert.rejects(pool.query(`INSERT INTO handyman_warranty_resolution_events
+      (id,proposal_id,claim_id,event_type,actor_user_id,actor_session_id,idempotency_key)
+      VALUES($1,$2,$3,'RESOLVED',$4,$5,$6)`,[id(),firstProposal.proposalId,claimId,admin,persistedProposal.proposed_session_id,key()]),/acknowledgment/i);
+
+    // Follow-up uses a new real QC run; an old or disputed result is not reused.
+    const run2=(await openHandymanQcRun({executionScopeId:child,checklistIdentity:'HANDYMAN_FINAL@v1',idempotencyKey:key()},supervisorId)).run;
+    const item2=await setHandymanQcRunItemOutcome({qcRunId:run2.id,itemKey:'quality',outcome:'PASS',expectedVersion:1,idempotencyKey:key()},supervisorId);
+    const qcPhoto2=await childUpload('QC_EVIDENCE');
+    const binding2=await bindHandymanQcEvidence({qcRunId:run2.id,evidenceReference:qcPhoto2,expectedVersion:item2.runVersion,idempotencyKey:key()},supervisorId);
+    const pass2=await finishHandymanQcRun({qcRunId:run2.id,outcome:'PASSED',expectedVersion:binding2.runVersion,idempotencyKey:key()},supervisorId);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...firstPin,idempotencyKey:key()}),409);
+    const pin2={reworkId,qcRunId:run2.id,qcRunVersion:pass2.run.version};
+    const secondBody={...pin2,idempotencyKey:key()};
+    const secondProposal=data(await post(`${resolutionBase}/proposals`,adminToken,secondBody),201).proposal;
+    const readForPic=await api().get(resolutionBase).set(auth(customerToken));
+    assert.equal(readForPic.headers['cache-control'],'private, no-store');
+    assert.equal(data(readForPic).proposals[0].qcRunId,run2.id);
+    const response2=`${resolutionBase}/proposals/${secondProposal.proposalId}/response`;
+    const finalize2=`${resolutionBase}/proposals/${secondProposal.proposalId}/finalize`;
+    const ackBody={...pin2,decision:'ACKNOWLEDGE',idempotencyKey:key()};
+    rejected(await post(response2,readerToken,ackBody),403);
+    rejected(await post(response2,customerToken,{...ackBody,qcRunId:run.id}),409);
+    const ack=data(await post(response2,customerToken,ackBody),201);
+    assert.equal(ack.event.type,'ACKNOWLEDGED'); assert.equal(ack.event.actorUserId,customerId);
+    assert.equal(data(await tracking()).resolution.status,'AWAITING_FINALIZATION');
+    const finalizeBody={...pin2,idempotencyKey:key()};
+    rejected(await post(finalize2,readerToken,finalizeBody),403);
+    rejected(await post(finalize2,customerToken,finalizeBody),403);
+    const qcStorage2=(await pool.query('SELECT storage_key FROM handyman_field_evidence_uploads WHERE attachment_reference=$1',[qcPhoto2])).rows[0].storage_key;
+    await createEvidenceStorage().put(qcStorage2,{buffer:Buffer.from('tampered'),mimeType:'image/png'});
+    rejected(await post(finalize2,adminToken,finalizeBody),409);
+    await createEvidenceStorage().put(qcStorage2,{buffer:PNG,mimeType:'image/png'});
+    const [finalA,finalB]=await Promise.all([post(finalize2,adminToken,finalizeBody),post(finalize2,adminToken,finalizeBody)]);
+    assert.deepEqual([finalA.status,finalB.status].sort(),[200,201]);
+    const resolved=data(finalA,finalA.status); assert.equal(resolved.resolutionStatus,'RESOLVED');
+    assert.equal(data(finalB,finalB.status).event.eventId,resolved.event.eventId);
+    rejected(await post(finalize2,adminToken,{...pin2,idempotencyKey:key()}),409);
+    rejected(await post(`${resolutionBase}/proposals`,adminToken,{...pin2,idempotencyKey:key()}),409);
+    assert.equal(data(await api().get(resolutionBase).set(auth(customerToken))).resolutionStatus,'RESOLVED');
+    assert.equal(data(await api().get(`${reworkBase}/execution`).set(auth(adminToken))).claimResolved,true);
+    await assert.rejects(()=>openHandymanQcRun({executionScopeId:child,checklistIdentity:'HANDYMAN_FINAL@v1',idempotencyKey:key()},supervisorId),/resolved warranty claim/i);
+    await assert.rejects(pool.query("DELETE FROM handyman_warranty_resolution_events WHERE id=$1",[resolved.event.eventId]),/immutable/i);
+    progress=data(await tracking());
+    assert.equal(progress.complaint.status,'RESOLVED'); assert.equal(progress.claim.status,'CLAIM_APPROVED');
+    assert.equal(progress.resolution.status,'RESOLVED'); assert.equal(progress.resolution.response.type,'ACKNOWLEDGED');
+    assert.equal(progress.resolution.response.actorUserId,customerId); assert.equal(progress.resolution.finalizedByUserId,admin);
+    const resolutionTypes=progress.timeline.filter((e:any)=>e.source==='RESOLUTION').map((e:any)=>e.type);
+    assert.deepEqual(resolutionTypes,['PROPOSED','DISPUTED','PROPOSED','ACKNOWLEDGED','RESOLVED']);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM handyman_warranty_resolution_events WHERE claim_id=$1 AND event_type='RESOLVED'",[claimId])).rows[0].n,1);
+    assert.deepEqual((await pool.query(`SELECT
+      (SELECT count(*)::int FROM handyman_customer_transactions) AS transactions,
+      (SELECT count(*)::int FROM handyman_customer_payments) AS payments,
+      (SELECT count(*)::int FROM handyman_payment_allocations) AS allocations,
+      (SELECT count(*)::int FROM handyman_official_invoices) AS invoices,
+      (SELECT count(*)::int FROM handyman_charge_lines) AS charges,
+      (SELECT source_sha256 FROM handyman_warranty_certificates WHERE id=$1) AS certificate_hash,
+      (SELECT status FROM handyman_service_warranties WHERE id=$2) AS warranty_status`,[certificateId,warrantyId])).rows[0],financeBefore);
 
     // Even a supplied real certificate/item remains a reported reference until the claim engine verifies it.
     const knownBody={...createBody,channelReference:`message-${id()}`,idempotencyKey:key(),reportedCertificateId:certificateId,

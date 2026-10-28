@@ -101,11 +101,13 @@ export async function readWarrantyReworkExecution(actorInput:string,reworkInput:
       const pass=await assertCurrentGuardedHandymanQcPass(tx,{id:row.execution_scope_id,clientId:row.client_id,buildingId:row.building_id},expectedQc);
       qc={runId:pass.runId,version:latest.version,status:'PASSED',templateVersionId:pass.templateVersionId};
     } else if (latest) qc={runId:latest.id,version:latest.version,status:latest.status,templateVersionId:null};
+    const resolved=(await tx.query(`SELECT 1 FROM handyman_warranty_resolution_events
+      WHERE claim_id=$1 AND event_type='RESOLVED'`,[row.claim_id])).rowCount!==0;
     return {reworkId,executionScopeId:row.execution_scope_id,originalScopeId:row.original_scope_id,claimId:row.claim_id,
       assessmentId:row.assessment_id,certificateId:row.certificate_id,itemLineId:row.item_line_id,coverageKind:row.coverage_kind,
       clientId:row.client_id,buildingId:row.building_id,tenantCompanyId:row.tenant_company_id,status:row.status,
       completion:row.completion_id ? {id:row.completion_id,sessionId:row.session_id,leadUserId:row.lead_user_id,
         evidenceReference:row.evidence_reference,evidenceSha256:row.evidence_sha256,completedAt:row.completed_at?.toISOString()} : null,
-      qc,claimResolved:false};
+      qc,claimResolved:resolved};
   });
 }

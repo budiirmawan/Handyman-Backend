@@ -34,6 +34,7 @@ type ComplaintRow = {
   reporter_confirmed_pic_id: string | null; reporter_confirmed_at: Date | null;
   assessment_id: string | null; assessment_result: string | null; assessment_revision: number | null;
   assessment_reason: string | null; assessor_id: string | null; assessed_at: Date | null;
+  resolution_event_id:string | null; resolution_actor_id:string | null; resolved_at:Date | null;
 };
 type EvidenceRow = {
   id: string; evidence_type: HandymanEvidenceMediaKind; original_file_name: string;
@@ -102,12 +103,14 @@ const complaintSelect = `SELECT c.*, c.complaint_date::text AS complaint_date_te
   cb.certificate_manifest_version AS claim_manifest_version, cb.certificate_source_sha256 AS claim_source_sha256,
   cb.certificate_pdf_sha256 AS claim_pdf_sha256, rc.user_id AS reporter_confirmed_user_id, rc.tenant_pic_id AS reporter_confirmed_pic_id, rc.confirmed_at AS reporter_confirmed_at,
   a.id AS assessment_id, a.result AS assessment_result, a.revision AS assessment_revision,
-  a.reason AS assessment_reason, a.reviewer_user_id AS assessor_id, a.assessed_at
+  a.reason AS assessment_reason, a.reviewer_user_id AS assessor_id, a.assessed_at,
+  resolution.id AS resolution_event_id,resolution.actor_user_id AS resolution_actor_id,resolution.occurred_at AS resolved_at
   FROM handyman_warranty_complaints c
   LEFT JOIN handyman_warranty_complaint_claim_links l ON l.complaint_id=c.id
   LEFT JOIN handyman_service_warranty_claims cl ON cl.id=l.claim_id
   LEFT JOIN handyman_warranty_claim_bindings cb ON cb.claim_id=l.claim_id
   LEFT JOIN handyman_warranty_complaint_reporter_confirmations rc ON rc.complaint_id=c.id
+  LEFT JOIN handyman_warranty_resolution_events resolution ON resolution.claim_id=l.claim_id AND resolution.event_type='RESOLVED'
   LEFT JOIN LATERAL (SELECT * FROM handyman_warranty_claim_assessments aa WHERE aa.claim_id=l.claim_id
     ORDER BY aa.revision DESC LIMIT 1) a ON TRUE`;
 async function loadComplaint(db: Db, scope: CareScope, complaintId: string, lock = false): Promise<ComplaintRow> {
@@ -118,6 +121,7 @@ async function loadComplaint(db: Db, scope: CareScope, complaintId: string, lock
 }
 function statusOf(row: ComplaintRow): string {
   if (!row.claim_id) return 'PENDING_VERIFICATION';
+  if (row.resolution_event_id) return 'RESOLVED';
   if (row.claim_status === 'CLAIM_APPROVED') return 'APPROVED';
   if (row.claim_status === 'CLAIM_REJECTED') return 'REJECTED';
   if (row.claim_status === 'CLAIM_WITHDRAWN') return 'WITHDRAWN';
@@ -128,6 +132,8 @@ function statusOf(row: ComplaintRow): string {
 function statusView(row: ComplaintRow) {
   return { complaintId: row.id, complaintNumber: row.complaint_number, status: statusOf(row),
     claimId: row.claim_id, claimStatus: row.claim_status,
+    resolution:row.resolution_event_id ? {status:'RESOLVED',eventId:row.resolution_event_id,
+      resolvedByUserId:row.resolution_actor_id,resolvedAt:iso(row.resolved_at)} : null,
     certificateBinding: row.claim_certificate_id ? { certificateId:row.claim_certificate_id,
       itemLineId:row.claim_item_line_id,coverageKind:row.claim_coverage_kind,
       certificateManifestVersion:row.claim_manifest_version,certificateSourceSha256:row.claim_source_sha256,
@@ -447,6 +453,25 @@ export async function getComplaintTracking(actor: ComplaintActor, buildingId: st
         }
       }
     }
+    type ResolutionProposal = {id:string;rework_id:string;qc_run_id:string;qc_run_version:number;
+      proposed_by_user_id:string;proposed_at:Date};
+    type ResolutionEvent = {id:string;proposal_id:string;event_type:string;actor_user_id:string;note:string|null;occurred_at:Date};
+    const resolutionProposals=claim ? (await tx.query<ResolutionProposal>(`SELECT id,rework_id,qc_run_id,qc_run_version,
+      proposed_by_user_id,proposed_at FROM handyman_warranty_resolution_proposals WHERE claim_id=$1
+      ORDER BY proposed_at DESC,id DESC`,[claim.id])).rows : [];
+    const resolutionEvents=claim ? (await tx.query<ResolutionEvent>(`SELECT id,proposal_id,event_type,actor_user_id,note,occurred_at
+      FROM handyman_warranty_resolution_events WHERE claim_id=$1 ORDER BY occurred_at,id`,[claim.id])).rows : [];
+    const finalResolution=resolutionEvents.find(e=>e.event_type==='RESOLVED');
+    const currentResolution=finalResolution ? resolutionProposals.find(p=>p.id===finalResolution.proposal_id) : resolutionProposals[0];
+    const resolutionResponse=currentResolution ? resolutionEvents.find(e=>e.proposal_id===currentResolution.id &&
+      (e.event_type==='ACKNOWLEDGED' || e.event_type==='DISPUTED')) : undefined;
+    const resolution=currentResolution ? {status:finalResolution ? 'RESOLVED' : resolutionResponse?.event_type==='DISPUTED' ? 'DISPUTED' :
+      resolutionResponse?.event_type==='ACKNOWLEDGED' ? 'AWAITING_FINALIZATION' : 'PROPOSED',
+      proposalId:currentResolution.id,reworkId:currentResolution.rework_id,qcRunId:currentResolution.qc_run_id,
+      qcRunVersion:currentResolution.qc_run_version,proposedByUserId:currentResolution.proposed_by_user_id,
+      proposedAt:iso(currentResolution.proposed_at),response:resolutionResponse ? {type:resolutionResponse.event_type,
+        actorUserId:resolutionResponse.actor_user_id,note:resolutionResponse.note,occurredAt:iso(resolutionResponse.occurred_at)} : null,
+      finalizedByUserId:finalResolution?.actor_user_id ?? null,finalizedAt:iso(finalResolution?.occurred_at ?? null)} : null;
     type Event = {id:string;source:string;type:string;subject_id:string;actor_user_id:string|null;
       occurred_at_text:string;result:string|null};
     // Every timeline entry is either an existing append-only event or the
@@ -479,6 +504,11 @@ export async function getComplaintTracking(actor: ComplaintActor, buildingId: st
       UNION ALL SELECT e.id,'QC',e.event_type,e.run_id,e.actor_user_id,e.occurred_at,e.metadata->>'outcome'
         FROM handyman_qc_run_events e JOIN handyman_qc_runs q ON q.id=e.run_id AND q.client_id=e.client_id
         WHERE q.execution_scope_id=$4 AND q.client_id=$7
+      UNION ALL SELECT p.id,'RESOLUTION','PROPOSED',p.id,p.proposed_by_user_id,p.proposed_at,NULL::text
+        FROM handyman_warranty_resolution_proposals p WHERE p.claim_id=$2 AND p.client_id=$7 AND p.building_id=$8
+      UNION ALL SELECT e.id,'RESOLUTION',e.event_type,e.proposal_id,e.actor_user_id,e.occurred_at,NULL::text
+        FROM handyman_warranty_resolution_events e JOIN handyman_warranty_resolution_proposals p ON p.id=e.proposal_id AND p.claim_id=e.claim_id
+        WHERE e.claim_id=$2 AND p.client_id=$7 AND p.building_id=$8
       ) SELECT id,source,type,subject_id,actor_user_id,result,
         to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS occurred_at_text
         FROM timeline ORDER BY occurred_at,source,id`,
@@ -492,6 +522,7 @@ export async function getComplaintTracking(actor: ComplaintActor, buildingId: st
       else if (e.source==='DISPATCH') bindingStatus=dispatches.find(d=>d.dispatchId===e.subject_id)?.bindingStatus ?? 'UNVERIFIED';
       else if (e.source==='WORK_SESSION') bindingStatus=sessions.find(s=>s.sessionId===e.subject_id)?.bindingStatus ?? 'UNVERIFIED';
       else if (e.source==='COMPLETION') bindingStatus=completionLineage;
+      else if (e.source==='RESOLUTION') bindingStatus=lineage;
       else if (e.source==='QC') {
         const q=qcRows.find(r=>r.id===e.subject_id);
         bindingStatus=!q?.bound ? 'UNVERIFIED' : completionLineage!=='BOUND' ? completionLineage :
@@ -506,7 +537,7 @@ export async function getComplaintTracking(actor: ComplaintActor, buildingId: st
         complaintDate:complaint.complaint_date_text,recordedAt:iso(complaint.created_at),
         recordedByUserId:complaint.recorded_by_user_id},
       claim:claim ? {claimId:claim.id,status:view.claimStatus,bindingStatus:referenceStatus} : null,
-      assessment:claim ? view.assessment : null,
+      assessment:claim ? view.assessment : null,resolution,
       rework:rework ? {reworkId:rework.id,status:rework.status,bindingStatus:lineage,executionScopeId:child,
         appointments,dispatch:dispatches[0] ?? null,workSession:sessions[0] ?? null,
         completion:completion ? {id:completion.id,sessionId:completion.session_id,leadUserId:completion.lead_user_id,

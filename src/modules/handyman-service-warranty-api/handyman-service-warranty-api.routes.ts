@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
+import { AppError } from '../../shared/errors';
+import { sendSuccess } from '../../shared/api-response';
+import { proposeClaimResolution, respondClaimResolution, finalizeClaimResolution, readClaimResolution }
+  from '../handyman-service-warranty-claims/handyman-warranty-claim-resolution.service';
 import {
   getChargeableAdditionalWorkByIdHandler,
   getExecutionScopeServiceWarrantyHandler,
@@ -58,6 +62,38 @@ export function createHandymanServiceWarrantyApiRouter(): Router {
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');
   const assess = requirePermission('handyman.warranty.assess');
+  const param = (v:string|string[]) => Array.isArray(v) ? v[0] : v;
+  const resolution='/handyman/service-warranty-claims/:claimId/resolution';
+  const noStore = (_req:import('express').Request,res:import('express').Response,next:import('express').NextFunction) => {
+    res.set('Cache-Control','private, no-store'); next();
+  };
+  router.get(resolution,noStore,auth,async(req,res,next)=>{
+    try {
+      if (Object.keys(req.query).length || (req.body && Object.keys(req.body).length)) throw AppError.validation('No selectors or body are accepted.');
+      sendSuccess(res,await readClaimResolution(req.auth,param(req.params.claimId)));
+    } catch(error) { next(error); }
+  });
+  router.post(`${resolution}/proposals`,noStore,auth,async(req,res,next)=>{
+    try {
+      if (Object.keys(req.query).length) throw AppError.validation('No query parameters are accepted.');
+      const result=await proposeClaimResolution(req.auth,param(req.params.claimId),req.body);
+      sendSuccess(res,result,result.replayed?200:201);
+    } catch(error) { next(error); }
+  });
+  router.post(`${resolution}/proposals/:proposalId/response`,noStore,auth,async(req,res,next)=>{
+    try {
+      if (Object.keys(req.query).length) throw AppError.validation('No query parameters are accepted.');
+      const result=await respondClaimResolution(req.auth,param(req.params.claimId),param(req.params.proposalId),req.body);
+      sendSuccess(res,result,result.replayed?200:201);
+    } catch(error) { next(error); }
+  });
+  router.post(`${resolution}/proposals/:proposalId/finalize`,noStore,auth,async(req,res,next)=>{
+    try {
+      if (Object.keys(req.query).length) throw AppError.validation('No query parameters are accepted.');
+      const result=await finalizeClaimResolution(req.auth,param(req.params.claimId),param(req.params.proposalId),req.body);
+      sendSuccess(res,result,result.replayed?200:201);
+    } catch(error) { next(error); }
+  });
 
   router.get(
     '/handyman/execution-scopes/:executionScopeId/service-warranty',

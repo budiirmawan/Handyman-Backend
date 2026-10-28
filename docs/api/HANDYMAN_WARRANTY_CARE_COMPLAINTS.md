@@ -75,8 +75,9 @@ process proceeds; lookup itself changes no complaint, claim, or lifecycle row.
 
 A complaint with no linked claim is always `PENDING_VERIFICATION`, even if a
 certificate is reported. Subsequent tracking states are `PENDING_ASSESSMENT`,
-`NEEDS_EVIDENCE`, `ASSESSED_AWAITING_DECISION`, `APPROVED`, `REJECTED` and
-`WITHDRAWN`. The projection includes the real claim status and latest assessment;
+`NEEDS_EVIDENCE`, `ASSESSED_AWAITING_DECISION`, `APPROVED`, `REJECTED`,
+`WITHDRAWN` and `RESOLVED` (only after an authoritative resolution event). The
+projection includes the real claim decision status and latest assessment;
 intake and submission themselves do not establish warranty entitlement.
 
 ### Complaint tracking (read only)
@@ -112,9 +113,38 @@ appointment, dispatch, work-session and QC events plus immutable assessment
 and completion records, with their real actor IDs and microsecond UTC times.
 Ties are sorted deterministically. Timeline binding labels reflect lineage, not
 an additional authorization decision; historical records remain historical.
+The `resolution` field and `RESOLUTION` events show the actual proposal, PIC
+response, and Operations finalization, including a dispute note when supplied.
 Private Care notes, evidence storage keys and authentication sessions are not
 included. Care receives no assessment, scheduling, dispatch, execution or QC
 write authority from this endpoint.
+
+## Claim resolution
+
+All endpoints below are relative to `/handyman/service-warranty-claims/{claimId}/resolution`.
+`GET` lets the exact request Tenant PIC or scoped Operations inspect recorded
+proposals and responses. `POST /proposals` requires Operations and JSON
+`{ reworkId, qcRunId, qcRunVersion, idempotencyKey }`. The IDs and version must
+identify the approved claim's completed rework and its latest guarded fresh QC
+PASS. Operations cannot infer a PIC acknowledgment from a Care statement.
+
+`POST /proposals/{proposalId}/response` requires the authenticated, active
+request Tenant PIC and the same IDs/version plus `decision` (`ACKNOWLEDGE` or
+`DISPUTE`) and `idempotencyKey`; an optional `note` is allowed for a dispute.
+The actual local session and PIC identity are recorded by the server. A dispute
+is final for that proposal and leaves the claim open; a follow-up proposal needs
+a different, later guarded QC PASS. `POST /proposals/{proposalId}/finalize`
+requires Operations, the same IDs/version and an idempotency key. It rechecks the
+current claim, completion, consented dispatch and QC including evidence bytes,
+and succeeds only after the exact proposal's PIC acknowledgment. An original,
+older, changed or unverified QC cannot be reused. Replays with the same key and
+facts are idempotent; conflicting responses and duplicate finalizations fail.
+
+The immutable resolution event is the authority for `RESOLVED`; the underlying
+claim's `CLAIM_APPROVED` remains its historical assessment decision. No warranty
+certificate, original service history, invoice, payment or ledger is rewritten,
+and resolution creates no customer charge. Historical resolution facts remain
+recorded if later source history becomes historical; they are never fabricated.
 
 ## Reporter and assessor
 
