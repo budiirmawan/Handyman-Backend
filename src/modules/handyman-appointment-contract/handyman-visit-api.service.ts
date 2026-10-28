@@ -103,6 +103,10 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
     return await withTransaction(async tx => {
       const req = await requestScope(tx, requestId, true);
       await scoped(actorId, req);
+      if (body.executionScopeId && (await tx.query(`SELECT 1 FROM handyman_warranty_rework_executions
+        WHERE execution_scope_id=$1`,[body.executionScopeId])).rowCount) {
+        throw conflict('Use the rework-specific visit and tenant-consent path.');
+      }
       if (!req.timezone) throw conflict('Building timezone is not configured.');
       try { new Intl.DateTimeFormat('en', {timeZone: req.timezone}).format(new Date()); }
       catch { throw conflict('Building timezone is invalid.'); }
@@ -169,7 +173,7 @@ export async function cancelVisitProposal(requestId: string, appointmentId: stri
     const changed = await tx.query(`UPDATE handyman_visit_appointments SET
       state='CANCELLED', cancelled_by_user_id=$4, cancelled_at=NOW(), version=version+1,
       updated_at=NOW() WHERE id=$1 AND handyman_request_id=$2 AND client_id=$3
-        AND state='PROPOSED' AND version=$5 RETURNING id, state, version`,
+        AND state='PROPOSED' AND warranty_rework_id IS NULL AND version=$5 RETURNING id, state, version`,
       [appointmentId, requestId, req.clientId, actorId, version]);
     if (!changed.rows.length) throw conflict('Only the current PROPOSED appointment can be cancelled. Reload before retry.');
     await recordOperationalEvent({

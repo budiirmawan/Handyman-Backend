@@ -39,6 +39,8 @@ export type NewHandymanVisitProposal = {
   interval: HandymanAppointmentInterval;
   executionScopeId?: string | null;
   createdByUserId: string;
+  warrantyReworkKey?: string | null;
+  supersedesAppointmentId?: string | null;
 };
 
 const SELECT = `id, client_id AS "clientId", handyman_request_id AS "handymanRequestId",
@@ -70,15 +72,15 @@ export async function insertHandymanVisitProposal(
     INSERT INTO handyman_visit_appointments
       (id, client_id, handyman_request_id, tenant_company_id, building_id,
        kind, execution_scope_id, resource_type, resource_id, start_at,
-       end_at, timezone, state, created_by_user_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'PROPOSED', $13)
+       end_at, timezone, state, created_by_user_id, warranty_rework_key, supersedes_appointment_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'PROPOSED', $13, $14, $15)
     RETURNING ${SELECT}`,
     [randomUUID(), parent.clientId, input.handymanRequestId,
       parent.tenantCompanyId, parent.buildingId, input.kind,
       input.executionScopeId ?? null,
       input.kind === 'INSPECTION' ? 'INSPECTOR_USER' : 'CREW',
       input.resourceId, input.interval.startAt, input.interval.endAt,
-      input.interval.timezone, input.createdByUserId]);
+      input.interval.timezone, input.createdByUserId, input.warrantyReworkKey ?? null, input.supersedesAppointmentId ?? null]);
   return result.rows[0];
 }
 

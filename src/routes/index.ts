@@ -9,6 +9,7 @@ import { createQuotationDeliveryRouter } from '../modules/handyman-quotations/ha
 import { createVariationDeliveryRouter } from '../modules/handyman-scope-variations/handyman-variation-delivery.routes';
 import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
 import { createHandymanVisitApiRouter } from '../modules/handyman-appointment-contract/handyman-visit-api.routes';
+import { createHandymanWarrantyReworkVisitRouter } from '../modules/handyman-appointment-contract/handyman-warranty-rework-visit.routes';
 import { createHandymanTenantSlotConsentRouter } from '../modules/handyman-appointment-contract/handyman-tenant-slot-consent.routes';
 import { createCareWorkspaceRouter } from '../modules/handyman-care-workspace/care-workspace.routes';
 import { Router } from 'express';
@@ -894,6 +895,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanApiRouter());
   router.use(createHandymanOperationsQueueRouter());
   router.use(createHandymanLifecycleApiRouter());
+  router.use(createHandymanWarrantyReworkVisitRouter());
   router.use(createHandymanVisitApiRouter()); // R1C — scoped appointment proposals only
   router.use(createHandymanTenantSlotConsentRouter()); // PART 01D-2 — BM-signed slot choice ingest + fail-closed Ops confirm
   router.use(createHandymanFieldFeedRouter()); // R1D — scoped, read-only Crew/Inspector feed

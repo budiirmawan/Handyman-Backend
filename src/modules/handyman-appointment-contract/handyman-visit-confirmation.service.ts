@@ -3,6 +3,8 @@ import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { recordOperationalEvent } from '../operational-events';
+import { assertWarrantyReworkOperations } from '../handyman-service-warranty-reworks/handyman-warranty-rework-authority';
+import { assertReworkVisitCurrent } from './handyman-warranty-rework-visit.service';
 import {
   assertVisitResourceAdmission,
   encode,
@@ -41,14 +43,14 @@ export const defaultVisitConfirmationPorts: VisitConfirmationPorts = {
   scope: scoped,
 };
 
-type LockedAppointment = HandymanAppointmentRecord & { evidenceRef: string | null };
+type LockedAppointment = HandymanAppointmentRecord & { evidenceRef: string | null; reworkId: string | null };
 
 const APPOINTMENT_COLUMNS = `a.id, a.client_id AS "clientId", a.handyman_request_id AS "handymanRequestId",
   a.tenant_company_id AS "tenantCompanyId", a.building_id AS "buildingId", a.kind,
   a.execution_scope_id AS "executionScopeId", a.resource_type AS "resourceType",
   a.resource_id AS "resourceId", a.start_at AS "startAt", a.end_at AS "endAt",
   a.timezone, a.state, a.version`;
-const LOCKED_COLUMNS = `${APPOINTMENT_COLUMNS}, a.tenant_choice_evidence_ref AS "evidenceRef"`;
+const LOCKED_COLUMNS = `${APPOINTMENT_COLUMNS}, a.tenant_choice_evidence_ref AS "evidenceRef", a.warranty_rework_id AS "reworkId"`;
 
 export async function confirmTenantSlotVisit(
   requestId: string,
@@ -72,6 +74,11 @@ export async function confirmTenantSlotVisit(
       [appointmentId, req.id, req.clientId],
     )).rows[0];
     if (!locked) throw AppError.notFound('Visit appointment not found.');
+    if (locked.reworkId) {
+      const {ctx}=await assertReworkVisitCurrent(tx,locked.id,actorId);
+      await assertWarrantyReworkOperations(tx,{clientId:ctx.client_id,buildingId:ctx.building_id,
+        handymanRequestId:ctx.handyman_request_id},actorId);
+    }
 
     // Idempotent replay of an already-applied confirmation for the same version.
     if (locked.state === 'CONFIRMED' && locked.version === version + 1) {
@@ -93,12 +100,17 @@ export async function confirmTenantSlotVisit(
     }
 
     // Consent provenance must be the consent bound to this exact visit, at the PROPOSED version.
-    const consent = (await tx.query<{ id: string }>(
-      `SELECT c.id FROM handyman_visit_tenant_slot_bindings b
-         JOIN handyman_visit_tenant_slot_consents c ON c.id = b.consent_id
-        WHERE b.appointment_id = $1 AND c.id::text = $2 AND b.appointment_version = $3`,
-      [locked.id, locked.evidenceRef, locked.version - 1],
-    )).rows[0];
+    const consent = locked.reworkId
+      ? (await tx.query<{id:string}>(`SELECT id FROM handyman_warranty_rework_visit_consents
+          WHERE appointment_id=$1 AND id::text=$2 AND appointment_version=$3
+            AND rework_id=$4 AND execution_scope_id=$5 AND start_at=$6 AND end_at=$7`,
+          [locked.id,locked.evidenceRef,locked.version-1,locked.reworkId,locked.executionScopeId,locked.startAt,locked.endAt])).rows[0]
+      : (await tx.query<{ id: string }>(
+          `SELECT c.id FROM handyman_visit_tenant_slot_bindings b
+             JOIN handyman_visit_tenant_slot_consents c ON c.id = b.consent_id
+            WHERE b.appointment_id = $1 AND c.id::text = $2 AND b.appointment_version = $3`,
+          [locked.id, locked.evidenceRef, locked.version - 1],
+        )).rows[0];
     if (!consent) {
       throw new AppError({
         code: ERROR_CODES.HANDYMAN_VISIT_SLOT_CONSENT_MISSING,
