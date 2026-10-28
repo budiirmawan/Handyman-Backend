@@ -10,7 +10,7 @@ import {
   handymanScopeAssignmentRepository,
   resolveHandymanAssignmentLead,
 } from '../handyman-scope-assignments';
-import { handymanServiceWarrantyClaimRepository }
+import { handymanServiceWarrantyClaimRepository, readCoveredWarrantyClaimApproval }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
   from '../handyman-service-warranty-claims';
@@ -51,11 +51,10 @@ import type {
  * (FROZEN governance `CR-HM-15_START_GOVERNANCE.md` §4/§5/§6/§8,
  * §8 row 03).
  *
- * Free warranty rework exists ONLY for an APPROVED claim: the rework
- * binds to that claim and, through it, to the SERVICE WARRANTY and its
- * ORIGINAL execution scope / BAST. Client, warranty, scope and BAST are
- * read from the claim row inside the write transaction — never supplied
- * by the caller.
+ * Free warranty rework exists ONLY for an APPROVED claim with a verified,
+ * certificate-bound COVERED assessment. Historical approvals without that
+ * authority cannot create or newly authorize rework. Client, warranty, scope
+ * and BAST are read from the claim, never supplied by the caller.
  *
  * Verification reuses CR-HM-10 authority READ-ONLY: it binds an evidence
  * record of the same client and original execution scope and may consume
@@ -273,6 +272,7 @@ export async function proposeHandymanServiceWarrantyRework(
   await assertReworkLeadAction(claim.executionScopeId, actorUuid);
 
   return withTransaction(async (client) => {
+    await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [claim.executionScopeId]);
     const locked = await lockClaimAndWarranty(
       client,
       claimUuid,
@@ -297,6 +297,9 @@ export async function proposeHandymanServiceWarrantyRework(
       locked.claim.status,
       locked.warranty.status,
     );
+    if (!(await readCoveredWarrantyClaimApproval(client, locked.claim.id))) {
+      throw handymanServiceWarrantyReworkNotEligibleError('missing-verified-warranty-assessment');
+    }
     const existing = await handymanServiceWarrantyReworkRepository
       .findReworkByClaimId(client, claimUuid);
     if (existing) {
@@ -355,8 +358,15 @@ async function applyReworkAction(
   const completionNote = action === 'COMPLETE'
     ? ensureNote(options.completionNote, 'completionNote') || null
     : null;
+  // Authorization rechecks the current certificate while holding the same
+  // scope lock used by certificate and completion mutations.
+  const preflight = action === 'ACCEPT'
+    ? await handymanServiceWarrantyReworkRepository.findReworkById(getPool(), reworkId)
+    : null;
+  if (action === 'ACCEPT' && !preflight) throw handymanServiceWarrantyReworkNotFoundError();
 
   return withTransaction(async (client) => {
+    if (preflight) await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [preflight.executionScopeId]);
     const rework = await handymanServiceWarrantyReworkRepository
       .findReworkById(client, reworkId, true);
     if (!rework) throw handymanServiceWarrantyReworkNotFoundError();
@@ -395,6 +405,11 @@ async function applyReworkAction(
       };
     }
 
+    // A historical DRAFT must not become authorized solely because its old
+    // claim was approved before certificate-bound assessments existed.
+    if (action === 'ACCEPT' && !(await readCoveredWarrantyClaimApproval(client, locked.claim.id))) {
+      throw handymanServiceWarrantyReworkNotEligibleError('missing-verified-warranty-assessment');
+    }
     let verificationEvidenceRecordId: string | null = null;
     let verificationQcRunId: string | null = null;
     if (action === 'VERIFY') {

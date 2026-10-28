@@ -3,6 +3,8 @@ import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
   acceptCustomerChargeableAdditionalWork,
+  assessServiceWarrantyClaim,
+  readServiceWarrantyClaimAssessment,
   approveCustomerServiceWarrantyClaim,
   authorizeCustomerServiceWarrantyRework,
   openCustomerServiceWarrantyClaim,
@@ -249,4 +251,17 @@ export async function postRejectChargeableAdditionalWorkHandler(
   } catch (error) {
     next(error);
   }
+}
+
+export async function postServiceWarrantyClaimAssessmentHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const data = await assessServiceWarrantyClaim(actor(req), p(req.params.claimId), req.body);
+    sendSuccess(res, data, data.replayed ? 200 : 201);
+  } catch (error) { next(error); }
+}
+
+export async function getServiceWarrantyClaimAssessmentHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(res, await readServiceWarrantyClaimAssessment(actor(req), p(req.params.claimId)));
+  } catch (error) { next(error); }
 }

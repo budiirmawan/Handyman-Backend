@@ -62,3 +62,8 @@ export {
   rejectHandymanServiceWarrantyClaim,
   withdrawHandymanServiceWarrantyClaim,
 } from './handyman-service-warranty-claim.service';
+
+// Prospective certificate-bound assessment; no historical claim is backfilled.
+export { HANDYMAN_WARRANTY_ASSESS_PERMISSION, recordWarrantyClaimAssessment, readWarrantyClaimAssessment,
+  readCoveredWarrantyClaimApproval } from './handyman-warranty-claim-assessment.service';
+export type { ClaimCertificatePin, RecordWarrantyClaimAssessmentInput } from './handyman-warranty-claim-assessment.service';

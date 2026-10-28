@@ -263,6 +263,7 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // CR-HM-QC-AUTHORITY-01: explicitly granted Handyman QC authority.
   // A reporting line + exact Building access are ALSO required at runtime.
   { code: 'handyman.qc.manage', name: 'Inspect and decide Handyman QC' },
+  { code: 'handyman.warranty.assess', name: 'Assess Handyman warranty claims' },
   { code: 'handyman.qc.configure', name: 'Configure Handyman QC checklist requirements' },
   // CR-HM-BAST-HTTP-01: explicitly granted Handyman BAST worker authority.
   // GATES the worker BAST transport (PREPARE / ISSUE / VOID) only; at runtime
@@ -842,6 +843,8 @@ export const FOUNDATION_PERMISSIONS: readonly {
 export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new Set([
   'handyman.qc.manage',
   'handyman.qc.configure',
+  // Explicit assessment authority is never inherited by any seeded role.
+  'handyman.warranty.assess',
   // CR-HM-BAST-HTTP-01 — worker BAST PREPARE/ISSUE/VOID authority. Issuing or
   // voiding a BAST document is an explicit field authority: it must be
   // assigned as a deliberate administrative act, never inherited by being a

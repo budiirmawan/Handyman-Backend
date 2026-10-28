@@ -1,3 +1,4 @@
+import { migration0524HandymanWarrantyClaimAssessments } from './0524_handyman_warranty_claim_assessments';
 import { migration0523HandymanWarrantyCertificates } from './0523_handyman_warranty_certificates';
 import { migration0522HandymanAgreedWarrantyTerms } from './0522_handyman_agreed_warranty_terms';
 import { migration0521HandymanOfficialInvoicePayments } from './0521_handyman_official_invoice_payments';
@@ -1094,4 +1095,5 @@ export const migrations: readonly Migration[] = [
   migration0521HandymanOfficialInvoicePayments,
   migration0522HandymanAgreedWarrantyTerms,
   migration0523HandymanWarrantyCertificates,
+  migration0524HandymanWarrantyClaimAssessments,
 ];

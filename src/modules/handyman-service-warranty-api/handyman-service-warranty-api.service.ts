@@ -19,6 +19,8 @@
  */
 
 import { isValidUuid } from '../clients';
+import { parseClaimCertificatePin, readWarrantyClaimAssessment, recordWarrantyClaimAssessment,
+  type RecordWarrantyClaimAssessmentInput } from '../handyman-service-warranty-claims/handyman-warranty-claim-assessment.service';
 import { canAccessBuildingScopedResource } from '../context-access';
 import {
   assertHandymanServiceWarrantyContractShape,
@@ -171,6 +173,7 @@ function serializeClaimCommandResult(
       decidedAt: toIso(result.claim.decidedAt),
       decidedByUserId: result.claim.decidedByUserId,
       decisionNote: result.claim.decisionNote,
+      decisionAssessmentId: result.claim.decisionAssessmentId,
       withdrawnAt: toIso(result.claim.withdrawnAt),
       createdAt: result.claim.createdAt.toISOString(),
       updatedAt: result.claim.updatedAt.toISOString(),
@@ -469,6 +472,7 @@ export async function openCustomerServiceWarrantyClaim(
   );
   const result = await openHandymanServiceWarrantyClaim(actorUserId, {
     warrantyId,
+    ...parseClaimCertificatePin(payload),
     idempotencyKey: payload.idempotencyKey as string,
     claimNote: payload.claimNote as string | null | undefined,
     evidenceRecordId: payload.evidenceRecordId as string | null | undefined,
@@ -511,6 +515,7 @@ export async function approveCustomerServiceWarrantyClaim(
   const result = await approveHandymanServiceWarrantyClaim(actorUserId, {
     claimId,
     idempotencyKey: payload.idempotencyKey as string,
+    assessmentId: payload.assessmentId as string,
     decisionNote: payload.decisionNote as string | null | undefined,
   });
   return serializeClaimCommandResult(result);
@@ -531,6 +536,7 @@ export async function rejectCustomerServiceWarrantyClaim(
   const result = await rejectHandymanServiceWarrantyClaim(actorUserId, {
     claimId,
     idempotencyKey: payload.idempotencyKey as string,
+    assessmentId: payload.assessmentId as string,
     decisionNote: payload.decisionNote as string | null | undefined,
   });
   return serializeClaimCommandResult(result);
@@ -610,4 +616,14 @@ export async function rejectCustomerChargeableAdditionalWork(
     idempotencyKey: payload.idempotencyKey as string,
   });
   return serializeChargeableWorkCommandResult(result);
+}
+
+/** An assessor explicitly reviews the pinned item, conditions, exclusions and evidence. */
+export async function assessServiceWarrantyClaim(actorUserId: string, claimId: string, body: unknown) {
+  const payload = requirePlainBody(body, handymanServiceWarrantyClaimValidationError);
+  return recordWarrantyClaimAssessment(actorUserId, { ...payload, claimId } as RecordWarrantyClaimAssessmentInput);
+}
+
+export async function readServiceWarrantyClaimAssessment(actorUserId: string, claimId: string) {
+  return readWarrantyClaimAssessment(actorUserId, claimId);
 }

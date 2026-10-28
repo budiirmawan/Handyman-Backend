@@ -373,6 +373,26 @@ async function assertCurrent(tx:Pick<PoolClient,'query'>,row:Stored):Promise<voi
     throw conflict('Certificate is historical: its accepted scope or agreed terms have changed. It must not be delivered as current.');
 }
 
+/** Internal authority for claim intake and decisions. It never issues or alters a PDF. */
+export async function requireCurrentWarrantyCertificateForClaim(
+  tx: Pick<PoolClient, 'query'>,
+  certificateId: string,
+  context: { warrantyId: string; executionScopeId: string; clientId: string; bastId: string },
+) {
+  const row = (await tx.query<Stored>(`SELECT * FROM handyman_warranty_certificates
+    WHERE id=$1 AND warranty_id=$2 AND execution_scope_id=$3 AND client_id=$4 AND bast_id=$5`,
+  [certificateId, context.warrantyId, context.executionScopeId, context.clientId, context.bastId])).rows[0];
+  if (!row) throw notFound();
+  verifyCertificate(row);
+  await assertCurrent(tx, row);
+  return {
+    id: row.id, number: row.document_number, clientId: row.client_id, buildingId: row.building_id,
+    warrantyId: row.warranty_id, executionScopeId: row.execution_scope_id,
+    sourceSha256: row.source_sha256, pdfSha256: row.pdf_sha256, manifestVersion: row.manifest_version,
+    items: row.source_snapshot.items,
+  };
+}
+
 export async function downloadWarrantyCertificate(actorInput:string,scopeInput:string,certificateInput:string,historical=false) {
   const actor=uuid(actorInput,'actorUserId'),scope=uuid(scopeInput,'executionScopeId'),certificate=uuid(certificateInput,'certificateId');
   return withTransaction(async tx=>{
