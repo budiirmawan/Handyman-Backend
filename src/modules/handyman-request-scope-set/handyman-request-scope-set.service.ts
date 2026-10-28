@@ -12,6 +12,7 @@ import { quotationCommercialTarget } from '../handyman-commercial-consent/commer
 import { parseCommercialConsentAssertion } from '../handyman-commercial-consent/commercial-consent.assertion';
 import { assertCurrentGuardedHandymanQcPass } from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { requireVerifiedCompletionForIssue } from '../handyman-completion-manifest/handyman-completion-manifest.service';
+import { readScopeBastAcceptance, type ScopeBastAcceptance, type ScopeCompletion } from './handyman-request-completion-readiness';
 
 const digest = (value: unknown) => createHash('sha256').update(stableJson(value)).digest('hex');
 const changed = () => new AppError({ code: ERROR_CODES.HANDYMAN_REQUEST_SCOPE_SET_CHANGED, statusCode: 409,
@@ -127,27 +128,32 @@ async function approvalMatches(tx: PoolClient, request: RequestRow, v: Version, 
 /** A recorded QC review is not a current completion by itself. Only use the
  * existing current QC + manifest verifier; never use a generic Work Order or a
  * legacy CLOSED scope as proof of completion. */
-async function completionAt(tx: PoolClient, s: Scope) {
-  const review = (await tx.query<{ qc_run_id: string; manifest_id: string; manifest_version: number; manifest_sha256: string; items: unknown }>(`
-    SELECT v.qc_run_id,v.manifest_id,v.manifest_version,v.manifest_sha256,m.source_snapshot->'items' AS items
+async function completionAt(tx: PoolClient, s: Scope): Promise<ScopeCompletion> {
+  const review = (await tx.query<{ verification_id: string; qc_run_id: string; qc_run_version: number;
+    manifest_id: string; manifest_version: number; manifest_sha256: string; items: unknown }>(`
+    SELECT v.id AS verification_id,v.qc_run_id,v.qc_run_version,v.manifest_id,v.manifest_version,v.manifest_sha256,m.source_snapshot->'items' AS items
     FROM handyman_completion_manifests m JOIN handyman_completion_verifications v ON v.manifest_id=m.id
     WHERE m.execution_scope_id=$1 AND m.version=(SELECT max(version) FROM handyman_completion_manifests WHERE execution_scope_id=$1)
     ORDER BY v.verified_at DESC,v.id DESC LIMIT 1`, [s.id])).rows[0];
-  if (!review) return { status: 'NOT_VERIFIED' as const, workState: 'UNKNOWN' as const, manifestId: null, manifestVersion: null, manifestSha256: null, qcRunId: null };
+  if (!review) return { status: 'NOT_VERIFIED', workState: 'UNKNOWN', manifestId: null, manifestVersion: null,
+    manifestSha256: null, verificationId: null, qcRunId: null, qcRunVersion: null };
   try {
     await assertCurrentGuardedHandymanQcPass(tx, { id:s.id, clientId:s.client_id, buildingId:s.building_id }, review.qc_run_id);
     const proof = await requireVerifiedCompletionForIssue(tx, { id:s.id, clientId:s.client_id, buildingId:s.building_id,
       handymanRequestId:s.handyman_request_id, status:s.status }, review.qc_run_id);
-    if (proof.manifestId !== review.manifest_id || proof.manifestVersion !== review.manifest_version || proof.manifestSha256 !== review.manifest_sha256) throw changed();
+    if (proof.verificationId !== review.verification_id || proof.manifestId !== review.manifest_id ||
+        proof.manifestVersion !== review.manifest_version || proof.manifestSha256 !== review.manifest_sha256) throw changed();
     if (!Array.isArray(review.items) || !review.items.length || review.items.some(item =>
         !item || typeof item !== 'object' || !['COMPLETED','PARTIAL','NOT_PERFORMED'].includes(item.status))) throw changed();
     const workState = review.items.every(item=>item.status==='COMPLETED') ? 'COMPLETED' as const : 'INCOMPLETE' as const;
     return { status:'VERIFIED' as const, workState, manifestId:review.manifest_id, manifestVersion:review.manifest_version,
-      manifestSha256:review.manifest_sha256, qcRunId:review.qc_run_id };
+      manifestSha256:review.manifest_sha256, verificationId:review.verification_id, qcRunId:review.qc_run_id,
+      qcRunVersion:review.qc_run_version };
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
     return { status:'STALE_OR_UNVERIFIED' as const, workState:'UNKNOWN' as const, manifestId:review.manifest_id, manifestVersion:review.manifest_version,
-      manifestSha256:review.manifest_sha256, qcRunId:review.qc_run_id };
+      manifestSha256:review.manifest_sha256, verificationId:review.verification_id, qcRunId:review.qc_run_id,
+      qcRunVersion:review.qc_run_version };
   }
 }
 
@@ -186,7 +192,7 @@ export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, r
   const quotationId = quotations.length===1 && quotations[0].client_id===request.client_id ? String(quotations[0].id) : null;
   const members: Array<{executionScopeId:string; clientId:string; buildingId:string; requestId:string; tenantCompanyId:string;
     quotationId:string; approvalVersionId:string; approvalVersionNumber:number; approvalDecisionId:string;
-    scopeStatus:string; completion:Awaited<ReturnType<typeof completionAt>>}> = [];
+    scopeStatus:string; completion:ScopeCompletion; bastAcceptance:ScopeBastAcceptance}> = [];
   const versionIds=new Set<string>(), decisionIds=new Set<string>();
   for (const s of scopes) {
     const version=versions.find(v=>v.id===s.approved_quotation_version_id);
@@ -202,9 +208,11 @@ export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, r
         !(await approvalMatches(tx,request,version,decision,s))) {
       add('SCOPE_APPROVAL_INCONSISTENT','An original scope has missing, stale, ambiguous or cross-context approval lineage.'); continue;
     }
+    const completion = await completionAt(tx,s);
+    const bastAcceptance = await readScopeBastAcceptance(tx,s,completion);
     members.push({executionScopeId:s.id,clientId:s.client_id,buildingId:s.building_id,requestId:request.id,
       tenantCompanyId:s.tenant_company_id,quotationId,approvalVersionId:version.id,approvalVersionNumber:version.version_number,
-      approvalDecisionId:decision.id,scopeStatus:s.status,completion:await completionAt(tx,s)});
+      approvalDecisionId:decision.id,scopeStatus:s.status,completion,bastAcceptance});
   }
   for (const v of versions) {
     const ds=decisions.filter(d=>d.quotation_version_id===v.id);
@@ -226,11 +234,24 @@ export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, r
   if (!members.length) add('NO_APPROVED_ORIGINAL_SCOPE','No verified approved original scope exists for this Request.');
   const quotationVersions=versions.map(v=>({id:v.id,versionNumber:v.version_number,status:v.status,
     decision:decisions.find(d=>d.quotation_version_id===v.id)?.decision ?? null}));
+  const readinessBlockers: Array<Blocker & {executionScopeId: string | null}> =
+    blockers.map(b => ({...b,executionScopeId:null}));
+  for (const member of members) {
+    const addForScope = (code:string, message:string) => readinessBlockers.push({code,message,executionScopeId:member.executionScopeId});
+    if (member.completion.status === 'NOT_VERIFIED') addForScope('SCOPE_COMPLETION_UNVERIFIED','No current verified completion manifest exists for this scope.');
+    else if (member.completion.status === 'STALE_OR_UNVERIFIED') addForScope('SCOPE_COMPLETION_STALE','The completion manifest or scope QC PASS is stale or unverified.');
+    else if (member.completion.workState !== 'COMPLETED') addForScope('SCOPE_WORK_INCOMPLETE','The verified scope manifest contains incomplete or unperformed work.');
+    if (member.bastAcceptance.blockerCode && member.bastAcceptance.blockerMessage) {
+      addForScope(member.bastAcceptance.blockerCode,member.bastAcceptance.blockerMessage);
+    }
+  }
+  const completionReadiness = {status: readinessBlockers.length ? 'BLOCKED' as const : 'READY' as const,
+    blockers:readinessBlockers};
   // Stable deterministic digest covers the exact raw approval/scope identities
   // too, including blocked rows. It is a snapshot pin, never a closure fact.
   const snapshot = {protocol:'HANDYMAN_REQUEST_SCOPE_SET_V1', requestId:request.id, clientId:request.client_id,
     buildingId:request.building_id, tenantCompanyId:request.tenant_company_id, requestStatus:request.status,
-    revision:head.revision, quotationId, scopes:members, quotationVersions, blockers,
+    revision:head.revision, quotationId, scopes:members, quotationVersions, blockers, completionReadiness,
     rawScopes:scopes.map(s=>({id:s.id,clientId:s.client_id,buildingId:s.building_id,requestId:s.handyman_request_id,
       quotationId:s.quotation_id,versionId:s.approved_quotation_version_id,decisionId:s.quotation_decision_id,status:s.status})),
     rawDecisions:decisions.map(d=>({id:d.id,clientId:d.client_id,quotationId:d.quotation_id,versionId:d.quotation_version_id,
@@ -238,7 +259,7 @@ export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, r
   return { protocol:snapshot.protocol, requestId:request.id, clientId:request.client_id, buildingId:request.building_id,
     tenantCompanyId:request.tenant_company_id, requestStatus:request.status, revision:head.revision,
     fingerprint:digest(snapshot), membershipStatus:blockers.length ? 'BLOCKED' as const : 'ESTABLISHED' as const,
-    scopes:members, quotationVersions, blockers };
+    scopes:members, quotationVersions, blockers, completionReadiness };
 }
 
 /** Authenticated, exact-Building Operations read. No memberships or CLOSE are written. */

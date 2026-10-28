@@ -16,9 +16,6 @@ import {
 import { createHandymanArrivalLocationIdentifier } from '../src/modules/handyman-arrival-locations';
 import { evaluateHandymanArrivalVerification } from '../src/modules/handyman-arrival-results';
 import {
-  appendHandymanVisitAttempt,
-} from '../src/modules/handyman-appointment-contract/handyman-appointment.repository';
-import {
   TENANT_SLOT_AUDIENCE, TENANT_SLOT_METHOD, TENANT_SLOT_PURPOSE,
   signTenantSlotChoiceAssertion, tenantSlotSecretEnvName,
   type TenantSlotChoiceAssertion,
@@ -27,6 +24,7 @@ import { acceptTenantSlotChoice } from '../src/modules/handyman-appointment-cont
 import { createVisitProposal } from '../src/modules/handyman-appointment-contract/handyman-visit-api.service';
 import { confirmTenantSlotVisit } from '../src/modules/handyman-appointment-contract/handyman-visit-confirmation.service';
 import { createChannelAttribution } from '../src/modules/handyman-channel-attributions';
+import { acceptHandymanBast, issueHandymanBast, prepareHandymanBast } from '../src/modules/handyman-bast';
 import {
   recordCompletionDeclaration, submitCompletionManifest, verifyCompletionManifest,
 } from '../src/modules/handyman-completion-manifest/handyman-completion-manifest.service';
@@ -72,6 +70,7 @@ import { userService } from '../src/modules/users';
 import { assignSupervisor } from '../src/modules/workforce-reporting-lines/workforce-reporting-line.service';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
+import { handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { crewFixture, initHandymanFixtures, locationChain, realmFixture } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
@@ -135,7 +134,7 @@ after(async () => {
   resetAppConfigCache();
 });
 
-it('projects two independently approved and QC-verified original scopes, fences later approvals, and blocks ambiguous history', async () => {
+it('derives scope-level completion readiness from work, current QC and exact independent BAST acceptance', async () => {
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN');
   assert.ok(discipline);
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline.id, query: (sql, params) => pool.query(sql, params) });
@@ -155,6 +154,9 @@ it('projects two independently approved and QC-verified original scopes, fences 
     whatsapp: '+62 811 2000 3000', website: null, taxId: null, businessRegistrationId: null, logoReference: null }, admin);
   await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'QUOTATION', language: 'id',
     expectedVersion: null, documentPrefix: 'QTN', termsLines: ['Work after approval'], paymentNote: 'Transfer within seven days',
+    warrantyNote: null, contactNote: null, footerNote: null, signatoryName: 'Manager', signatoryTitle: 'Operations' }, admin);
+  await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'BAST', language: 'id',
+    expectedVersion: null, documentPrefix: 'BAST', termsLines: ['Handover follows verified work'], paymentNote: null,
     warrantyNote: null, contactNote: null, footerNote: null, signatoryName: 'Manager', signatoryTitle: 'Operations' }, admin);
   const bank = await createHandymanDocumentBankAccount({ clientId: realm.client.id, bankCode: 'BANK', bankName: 'Test Bank',
     accountNumber: '1234567890', accountHolderName: 'PT Issuer', currency: 'IDR' }, admin);
@@ -186,9 +188,9 @@ it('projects two independently approved and QC-verified original scopes, fences 
     disciplineId: discipline.id, diagnosis: 'Repair damage' }, admin);
   const quote = await createHandymanQuotation({ handymanRequestId: request.id, dpRequired: false }, admin);
 
-  async function issue(version: string, title: string) {
+  async function issue(version: string, title: string, quantity = 1) {
     const line = await addHandymanQuotationLine(version, { lineType: 'LABOR', description: title,
-      quantity: 1, uomId: uom, currency: 'IDR', finalQuotedUnitAmount: 100, taxPriceBasis: 'GROSS_INCLUSIVE' }, admin);
+      quantity, uomId: uom, currency: 'IDR', finalQuotedUnitAmount: 100, taxPriceBasis: 'GROSS_INCLUSIVE' }, admin);
     await setHandymanQuotationLineWarrantyTerms(version, line.id, { coverage: 'NONE' }, admin);
     await prepareHandymanTaxProfile({ quotationVersionId: version }, { priceBasis: 'GROSS_INCLUSIVE', providerStatus: 'PKP',
       vatRegime: 'PMK131_ART3', recipientKind: 'DOMESTIC_BODY', incomeRecipientReference: 'test-supplier',
@@ -209,12 +211,8 @@ it('projects two independently approved and QC-verified original scopes, fences 
   }
 
   const v1 = quote.versions[0].id;
-  const first = await issue(v1, 'First original repair');
+  const first = await issue(v1, 'First original repair', 2);
   const scope1 = await approve(v1, first.doc);
-  const v2 = (await createHandymanQuotationRevision(quote.quotation.id, admin, { dpRequired: false })).id;
-  const second = await issue(v2, 'Second original repair');
-  const scope2 = await approve(v2, second.doc);
-  assert.notEqual(scope1.id, scope2.id);
 
   const crew = await crewFixture(realm);
   const leadToken = await login(crew.leadUser);
@@ -228,11 +226,9 @@ it('projects two independently approved and QC-verified original scopes, fences 
   assert.notEqual(supervisor.id, crew.leadUser.id);
   const template = await publishHandymanQcChecklistVersion({ clientId: realm.client.id, code: 'HANDYMAN_FINAL',
     versionNumber: 1, requiredItemKeys: ['quality'] }, admin);
-  for (const scope of [scope1, scope2]) {
-    await assignHandymanExecutionScopeCrew({ executionScopeId: scope.id,
-      providerContextId: crew.providerContext.id, crewId: crew.crew.id, idempotencyKey: uid() }, admin);
-    await configureHandymanQcChecklist({ executionScopeId: scope.id, templateVersionId: template.version.id }, admin);
-  }
+  await assignHandymanExecutionScopeCrew({ executionScopeId: scope1.id,
+    providerContextId: crew.providerContext.id, crewId: crew.crew.id, idempotencyKey: uid() }, admin);
+  await configureHandymanQcChecklist({ executionScopeId: scope1.id, templateVersionId: template.version.id }, admin);
   await saveHandymanBuildingGeospatialPolicy({ buildingId: building.id, referenceLatitude: -6.2,
     referenceLongitude: 106.8, geofenceRadiusMeters: 100, maxAccuracyMeters: 50, maxLocationAgeSeconds: 120 }, admin);
   const location = await createHandymanArrivalLocationIdentifier({ buildingId: building.id, floorId: chain.floor.id,
@@ -251,156 +247,170 @@ it('projects two independently approved and QC-verified original scopes, fences 
   await pool.query('UPDATE handyman_handoff_integrations SET tenant_slot_choice_scope=TRUE WHERE id=$1', [integration.id]);
   const secret = 'test-only-tenant-slot-secret';
   const env = { ...process.env, [tenantSlotSecretEnvName(integrationCode)]: secret };
-  const results: Array<{ scopeId: string; version: string; lineId: string; sessionId: string;
-    manifestId: string; manifestVersion: number; manifestSha256: string; verificationId: string; qcRunId: string }> = [];
-
-  async function executeAndVerify(scopeId: string, version: string, lineId: string, retireVisit: boolean) {
-    const startAt = new Date(Date.now() + 2500).toISOString();
-    const endAt = new Date(Date.now() + 300_000).toISOString();
-    const proposal = await createVisitProposal(request.id, { kind: 'EXECUTION', resourceId: crew.crew.id,
-      executionScopeId: scopeId, startAt, endAt }, admin);
-    const now = Date.now();
-    const choice: TenantSlotChoiceAssertion = { iss: integrationCode, aud: TENANT_SLOT_AUDIENCE,
-      purpose: TENANT_SLOT_PURPOSE, jti: uid(), iat: new Date(now).toISOString(),
-      exp: new Date(now + 120_000).toISOString(), handymanRequestId: request.id, kind: 'EXECUTION',
-      tenantCompanyId: tenant.id, buildingId: building.id, tenantPicId: pic.id,
-      tenantUserReference: customer.id, selectedStartAt: startAt, selectedEndAt: endAt,
-      bmConsentEvidenceId: uid(), method: TENANT_SLOT_METHOD };
-    const consent = await acceptTenantSlotChoice(choice, signTenantSlotChoiceAssertion(choice, secret), undefined, env);
-    assert.equal(consent.appointment?.id, proposal.id);
-    const appointment = await confirmTenantSlotVisit(request.id, proposal.id, consent.appointment!.version, admin);
-    assert.equal(appointment.state, 'CONFIRMED');
-    const dispatch = await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: scopeId,
-      appointmentId: appointment.id }, admin);
-    await new Promise(resolve => setTimeout(resolve, Math.max(0, Date.parse(startAt) - Date.now() + 50)));
-    const challenge = await createHandymanArrivalChallenge({ executionScopeId: scopeId }, crew.leadUser.id);
-    const arrival = await evaluateHandymanArrivalVerification({ executionScopeId: scopeId, challengeToken: challenge.token,
-      qrOpaqueCode: location.value, deviceLocation: { latitude: -6.2, longitude: 106.8,
-        accuracyMeters: 5, capturedAt: new Date().toISOString() } }, crew.leadUser.id);
-    assert.equal(arrival.status, 'VERIFIED');
-    const checkedIn = await checkInHandymanWorkSession({ executionScopeId: scopeId, idempotencyKey: uid() }, crew.leadUser.id);
-    const sessionId = checkedIn.session.id;
-    await startWorkHandymanWorkSession({ executionScopeId: scopeId, idempotencyKey: uid() }, crew.leadUser.id);
-    const workEvidence = await upload(scopeId, leadToken, 'BEFORE_AFTER_WORK');
-    const declaration = await recordCompletionDeclaration(scopeId, sessionId, { quotationLineId: lineId,
-      actualQty: 1, evidenceReference: workEvidence, idempotencyKey: uid() }, crew.leadUser.id);
-    assert.equal(declaration.declaration.status, 'COMPLETED');
-    assert.equal(declaration.declaration.quotationVersionId, version);
-    await completeHandymanWorkSession({ executionScopeId: scopeId, idempotencyKey: uid() }, crew.leadUser.id);
-    await checkOutHandymanWorkSession({ executionScopeId: scopeId, idempotencyKey: uid() }, crew.leadUser.id);
-
-    if (retireVisit) {
-      // Test-only adapter for the existing appointment storage lifecycle: the
-      // app currently has no visit-finish command. Advance only the *real*
-      // confirmed visit after checking its genuine Lead session, COMPLETE and
-      // CHECK_OUT events, completed dispatch, and declared evidence. All DB
-      // constraints remain enabled. This does not cancel any scope or prove a
-      // production visit-completion authority; it permits the next real booking.
-      await withTransaction(async tx => {
-        const completed = await tx.query(`SELECT 1 FROM handyman_visit_appointments a
-          JOIN handyman_work_sessions s ON s.execution_scope_id=a.execution_scope_id
-          JOIN handyman_dispatch_releases d ON d.execution_scope_id=s.execution_scope_id AND d.appointment_id=a.id
-          JOIN handyman_completion_declarations c ON c.work_session_id=s.id AND c.execution_scope_id=s.execution_scope_id
-          WHERE a.id=$1 AND a.state='CONFIRMED' AND s.id=$2 AND s.lead_user_id=$3
-            AND s.status='CHECKED_OUT' AND s.completed_at IS NOT NULL AND d.status='COMPLETED'
-            AND c.id=$4 AND c.evidence_reference=$5
-            AND EXISTS (SELECT 1 FROM handyman_work_session_events e WHERE e.session_id=s.id AND e.event_type='COMPLETE' AND e.actor_user_id=$3)
-            AND EXISTS (SELECT 1 FROM handyman_work_session_events e WHERE e.session_id=s.id AND e.event_type='CHECK_OUT' AND e.actor_user_id=$3)`,
-        [appointment.id, sessionId, crew.leadUser.id, declaration.declaration.id, workEvidence]);
-        assert.equal(completed.rowCount, 1, 'only a completed, evidenced real visit can be retired');
-        const started = await tx.query(`UPDATE handyman_visit_appointments SET state='IN_PROGRESS',version=version+1,updated_at=NOW()
-          WHERE id=$1 AND state='CONFIRMED' RETURNING id`, [appointment.id]);
-        assert.equal(started.rowCount, 1);
-        await appendHandymanVisitAttempt(tx, { appointmentId: appointment.id, actorUserId: crew.leadUser.id,
-          outcome: 'COMPLETED', evidenceReference: workEvidence, idempotencyKey: uid() });
-        const finished = await tx.query(`UPDATE handyman_visit_appointments SET state='COMPLETED',version=version+1,updated_at=NOW()
-          WHERE id=$1 AND state='IN_PROGRESS' RETURNING id`, [appointment.id]);
-        assert.equal(finished.rowCount, 1);
-        const released = await tx.query(`UPDATE handyman_visit_capacity_reservations SET active=FALSE,released_at=NOW()
-          WHERE appointment_id=$1 AND active RETURNING id`, [appointment.id]);
-        assert.equal(released.rowCount, 1);
-      });
-    }
-
-    const opened = await openHandymanQcRun({ executionScopeId: scopeId, checklistIdentity: 'HANDYMAN_FINAL@v1',
-      idempotencyKey: uid() }, supervisor.id);
-    const checked = await setHandymanQcRunItemOutcome({ qcRunId: opened.run.id, itemKey: 'quality', outcome: 'PASS',
-      expectedVersion: opened.run.version, idempotencyKey: uid() }, supervisor.id);
-    const qcEvidence = await upload(scopeId, leadToken, 'QC_EVIDENCE');
-    const bound = await bindHandymanQcEvidence({ qcRunId: opened.run.id, evidenceReference: qcEvidence,
-      expectedVersion: checked.runVersion, idempotencyKey: uid() }, supervisor.id);
-    const finishedQc = await finishHandymanQcRun({ qcRunId: opened.run.id, outcome: 'PASSED',
-      expectedVersion: bound.runVersion, idempotencyKey: uid() }, supervisor.id);
-    assert.equal(finishedQc.run.status, 'PASSED');
-    const submitted = await submitCompletionManifest(scopeId, { idempotencyKey: uid() }, crew.leadUser.id);
-    const manifest = submitted.manifest;
-    const verified = await verifyCompletionManifest(scopeId, manifest.id, { manifestVersion: manifest.version,
-      manifestSha256: manifest.sha256, qcRunId: finishedQc.run.id, qcRunVersion: finishedQc.run.version,
-      reviewed: true, idempotencyKey: uid() }, supervisor.id);
-    results.push({ scopeId, version, lineId, sessionId, manifestId: manifest.id, manifestVersion: manifest.version,
-      manifestSha256: manifest.sha256, verificationId: verified.verificationId, qcRunId: finishedQc.run.id });
-    assert.ok(dispatch);
-  }
-
-  await executeAndVerify(scope1.id, v1, first.line.id, true);
-  await executeAndVerify(scope2.id, v2, second.line.id, false);
   const projection = async () => {
     const response = await api().get(`/api/v1/handyman/requests/${request.id}/scope-set`).set(auth(adminToken));
     assert.equal(response.status, 200, JSON.stringify(response.body));
     return response.body.data;
   };
-  const ready = await projection();
-  assert.equal(ready.membershipStatus, 'ESTABLISHED');
-  assert.equal(ready.scopes.length, 2);
-  for (const [scope, versionNumber] of [[scope1, 1], [scope2, 2]] as const) {
-    const member = ready.scopes.find((item: any) => item.executionScopeId === scope.id);
-    assert.equal(member?.approvalDecisionId, scope.quotationDecisionId);
-    assert.equal(member?.approvalVersionNumber, versionNumber);
+  const hasBlocker = (view: any, scopeId: string, reason: string) => view.completionReadiness.blockers
+    .some((b: any) => b.executionScopeId === scopeId && b.code === reason);
+  const pending = await projection();
+  assert.equal(pending.completionReadiness.status, 'BLOCKED');
+  assert.ok(hasBlocker(pending, scope1.id, 'SCOPE_COMPLETION_UNVERIFIED'));
+
+  const startAt = new Date(Date.now() + 2500).toISOString();
+  const endAt = new Date(Date.now() + 300_000).toISOString();
+  const proposal = await createVisitProposal(request.id, { kind: 'EXECUTION', resourceId: crew.crew.id,
+    executionScopeId: scope1.id, startAt, endAt }, admin);
+  const now = Date.now();
+  const choice: TenantSlotChoiceAssertion = { iss: integrationCode, aud: TENANT_SLOT_AUDIENCE,
+    purpose: TENANT_SLOT_PURPOSE, jti: uid(), iat: new Date(now).toISOString(),
+    exp: new Date(now + 120_000).toISOString(), handymanRequestId: request.id, kind: 'EXECUTION',
+    tenantCompanyId: tenant.id, buildingId: building.id, tenantPicId: pic.id,
+    tenantUserReference: customer.id, selectedStartAt: startAt, selectedEndAt: endAt,
+    bmConsentEvidenceId: uid(), method: TENANT_SLOT_METHOD };
+  const slot = await acceptTenantSlotChoice(choice, signTenantSlotChoiceAssertion(choice, secret), undefined, env);
+  assert.equal(slot.appointment?.id, proposal.id);
+  const appointment = await confirmTenantSlotVisit(request.id, proposal.id, slot.appointment!.version, admin);
+  assert.equal(appointment.state, 'CONFIRMED');
+
+  async function performOneUnit() {
+    // Both sessions use the ordinary released dispatch and check-in path on
+    // the unchanged confirmed visit. No visit completion fact is created.
+    await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: scope1.id,
+      appointmentId: appointment.id }, admin);
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, Date.parse(startAt) - Date.now() + 50)));
+    const challenge = await createHandymanArrivalChallenge({ executionScopeId: scope1.id }, crew.leadUser.id);
+    const arrival = await evaluateHandymanArrivalVerification({ executionScopeId: scope1.id, challengeToken: challenge.token,
+      qrOpaqueCode: location.value, deviceLocation: { latitude: -6.2, longitude: 106.8,
+        accuracyMeters: 5, capturedAt: new Date().toISOString() } }, crew.leadUser.id);
+    assert.equal(arrival.status, 'VERIFIED');
+    const checkedIn = await checkInHandymanWorkSession({ executionScopeId: scope1.id, idempotencyKey: uid() }, crew.leadUser.id);
+    await startWorkHandymanWorkSession({ executionScopeId: scope1.id, idempotencyKey: uid() }, crew.leadUser.id);
+    const workEvidence = await upload(scope1.id, leadToken, 'BEFORE_AFTER_WORK');
+    const declaration = await recordCompletionDeclaration(scope1.id, checkedIn.session.id, { quotationLineId: first.line.id,
+      actualQty: 1, evidenceReference: workEvidence, idempotencyKey: uid() }, crew.leadUser.id);
+    assert.equal(declaration.declaration.status, 'PARTIAL');
+    assert.equal(declaration.declaration.quotationVersionId, v1);
+    await completeHandymanWorkSession({ executionScopeId: scope1.id, idempotencyKey: uid() }, crew.leadUser.id);
+    await checkOutHandymanWorkSession({ executionScopeId: scope1.id, idempotencyKey: uid() }, crew.leadUser.id);
+    return checkedIn.session.id;
   }
-  for (const expected of results) {
-    const member = ready.scopes.find((item: any) => item.executionScopeId === expected.scopeId);
-    assert.ok(member, `missing exact original scope ${expected.scopeId}`);
-    assert.equal(member.approvalVersionId, expected.version);
-    assert.equal(member.scopeStatus, 'AUTHORIZED');
-    assert.equal(member.completion.workState, 'COMPLETED');
-    assert.equal(member.completion.status, 'VERIFIED');
-    assert.equal(member.completion.manifestId, expected.manifestId);
-    assert.equal(member.completion.manifestVersion, expected.manifestVersion);
-    assert.equal(member.completion.manifestSha256, expected.manifestSha256);
-    const proof = (await pool.query(`SELECT s.scope_kind,v.verified_by_user_id,v.manifest_id,v.qc_run_id
-      FROM handyman_execution_scopes s JOIN handyman_completion_verifications v ON v.execution_scope_id=s.id
-      WHERE s.id=$1 AND v.id=$2`, [expected.scopeId, expected.verificationId])).rows[0];
-    assert.equal(proof.scope_kind, 'ORIGINAL');
-    assert.equal(proof.verified_by_user_id, supervisor.id);
-    assert.equal(proof.manifest_id, expected.manifestId);
-    assert.equal(proof.qc_run_id, expected.qcRunId);
-    assert.equal(member.completion.qcRunId, expected.qcRunId);
+  async function reviewScope() {
+    const opened = await openHandymanQcRun({ executionScopeId: scope1.id, checklistIdentity: 'HANDYMAN_FINAL@v1',
+      idempotencyKey: uid() }, supervisor.id);
+    const checked = await setHandymanQcRunItemOutcome({ qcRunId: opened.run.id, itemKey: 'quality', outcome: 'PASS',
+      expectedVersion: opened.run.version, idempotencyKey: uid() }, supervisor.id);
+    const qcEvidence = await upload(scope1.id, leadToken, 'QC_EVIDENCE');
+    const bound = await bindHandymanQcEvidence({ qcRunId: opened.run.id, evidenceReference: qcEvidence,
+      expectedVersion: checked.runVersion, idempotencyKey: uid() }, supervisor.id);
+    const finished = await finishHandymanQcRun({ qcRunId: opened.run.id, outcome: 'PASSED',
+      expectedVersion: bound.runVersion, idempotencyKey: uid() }, supervisor.id);
+    const manifest = (await submitCompletionManifest(scope1.id, { idempotencyKey: uid() }, crew.leadUser.id)).manifest;
+    const verification = await verifyCompletionManifest(scope1.id, manifest.id, { manifestVersion: manifest.version,
+      manifestSha256: manifest.sha256, qcRunId: finished.run.id, qcRunVersion: finished.run.version,
+      reviewed: true, idempotencyKey: uid() }, supervisor.id);
+    return { manifest, verification, qc: finished.run };
   }
 
-  // Pin after issuing v3, so the later APPROVAL itself must invalidate it.
-  const v3 = (await createHandymanQuotationRevision(quote.quotation.id, admin, { dpRequired: false })).id;
-  const third = await issue(v3, 'Third separately authorized repair');
+  const firstSession = await performOneUnit();
+  const partial = await reviewScope();
+  assert.equal(partial.manifest.snapshot.items[0].status, 'PARTIAL');
+  const partialView = await projection();
+  assert.equal(partialView.completionReadiness.status, 'BLOCKED');
+  assert.equal(partialView.scopes[0].completion.status, 'VERIFIED');
+  assert.equal(partialView.scopes[0].completion.workState, 'INCOMPLETE');
+  assert.ok(hasBlocker(partialView, scope1.id, 'SCOPE_WORK_INCOMPLETE'));
+  assert.ok(hasBlocker(partialView, scope1.id, 'BAST_NOT_ISSUED'));
+
+  const secondSession = await performOneUnit();
+  assert.notEqual(firstSession, secondSession);
+  const completed = await reviewScope();
+  assert.equal(completed.manifest.snapshot.items[0].status, 'COMPLETED');
+  assert.equal(completed.manifest.snapshot.items[0].execution.length, 2);
+  const completedView = await projection();
+  assert.equal(completedView.completionReadiness.status, 'BLOCKED');
+  assert.equal(completedView.scopes[0].completion.workState, 'COMPLETED');
+  assert.equal(completedView.scopes[0].completion.verificationId, completed.verification.verificationId);
+  assert.ok(hasBlocker(completedView, scope1.id, 'BAST_NOT_ISSUED'));
+
+  const draft = await prepareHandymanBast(admin, { executionScopeId: scope1.id, idempotencyKey: uid() });
+  await issueHandymanBast(admin, { bastId: draft.bast.id, idempotencyKey: uid() });
+  const awaitingCustomer = await projection();
+  assert.equal(awaitingCustomer.completionReadiness.status, 'BLOCKED');
+  assert.ok(hasBlocker(awaitingCustomer, scope1.id, 'BAST_NOT_ACCEPTED'));
+  const customerConsent = await handymanCustomerConsentInput(draft.bast.id, customer.id);
+  const accepted = await acceptHandymanBast(customer.id, { bastId: draft.bast.id,
+    signatureDigest: customerConsent.signatureDigest, idempotencyKey: uid() });
+  assert.equal(accepted.bast.status, 'ACCEPTED');
+  const ready = await projection();
+  assert.equal(ready.membershipStatus, 'ESTABLISHED');
+  assert.equal(ready.completionReadiness.status, 'READY');
+  assert.equal(ready.revision, awaitingCustomer.revision);
+  assert.notEqual(ready.fingerprint, awaitingCustomer.fingerprint);
+  await assert.rejects(withTransaction(tx => assertHandymanRequestScopeSetCurrent(tx, request.id, {
+    revision: awaitingCustomer.revision, fingerprint: awaitingCustomer.fingerprint,
+  })), (error: any) => error.code === 'HANDYMAN_REQUEST_SCOPE_SET_CHANGED');
+  assert.equal(ready.scopes.length, 1);
+  assert.equal(ready.scopes[0].executionScopeId, scope1.id);
+  assert.equal(ready.scopes[0].approvalVersionId, v1);
+  assert.equal(ready.scopes[0].approvalDecisionId, scope1.quotationDecisionId);
+  assert.equal(ready.scopes[0].completion.status, 'VERIFIED');
+  assert.equal(ready.scopes[0].completion.manifestId, completed.manifest.id);
+  assert.equal(ready.scopes[0].completion.qcRunId, completed.qc.id);
+  assert.equal(ready.scopes[0].bastAcceptance.status, 'VERIFIED');
+  assert.equal(ready.scopes[0].bastAcceptance.bastId, draft.bast.id);
+  assert.equal(ready.scopes[0].bastAcceptance.acceptanceEventId, accepted.event.id);
+  assert.equal(ready.scopes[0].bastAcceptance.signOffId, accepted.signOff?.id);
+  assert.ok(ready.scopes[0].bastAcceptance.officialDocumentId);
+
+  // An independently approved re-quote is another required original scope.
+  // Pin after ISSUE so the later customer APPROVAL itself invalidates it.
+  const v2 = (await createHandymanQuotationRevision(quote.quotation.id, admin, { dpRequired: false })).id;
+  const second = await issue(v2, 'Second original repair');
   const beforeApproval = await projection();
-  assert.equal(beforeApproval.membershipStatus, 'ESTABLISHED');
-  assert.equal(beforeApproval.scopes.length, 2);
-  const scope3 = await approve(v3, third.doc);
+  assert.equal(beforeApproval.completionReadiness.status, 'READY');
+  const scope2 = await approve(v2, second.doc);
+  assert.notEqual(scope1.id, scope2.id);
   await assert.rejects(withTransaction(tx => assertHandymanRequestScopeSetCurrent(tx, request.id, {
     revision: beforeApproval.revision, fingerprint: beforeApproval.fingerprint,
   })), (error: any) => error.code === 'HANDYMAN_REQUEST_SCOPE_SET_CHANGED');
   const changed = await projection();
   assert.equal(changed.membershipStatus, 'ESTABLISHED');
-  assert.equal(changed.scopes.length, 3);
-  assert.ok(changed.scopes.some((item: any) => item.executionScopeId === scope3.id && item.approvalVersionId === v3));
-  for (const expected of results) {
-    const member = changed.scopes.find((item: any) => item.executionScopeId === expected.scopeId);
-    assert.equal(member?.approvalVersionId, expected.version);
-    assert.equal(member?.completion.status, 'VERIFIED');
-    assert.equal(member?.completion.manifestId, expected.manifestId);
-    assert.equal(member?.completion.qcRunId, expected.qcRunId);
-  }
+  assert.equal(changed.completionReadiness.status, 'BLOCKED');
+  assert.equal(changed.scopes.length, 2);
+  const previous = changed.scopes.find((s: any) => s.executionScopeId === scope1.id);
+  const added = changed.scopes.find((s: any) => s.executionScopeId === scope2.id);
+  assert.equal(previous.approvalVersionId, v1);
+  assert.equal(previous.completion.verificationId, completed.verification.verificationId);
+  assert.equal(previous.bastAcceptance.status, 'VERIFIED');
+  assert.equal(added.approvalVersionId, v2);
+  assert.equal(added.approvalDecisionId, scope2.quotationDecisionId);
+  assert.equal(added.completion.status, 'NOT_VERIFIED');
+  assert.equal(added.bastAcceptance.status, 'MISSING');
+  assert.ok(hasBlocker(changed, scope2.id, 'SCOPE_COMPLETION_UNVERIFIED'));
+  assert.ok(hasBlocker(changed, scope2.id, 'BAST_NOT_ISSUED'));
+  assert.equal((await pool.query('SELECT state FROM handyman_visit_appointments WHERE id=$1', [appointment.id])).rows[0].state, 'CONFIRMED');
 
-  // Simulate conflicting historical version status in a rolled-back transaction;
-  // it must not be treated as an authorized cancellation or silently excluded.
+  // A newer open QC run makes the old PASS/BAST binding stale; the accepted
+  // historical customer decision remains untouched and is not silently reused.
+  await openHandymanQcRun({ executionScopeId: scope1.id, checklistIdentity: 'HANDYMAN_FINAL@v1',
+    idempotencyKey: uid() }, supervisor.id);
+  const stale = await projection();
+  assert.equal(stale.revision, changed.revision);
+  assert.notEqual(stale.fingerprint, changed.fingerprint);
+  await assert.rejects(withTransaction(tx => assertHandymanRequestScopeSetCurrent(tx, request.id, {
+    revision: changed.revision, fingerprint: changed.fingerprint,
+  })), (error: any) => error.code === 'HANDYMAN_REQUEST_SCOPE_SET_CHANGED');
+  const staleFirst = stale.scopes.find((s: any) => s.executionScopeId === scope1.id);
+  assert.equal(staleFirst.completion.status, 'STALE_OR_UNVERIFIED');
+  assert.equal(staleFirst.bastAcceptance.status, 'STALE');
+  assert.equal(staleFirst.bastAcceptance.bastId, draft.bast.id);
+  assert.ok(hasBlocker(stale, scope1.id, 'SCOPE_COMPLETION_STALE'));
+  assert.ok(hasBlocker(stale, scope1.id, 'BAST_COMPLETION_BINDING_STALE'));
+  assert.equal((await pool.query('SELECT status FROM handyman_bast_documents WHERE id=$1', [draft.bast.id])).rows[0].status, 'ACCEPTED');
+
+  // Ambiguous historical approval remains BLOCKED, never an implied cancellation.
   const tx = await pool.connect();
   try {
     await tx.query('BEGIN');
@@ -409,7 +419,8 @@ it('projects two independently approved and QC-verified original scopes, fences 
       [request.id])).rows[0];
     const ambiguous = await readHandymanRequestScopeSetInTransaction(tx, row);
     assert.equal(ambiguous.membershipStatus, 'BLOCKED');
-    assert.ok(ambiguous.blockers.some(blocker => blocker.code === 'SCOPE_APPROVAL_INCONSISTENT'));
+    assert.equal(ambiguous.completionReadiness.status, 'BLOCKED');
+    assert.ok(ambiguous.completionReadiness.blockers.some(blocker => blocker.code === 'SCOPE_APPROVAL_INCONSISTENT'));
   } finally {
     await tx.query('ROLLBACK');
     tx.release();
