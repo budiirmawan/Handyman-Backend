@@ -52,7 +52,8 @@ function uuid(value: unknown, field: string): string {
   return value.toLowerCase();
 }
 
-function verifiedDownload(row: Stored) {
+export type OfficialInvoiceStored = Stored;
+export function verifyStoredOfficialInvoice(row: Stored) {
   try {
     const s = row.source_snapshot, c = s.calculation, source = c.commercialSource;
     if (!Buffer.isBuffer(row.pdf_bytes) || row.pdf_bytes.length !== row.pdf_size || row.pdf_size < 1 || row.pdf_size > MAX_PDF_BYTES ||
@@ -254,7 +255,7 @@ export async function issueOfficialHandymanInvoice(actorInput: string, input: {
         calculation.classification.pin.classificationId,issuer.profileId,bank.versionRowId,settings.settingsId,source.issuance.number,actor,
         source.issuance.issuedAt,calculation.totalIncludingPpn,canonical,sourceHash,pdf.filename,pdf.bytes,pdf.fileSize,pdf.checksum])).rows[0];
       if (!inserted) throw integrity();
-      const verified = verifiedDownload(inserted);
+      const verified = verifyStoredOfficialInvoice(inserted);
       // Publish a new fence version even for a base-only/upfront invoice. A
       // REPEATABLE READ source writer that started before ISSUE must abort,
       // rather than miss the newly committed invoice in its older snapshot.
@@ -285,7 +286,7 @@ export async function downloadOfficialHandymanInvoice(actorInput:string, scopeIn
     if (user?.status!=='ACTIVE' || !perms.includes('handyman.finance.read'))
       throw new AppError({code:ERROR_CODES.PERMISSION_DENIED,statusCode:403,message:'Finance invoice read authority is required.'});
     await assertBuildingScopedResourceAccess(actor,{clientId:row.client_id,buildingId:row.building_id},tx);
-    return verifiedDownload(row);
+    return verifyStoredOfficialInvoice(row);
   });
 }
 
@@ -312,5 +313,5 @@ export async function downloadOfficialHandymanInvoiceForCare(token:string, reque
   if (!row?.authenticated) throw workspaceUnauthorized();
   if (!row.id) throw new AppError({code:ERROR_CODES.HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND,statusCode:404,
     message:'Care workspace resource not found.'});
-  return verifiedDownload(row);
+  return verifyStoredOfficialInvoice(row);
 }

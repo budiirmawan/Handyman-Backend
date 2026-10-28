@@ -46,7 +46,8 @@ import { serviceCatalogService } from '../src/modules/service-catalog';
 import { handymanServiceRequestService, handymanServiceRequestTriageService,
   handymanServiceRequestDiagnosisService } from '../src/modules/handyman-requests';
 import { addHandymanQuotationLine, createHandymanQuotation, createHandymanQuotationRevision,
-  decideHandymanQuotation, issueHandymanQuotationVersion, setHandymanQuotationLineTaxPriceBasis } from '../src/modules/handyman-quotations';
+  decideHandymanQuotation, issueHandymanQuotationVersion, setHandymanQuotationLineTaxPriceBasis,
+  setHandymanQuotationLineWarrantyTerms } from '../src/modules/handyman-quotations';
 import { COMMERCIAL_CONSENT_PURPOSE, COMMERCIAL_CONSENT_METHOD, commercialConsentSecretEnvName,
   signCommercialConsentAssertion, type CommercialConsentAssertion } from '../src/modules/handyman-commercial-consent/commercial-consent.assertion';
 import { quotationCommercialTarget } from '../src/modules/handyman-commercial-consent/commercial-consent.targets';
@@ -57,7 +58,7 @@ import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-
 import { updateHandymanDocumentIssuerProfile, updateHandymanDocumentSettings,
   createHandymanDocumentBankAccount, activateHandymanDocumentBankAccount } from '../src/modules/handyman-documents';
 import { composeHandymanChargeLine, openHandymanCustomerTransaction } from '../src/modules/handyman-customer-transactions';
-import { recordHandymanCustomerPayment, confirmHandymanCustomerPayment } from '../src/modules/handyman-customer-payments';
+import { recordHandymanCustomerPayment, confirmHandymanCustomerPayment, rejectHandymanCustomerPayment } from '../src/modules/handyman-customer-payments';
 import { allocateHandymanCustomerPayment, summarizeHandymanPaymentAllocations } from '../src/modules/handyman-customer-payment-allocations';
 import { adjustHandymanCustomerLedger, refundHandymanCustomerPayment, reverseHandymanCustomerPayment,
   reverseHandymanPaymentAllocation } from '../src/modules/handyman-customer-ledger-corrections';
@@ -126,8 +127,10 @@ async function login(user: { id: string; email: string }) {
   return data(await api().post('/api/v1/auth/login').send({ email: user.email, password: PASSWORD })).sessionToken as string;
 }
 async function line(version: string, type: 'LABOR'|'MATERIAL', quantity: number, price: number, description: string) {
-  return addHandymanQuotationLine(version, { lineType: type, quantity, uomId: uom,
+  const item=await addHandymanQuotationLine(version, { lineType: type, quantity, uomId: uom,
     currency: 'IDR', finalQuotedUnitAmount: price, description, taxPriceBasis: 'GROSS_INCLUSIVE' }, admin);
+  await setHandymanQuotationLineWarrantyTerms(version,item.id,{coverage:'NONE'},admin);
+  return item;
 }
 async function quotationOffer(version: string) {
   const row = (await q('SELECT id,pdf_sha256 FROM handyman_quotation_documents WHERE quotation_version_id=$1', [version])).rows[0];
@@ -911,6 +914,82 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,chargeLineId:chargeLabor,amount:'15.00',idempotencyKey:key()},admin);
     paymentStatus=await getStatus(); assert.equal(paymentStatus.appliedAmount,'25.00'); assert.equal(paymentStatus.outstandingAmount,'535.00');
     await assert.rejects(q('UPDATE handyman_official_invoice_payment_links SET invoice_id=$2 WHERE payment_id=$1',[dp,invoice.id]),/immutable/i);
+    // FINAL RECEIPT: the earlier DP receipt predates the invoice. Its immutable
+    // absence of an invoice reference is preserved; the explicit payment link
+    // and live allocations are what establish the invoice connection.
+    const finalReceiptPath=`${invoicePath}/${invoice.id}/final-receipt`;
+    denied(await post(finalReceiptPath,picToken,{}),403);
+    denied(await post(finalReceiptPath,outsiderToken,{}),403);
+    denied(await post(finalReceiptPath,adminToken,{settledTotal:'560.00'}),400);
+    denied(await post(finalReceiptPath,adminToken,{}),409);
+    const separatePayment=(await recordHandymanCustomerPayment({executionScopeId:scope,amount:'535.00',channel:'BANK_TRANSFER',
+      obligationStage:'PELUNASAN',externalReference:`FINAL-${id()}`,idempotencyKey:key()},admin)).payment.id;
+    // A self-confirmation is not independent, even if the raw status says PAID.
+    await confirmHandymanCustomerPayment({executionScopeId:scope,paymentId:separatePayment,idempotencyKey:key()},admin);
+    const finalAddCharge=result.commercialSource.lines.find((l:any)=>l.addVariationId===add)!.chargeLineId;
+    const fullAllocations=[];
+    for (const [chargeLineId,amount] of [[chargeLabor,'75.00'],[chargeA,'150.00'],[chargeB,'200.00'],[finalAddCharge,'110.00']] as const) {
+      fullAllocations.push((await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:separatePayment,
+        chargeLineId,amount,idempotencyKey:key()},admin)).allocation.id);
+    }
+    let blocked=await post(finalReceiptPath,adminToken,{});denied(blocked,409);
+    assert.match(blocked.body.error.message,/independently confirmed/i);
+    await reconcileHandymanPayment(scope,separatePayment,{bankReference:`FINAL-BANK-${id()}`,
+      actualReceivedAt:new Date(Date.now()-5000).toISOString(),idempotencyKey:key()},verifier);
+    const priorReceiptCount=(await q('SELECT count(*)::int n FROM handyman_tenant_payment_receipts WHERE transaction_id=$1',[transactionId])).rows[0].n;
+    blocked=await post(finalReceiptPath,adminToken,{});denied(blocked,409);
+    assert.match(blocked.body.error.message,/separately issued official Payment Receipt/i);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_tenant_payment_receipts WHERE transaction_id=$1',[transactionId])).rows[0].n,priorReceiptCount);
+    const separateReceipt=await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:separatePayment});
+    const pending=(await recordHandymanCustomerPayment({executionScopeId:scope,amount:'1.00',channel:'BANK_TRANSFER',
+      obligationStage:'TERMIN',externalReference:`PENDING-${id()}`,idempotencyKey:key()},admin)).payment.id;
+    blocked=await post(finalReceiptPath,adminToken,{});denied(blocked,409);
+    assert.match(blocked.body.error.message,/pending verification/i);
+    await rejectHandymanCustomerPayment({executionScopeId:scope,paymentId:pending,reason:'Duplicate claim',idempotencyKey:key()},verifier);
+    const factCountBefore=(await q(`SELECT (SELECT count(*) FROM handyman_customer_payments WHERE transaction_id=$1)::int AS payments,
+      (SELECT count(*) FROM handyman_payment_allocations WHERE transaction_id=$1)::int AS allocations,
+      (SELECT count(*) FROM handyman_ledger_corrections WHERE transaction_id=$1)::int AS corrections,
+      (SELECT count(*) FROM handyman_tenant_payment_receipts WHERE transaction_id=$1)::int AS receipts`,[transactionId])).rows[0];
+    const simultaneous=await Promise.all([post(finalReceiptPath,adminToken,{}),post(finalReceiptPath,adminToken,{})]);
+    assert.deepEqual(simultaneous.map(r=>r.status).sort(),[200,201]);
+    const officialFinal=data(simultaneous.find(r=>r.status===201)!,201);
+    assert.equal(data(simultaneous.find(r=>r.status===200)!,200).id,officialFinal.id);
+    assert.equal(officialFinal.invoiceTotal,'560.00'); assert.equal(officialFinal.totalSettled,'560.00');
+    assert.equal(officialFinal.remaining,'0.00'); assert.match(officialFinal.number,/^FRC-[0-9]+$/);
+    const frozenFinal=(await q('SELECT * FROM handyman_final_receipts WHERE id=$1',[officialFinal.id])).rows[0];
+    assert.equal(frozenFinal.source_snapshot.payments.length,2);
+    assert.equal(frozenFinal.source_snapshot.payments.find((p:any)=>p.paymentId===dp).receiptId,receipt.id);
+    assert.equal(frozenFinal.source_snapshot.payments.find((p:any)=>p.paymentId===separatePayment).receiptId,separateReceipt.id);
+    assert.equal(frozenFinal.source_snapshot.payments.find((p:any)=>p.paymentId===separatePayment).verificationBasis,'INDEPENDENT_RECONCILIATION');
+    assert.equal(stableJson(frozenFinal.source_snapshot),frozenFinal.source_canonical);
+    assert.equal(createHash('sha256').update(frozenFinal.pdf_bytes).digest('hex'),frozenFinal.pdf_sha256);
+    const finalText=await pdfText(frozenFinal.pdf_bytes);
+    for (const expected of ['FINAL RECEIPT','PT Issuer','Customer','Approved ADD','Approved REDUCE','560.00',
+      '535.00',receipt.id,separateReceipt.id,'not another payment']) assert.ok(finalText.includes(expected),`missing Final Receipt PDF text: ${expected}`);
+    assert.deepEqual((await q(`SELECT (SELECT count(*) FROM handyman_customer_payments WHERE transaction_id=$1)::int AS payments,
+      (SELECT count(*) FROM handyman_payment_allocations WHERE transaction_id=$1)::int AS allocations,
+      (SELECT count(*) FROM handyman_ledger_corrections WHERE transaction_id=$1)::int AS corrections,
+      (SELECT count(*) FROM handyman_tenant_payment_receipts WHERE transaction_id=$1)::int AS receipts`,[transactionId])).rows[0],factCountBefore);
+    await assert.rejects(q('UPDATE handyman_final_receipts SET pdf_bytes=$2 WHERE id=$1',[officialFinal.id,Buffer.from('bad')]),/immutable/i);
+    await assert.rejects(q('DELETE FROM handyman_final_receipts WHERE id=$1',[officialFinal.id]),/immutable/i);
+    const finalCareUser=await userService.createUser({email:`${id()}@care.test`,displayName:'Receipt Care'});
+    await grant(finalCareUser.id,['handyman.care.building']); await buildingAssignmentService.createAssignment(finalCareUser.id,{buildingId:realm.building.id});
+    const finalCareToken=await login(finalCareUser);
+    const carePdf=await api().get(`${finalReceiptPath}.pdf`).set(auth(finalCareToken));
+    assert.equal(carePdf.status,200); assert.equal(carePdf.headers['cache-control'],'private, no-store');
+    assert.equal(carePdf.headers['x-content-sha256'],frozenFinal.pdf_sha256);assert.deepEqual(carePdf.body,frozenFinal.pdf_bytes);
+    denied(await api().get(`${finalReceiptPath}.pdf`).set(auth(outsiderToken)),403);
+    denied(await api().get(`${finalReceiptPath}.pdf`).set(auth(picToken)),403);
+    denied(await api().get(`${invoicePath}/${id()}/final-receipt.pdf`).set(auth(finalCareToken)),404);
+    // Subsequent real Finance corrections are still allowed; they cannot alter
+    // the already-issued as-of PDF or be mistaken for a second issue.
+    for (const allocationId of fullAllocations) await reverseHandymanPaymentAllocation({executionScopeId:scope,allocationId,
+      reason:'Subsequent governed correction',idempotencyKey:key()},admin);
+    await reverseHandymanCustomerPayment({executionScopeId:scope,paymentId:separatePayment,
+      reason:'Subsequent governed correction',idempotencyKey:key()},admin);
+    assert.deepEqual((await api().get(`${finalReceiptPath}.pdf`).set(auth(finalCareToken))).body,frozenFinal.pdf_bytes);
+    assert.equal(data(await post(finalReceiptPath,adminToken,{}),200).id,officialFinal.id);
+
     // A later, independent ledger adjustment cannot alter the issued invoice.
     await adjustHandymanCustomerLedger({executionScopeId:scope,chargeLineId:chargeB,amount:'1.00',reason:'independent post-invoice adjustment',idempotencyKey:key()},admin);
     const after=(await q('SELECT total_amount::text,pdf_bytes,pdf_sha256,source_sha256 FROM handyman_official_invoices WHERE id=$1',[invoice.id])).rows[0];
@@ -933,6 +1012,12 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       const token=(await admitCareWorkspace(assertion,signCareWorkspaceAssertion(assertion,secret))).workspaceToken;
       const selection={propertyId:realm.property.id,tenantCompanyId:tenantId,buildingId:realm.building.id,spaceId:chain.space.id};
       const carePath=`/api/v1/handyman/care/requests/${requestId}/invoices/${invoice.id}/document.pdf`;
+      const finalCarePath=`/api/v1/handyman/care/requests/${requestId}/invoices/${invoice.id}/final-receipt.pdf`;
+      const workspaceFinal=await api().get(finalCarePath).query(selection).set(auth(token));
+      assert.equal(workspaceFinal.status,200,JSON.stringify(workspaceFinal.body));assert.deepEqual(workspaceFinal.body,frozenFinal.pdf_bytes);
+      denied(await api().get(finalCarePath).query({...selection,buildingId:siblingId}).set(auth(token)),404);
+      denied(await api().get(finalCarePath).query({...selection,tenantCompanyId:id()}).set(auth(token)),404);
+      denied(await api().get(finalCarePath).query(selection),401);
       const downloaded=await api().get(carePath).query(selection).set(auth(token));
       assert.equal(downloaded.status,200,JSON.stringify(downloaded.body)); assert.equal(downloaded.headers['content-type'],'application/pdf');
       assert.equal(downloaded.headers['x-content-sha256'],row.pdf_sha256); assert.deepEqual(downloaded.body,row.pdf_bytes);
@@ -1057,6 +1142,7 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       observedRefForDuplicate=observedRef;
       await revokeCareActorProperty({careActorId:actor.id,propertyId:realm.property.id,clientId:realm.client.id},admin);
       assert.notEqual((await api().get(carePath).query(selection).set(auth(token))).status,200);
+      assert.notEqual((await api().get(finalCarePath).query(selection).set(auth(token))).status,200);
     } finally { delete process.env[handoffIntegrationSecretEnvName(integrationCode)]; }
 
     // Exercise the upfront path with no BAST, QC, execution or fabricated Work
@@ -1085,7 +1171,7 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       const c=await proposeCustomerTaxClassification(maker,p);
       const cd=await decideCustomerTaxClassification(checkerId,{clientId:realm.client.id,requestId:r.id,classificationId:c.snapshot.id,
         version:c.snapshot.version,digest:c.digest,decision:'VERIFY',evidenceReferenceId:id()});
-      return {sid,req:r.id,command:{classification:pin(c,cd)}};
+      return {sid,req:r.id,charge,command:{classification:pin(c,cd)}};
     }
     const up=await upfront('Legitimate upfront invoice');
     assert.equal(Number((await q('SELECT count(*) n FROM handyman_bast_documents WHERE execution_scope_id=$1',[up.sid])).rows[0].n),0);
@@ -1097,6 +1183,24 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       await stale.query('SELECT revision FROM handyman_invoice_source_fences WHERE execution_scope_id=$1',[up.sid]);
       const upInvoice=data(await post(`/api/v1/handyman/execution-scopes/${up.sid}/invoices`,adminToken,up.command),201);
       assert.equal(upInvoice.totalAmount,'110.00');
+      const upFinal=`/api/v1/handyman/execution-scopes/${up.sid}/invoices/${upInvoice.id}/final-receipt`;
+      const upPayment=(await recordHandymanCustomerPayment({executionScopeId:up.sid,amount:'110.00',channel:'BANK_TRANSFER',
+        externalReference:`UP-${id()}`,idempotencyKey:key()},admin)).payment.id;
+      await confirmHandymanCustomerPayment({executionScopeId:up.sid,paymentId:upPayment,idempotencyKey:key()},verifier);
+      await allocateHandymanCustomerPayment({executionScopeId:up.sid,paymentId:upPayment,chargeLineId:up.charge,amount:'110.00',idempotencyKey:key()},admin);
+      await issueTenantPaymentReceipt(admin,{executionScopeId:up.sid,paymentId:upPayment});
+      const excess=(await recordHandymanCustomerPayment({executionScopeId:up.sid,amount:'1.00',channel:'BANK_TRANSFER',
+        externalReference:`EXCESS-${id()}`,idempotencyKey:key()},admin)).payment.id;
+      await confirmHandymanCustomerPayment({executionScopeId:up.sid,paymentId:excess,idempotencyKey:key()},verifier);
+      denied(await post(upFinal,adminToken,{}),409);
+      await reverseHandymanCustomerPayment({executionScopeId:up.sid,paymentId:excess,reason:'Duplicate receipt corrected',idempotencyKey:key()},admin);
+      await adjustHandymanCustomerLedger({executionScopeId:up.sid,chargeLineId:up.charge,amount:'1.00',reason:'Unsettled invoice correction',idempotencyKey:key()},admin);
+      const unsettled=await post(upFinal,adminToken,{});denied(unsettled,409);
+      assert.match(unsettled.body.error.message,/adjustment.*not represented/i);
+      await refundHandymanCustomerPayment({executionScopeId:up.sid,paymentId:upPayment,amount:'5.00',reason:'Refund requires reconciliation',idempotencyKey:key()},admin);
+      const refundBlocked=await post(upFinal,adminToken,{});denied(refundBlocked,409);
+      assert.match(refundBlocked.body.error.message,/Refund settlement cannot be independently established/i);
+      assert.equal((await q('SELECT count(*)::int n FROM handyman_final_receipts WHERE invoice_id=$1',[upInvoice.id])).rows[0].n,0);
       // One bank reference is unique across this Client, not merely within a
       // transaction, including concurrent recordings on two invoices.
       await assert.rejects(recordHandymanCustomerPayment({executionScopeId:up.sid,amount:'1.00',channel:'BANK_TRANSFER',
@@ -1140,6 +1244,8 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     await buildingAssignmentService.createAssignment(foreignFinance.id,{buildingId:partialRealm.building.id});
     const foreignToken=await login(foreignFinance);
     denied(await api().get(statusPath).set(auth(foreignToken)),403);
+    denied(await post(finalReceiptPath,foreignToken,{}),403);
+    denied(await api().get(`${finalReceiptPath}.pdf`).set(auth(foreignToken)),403);
     denied(await post(`${paymentBase}/${dp}/link`,foreignToken,{}),403);
     denied(await post(`${paymentBase}/observed`,foreignToken,{amount:'1.00',channel:'BANK_TRANSFER',
       externalReference:key(),idempotencyKey:key()}),403);
@@ -1182,6 +1288,7 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     const partialVersion = partialQuote.versions[0].id;
     const partialLine = (await addHandymanQuotationLine(partialVersion, { lineType: 'MATERIAL', quantity: 10, uomId: partialUom,
       currency: 'IDR', finalQuotedUnitAmount: 25, description: 'Material', taxPriceBasis: 'GROSS_INCLUSIVE' }, admin)).id;
+    await setHandymanQuotationLineWarrantyTerms(partialVersion,partialLine,{coverage:'NONE'},admin);
     await prepareHandymanTaxProfile({ quotationVersionId: partialVersion }, taxFacts(), admin);
     await issueHandymanQuotationVersion(partialVersion, { validUntil: validUntil() }, admin);
     const partialDecision = await decideHandymanQuotation(partialVersion,

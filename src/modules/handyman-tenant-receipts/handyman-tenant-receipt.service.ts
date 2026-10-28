@@ -44,7 +44,8 @@ type ReceiptSource = {
   corrections: Array<{ id: string; kind: string; sourceKind: string; sourceId: string; currency: string; amount: string; correctedByUserId: string; occurredAt: string }>;
 };
 type Stored = { id: string; client_id: string; building_id: string; tenant_company_id: string; request_id: string;
-  execution_scope_id: string; transaction_id: string; payment_id: string; issuer_profile_id: string; issued_by_user_id: string;
+  execution_scope_id: string; transaction_id: string; payment_id: string; record_event_id: string; confirmation_event_id: string;
+  issuer_profile_id: string; issued_by_user_id: string;
   issued_at: Date; source_as_of: Date; source_snapshot: ReceiptSource; source_canonical: string; source_sha256: string;
   pdf_filename: string; pdf_bytes: Buffer; pdf_size: number; pdf_sha256: string };
 
@@ -96,7 +97,8 @@ function metadata(row: Stored) {
     clientId: row.client_id, buildingId: row.building_id, issuedAt: iso(row.issued_at), sourceAsOf: iso(row.source_as_of),
     sourceChecksum: row.source_sha256, pdfChecksum: row.pdf_sha256, filename: row.pdf_filename, fileSize: row.pdf_size };
 }
-function verifyStored(row: Stored): void {
+export type TenantPaymentReceiptStored = Stored;
+export function verifyStoredTenantPaymentReceipt(row: Stored): void {
   const s = row.source_snapshot;
   if (!Buffer.isBuffer(row.pdf_bytes) || row.pdf_bytes.length !== row.pdf_size || row.pdf_bytes.length > MAX_PDF_BYTES ||
       row.pdf_bytes.subarray(0, 5).toString() !== '%PDF-' || digest(row.pdf_bytes) !== row.pdf_sha256 ||
@@ -278,7 +280,7 @@ export async function issueTenantPaymentReceipt(actorInput: string, raw: Scope) 
     await financeAuthority(tx, actor, scope, permissions, 'handyman.finance.manage');
     const existing = (await tx.query<Stored>('SELECT * FROM handyman_tenant_payment_receipts WHERE payment_id=$1 AND execution_scope_id=$2',
       [input.paymentId, input.executionScopeId])).rows[0];
-    if (existing) { verifyStored(existing); return { ...metadata(existing), replayed: true }; }
+    if (existing) { verifyStoredTenantPaymentReceipt(existing); return { ...metadata(existing), replayed: true }; }
     await requireDurablePrimary(tx);
     const source = await readSource(tx, scope, input, actor), canonical = stableJson(source), sourceHash = digest(canonical);
     const pdf = await renderReceipt(source, sourceHash);
@@ -295,7 +297,7 @@ export async function issueTenantPaymentReceipt(actorInput: string, raw: Scope) 
       input.executionScopeId, source.reference.transactionId, input.paymentId, source.payment.recordEventId,
       source.verification.confirmationEventId, source.issuer.profileId, actor, source.issuance.issuedAt, source.asOf,
       canonical, sourceHash, pdf.filename, pdf.bytes, pdf.fileSize, pdf.checksum])).rows[0];
-    if (!row) throw integrity(); verifyStored(row);
+    if (!row) throw integrity(); verifyStoredTenantPaymentReceipt(row);
     return { ...metadata(row), replayed: false };
   });
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -316,7 +318,7 @@ async function readStored(tx: PoolClient, input: Scope, binding: { clientId: str
   [input.paymentId, input.executionScopeId, binding.clientId, binding.buildingId, binding.tenantCompanyId ?? null,
     binding.requestId ?? null, binding.invoiceId ?? null])).rows[0];
   if (!row) throw notFound();
-  verifyStored(row);
+  verifyStoredTenantPaymentReceipt(row);
   return { ...metadata(row), bytes: row.pdf_bytes };
 }
 export async function downloadTenantPaymentReceipt(actorInput: string, raw: Scope) {
