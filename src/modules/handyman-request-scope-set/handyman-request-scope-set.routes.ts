@@ -3,6 +3,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { sendSuccess } from '../../shared/api-response';
 import { AppError } from '../../shared/errors';
 import { getHandymanRequestScopeSet } from './handyman-request-scope-set.service';
+import { getHandymanRequestCloseReadiness } from './handyman-request-close-readiness.service';
 
 export function createHandymanRequestScopeSetRouter(): Router {
   const router=Router();
@@ -11,6 +12,13 @@ export function createHandymanRequestScopeSetRouter(): Router {
       res.setHeader('Cache-Control','private, no-store');
       if (Object.keys(req.query).length) throw AppError.validation('Unexpected scope-set query parameters.');
       sendSuccess(res,await getHandymanRequestScopeSet(req.params.handymanRequestId,req.auth.userId));
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/requests/:handymanRequestId/close-readiness', authenticationMiddleware, async (req,res,next)=>{
+    try {
+      res.setHeader('Cache-Control','private, no-store');
+      if (Object.keys(req.query).length) throw AppError.validation('Unexpected close-readiness query parameters.');
+      sendSuccess(res,await getHandymanRequestCloseReadiness(req.params.handymanRequestId,req.auth.userId));
     } catch (error) { next(error); }
   });
   return router;

@@ -284,7 +284,8 @@ export async function issueWarrantyCertificate(actorInput: string, input: { exec
  * lines in a revised quote. Every predecessor snapshot must pin the authority
  * immediately before it in the chain. */
 async function resolveItem(tx:PoolClient,item:ManifestItem,quote:QuotationDocumentStored|null,bast:OfficialBastStored,
-  offers:Map<string,VariationOfferStored>,edges:Edge[],acceptedAt:string):Promise<Item|null> {
+  offers:Map<string,VariationOfferStored>,edges:Edge[],acceptedAt:string,
+  observeTerms?: (terms:WarrantyTerms)=>void):Promise<Item|null> {
   const unit=bast.source_snapshot.units.find(u=>u.id===item.uomId);
   if (!unit?.symbol) throw integrity();
   let terms:WarrantyTerms|null=null, description='', chain:AgreementRef[]=[];
@@ -338,6 +339,7 @@ async function resolveItem(tx:PoolClient,item:ManifestItem,quote:QuotationDocume
     chain.push({kind:'AMEND',lineId:line.id,variationId:edge.variationId,decisionId:pin.decisionEventId,
       documentId:offer.id,number:offer.document_number,version:offer.variation_version,sourceSha256:offer.source_sha256,pdfSha256:offer.pdf_sha256});
   }
+  observeTerms?.(terms);
   if (terms.coverage==='NONE') return null;
   const period=(await tx.query<{end:string;valid:boolean}>(`SELECT to_char(x.e AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "end", x.e>$1::timestamptz AS valid FROM
     (SELECT CASE WHEN $2='DURATION_DAYS' THEN $1::timestamptz + $3::integer * interval '24 hours'
@@ -371,6 +373,89 @@ async function assertCurrent(tx:Pick<PoolClient,'query'>,row:Stored):Promise<voi
       !qc || stableJson(sessionIds)!==stableJson(frozenSessionIds) || stableJson(proofIds)!==stableJson(frozenProofIds) ||
       stableJson(currentEdges)!==stableJson(row.source_snapshot.edges) || stableJson(variations)!==stableJson(pins))
     throw conflict('Certificate is historical: its accepted scope or agreed terms have changed. It must not be delivered as current.');
+}
+
+/** Read every current completed item's agreed warranty terms. Absence of a
+ * certificate is NONE only when the exact customer-approved terms say NONE.
+ * The caller has already locked and independently verified the scope/BAST. */
+export async function readScopeWarrantyCoverage(tx:PoolClient, input:{executionScopeId:string; bastId:string;
+  officialBastId:string; manifestId:string; manifestVersion:number; manifestSha256:string; verificationId:string}) {
+  const anchor=(await tx.query<{accepted_at:string;client_id:string;building_id:string;request_id:string;tenant_company_id:string;
+    offer_document_id:string|null;offer_source_sha256:string|null;offer_pdf_sha256:string|null}>(`SELECT
+    to_char(b.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS accepted_at,
+    s.client_id,s.building_id,s.handyman_request_id AS request_id,s.tenant_company_id,
+    d.offer_document_id,d.offer_source_sha256,d.offer_pdf_sha256
+    FROM handyman_execution_scopes s JOIN handyman_bast_documents b ON b.execution_scope_id=s.id AND b.client_id=s.client_id
+      AND b.id=$2 AND b.status='ACCEPTED' AND b.accepted_at IS NOT NULL
+    JOIN handyman_quotation_decisions d ON d.id=s.quotation_decision_id AND d.client_id=s.client_id
+      AND d.quotation_id=s.quotation_id AND d.quotation_version_id=s.approved_quotation_version_id
+      AND d.tenant_company_id=s.tenant_company_id AND d.decision='APPROVE'
+    WHERE s.id=$1`,[input.executionScopeId,input.bastId])).rows[0];
+  const bast=(await tx.query<OfficialBastStored>('SELECT * FROM handyman_bast_official_documents WHERE id=$1 AND bast_id=$2 AND execution_scope_id=$3',
+    [input.officialBastId,input.bastId,input.executionScopeId])).rows[0];
+  if (!anchor || !bast || !anchor.offer_document_id) throw conflict('Exact accepted BAST or agreed quotation is unavailable.');
+  verifyStoredOfficialBast(bast);
+  if (bast.completion_verification_id!==input.verificationId || bast.manifest_id!==input.manifestId ||
+      bast.manifest_version!==input.manifestVersion || bast.manifest_sha256!==input.manifestSha256) throw conflict('Warranty completion lineage is stale.');
+  const quote=(await tx.query<QuotationDocumentStored>('SELECT * FROM handyman_quotation_documents WHERE id=$1',[anchor.offer_document_id])).rows[0];
+  if (!quote) throw conflict('Approved warranty offer is unavailable.');
+  verifyStoredQuotationDocument(quote);
+  if (quote.source_sha256!==anchor.offer_source_sha256 || quote.pdf_sha256!==anchor.offer_pdf_sha256 ||
+      quote.quotation_version_id!==bast.source_snapshot.approvedQuotation.versionId || quote.client_id!==anchor.client_id ||
+      quote.request_id!==anchor.request_id || quote.source_snapshot.customer.buildingId!==anchor.building_id ||
+      quote.source_snapshot.customer.tenantCompanyId!==anchor.tenant_company_id) throw integrity();
+  const pins=bast.source_snapshot.manifest.snapshot.approvedVariations as VariationPin[];
+  const currentVariations=await handymanScopeVariationRepository.listByExecutionScope(input.executionScopeId,tx);
+  const offers=new Map<string,VariationOfferStored>();
+  for (const pin of pins) {
+    const v=currentVariations.find(x=>x.id===pin.id);
+    if (!v || v.tenantDecisionOutcome!=='APPROVED' || !['AUTHORIZED_SCOPE','EXECUTION','QC','FINAL_CHARGE_ELIGIBILITY'].includes(v.status))
+      throw conflict('Warranty variation approval is no longer current.');
+    const events=await handymanScopeVariationRepository.listEventsByVariation(v.id,tx);
+    if (!events.some(e=>e.id===pin.decisionEventId && e.eventType==='TENANT_DECISION') ||
+        !events.some(e=>e.id===pin.authorizationEventId && e.eventType==='AUTHORIZED_SCOPE' && e.actorRole==='OPERATIONS_MANAGER')) throw integrity();
+    await assertPinnedVariationApproval(tx,v,pin.approvedVersion,events);
+    const offer=(await tx.query<VariationOfferStored>('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1 AND execution_scope_id=$2',
+      [v.id,input.executionScopeId])).rows[0];
+    if (!offer) throw conflict('The agreed warranty variation offer is unavailable.');
+    const revision=events.find(e=>e.eventType==='REVISED_QUOTATION' && e.actorRole==='OPERATIONS_MANAGER');
+    const decision=events.find(e=>e.id===pin.decisionEventId);
+    const ref=revision?.metadata.offerDocument as {id?:unknown;version?:unknown;sourceSha256?:unknown;pdfSha256?:unknown} | undefined;
+    const consent=decision?.metadata.consentSnapshot as {offerDocumentId?:unknown;offerDocumentVersion?:unknown;offerPdfSha256?:unknown} | undefined;
+    if (ref?.id!==offer.id || ref.version!==offer.variation_version || ref.sourceSha256!==offer.source_sha256 || ref.pdfSha256!==offer.pdf_sha256 ||
+        consent?.offerDocumentId!==offer.id || consent.offerDocumentVersion!==offer.variation_version || consent.offerPdfSha256!==offer.pdf_sha256 ||
+        offer.client_id!==anchor.client_id || offer.request_id!==anchor.request_id || offer.variation_version!==pin.approvedVersion) throw integrity();
+    verifyStoredVariationOffer(offer); offers.set(v.id,offer);
+  }
+  const edges=await readEdges(tx,input.executionScopeId);
+  if (edges.some(e=>!pins.some(p=>p.id===e.variationId && p.decisionEventId===e.tenantDecisionEventId)))
+    throw conflict('Warranty terms have changed after the accepted completion.');
+  const covered:Item[]=[]; let none=0;
+  for (const item of bast.source_snapshot.manifest.snapshot.items) {
+    if (item.status!=='COMPLETED' || !/^(?:\d+)(?:\.\d+)?$/.test(item.actualQty) || !/[1-9]/.test(item.actualQty))
+      throw conflict('Warranty terms cannot be determined for incomplete work.');
+    let observed:WarrantyTerms|null=null;
+    const resolved=await resolveItem(tx,item,quote,bast,offers,edges,anchor.accepted_at,t=>{observed=t;});
+    if (resolved) covered.push(resolved);
+    else if (observed && (observed as WarrantyTerms).coverage==='NONE') none++;
+    else throw conflict('A completed item lacks exact agreed warranty terms or a valid contractual period.');
+  }
+  const certificates=(await tx.query<Stored>('SELECT * FROM handyman_warranty_certificates WHERE execution_scope_id=$1 ORDER BY id',
+    [input.executionScopeId])).rows;
+  if (certificates.length>1) throw conflict('Conflicting warranty certificates exist for this scope.');
+  if (!covered.length) {
+    if (certificates.length) throw conflict('A warranty certificate conflicts with the current NONE terms.');
+    return {status:'NOT_APPLICABLE' as const,certificateId:null,coveredItemCount:0,noneItemCount:none};
+  }
+  if (!certificates.length) return {status:'CERTIFICATE_REQUIRED' as const,certificateId:null,coveredItemCount:covered.length,noneItemCount:none};
+  const cert=certificates[0];
+  verifyCertificate(cert); await assertCurrent(tx,cert);
+  if (cert.client_id!==anchor.client_id || cert.building_id!==anchor.building_id || cert.request_id!==anchor.request_id ||
+      cert.tenant_company_id!==anchor.tenant_company_id || cert.bast_id!==input.bastId || cert.bast_official_id!==bast.id ||
+      cert.completion_verification_id!==input.verificationId || cert.manifest_id!==input.manifestId ||
+      cert.manifest_version!==input.manifestVersion || cert.manifest_sha256!==input.manifestSha256 ||
+      stableJson(cert.source_snapshot.items)!==stableJson(covered)) throw conflict('The certificate does not cover every exact currently agreed item.');
+  return {status:'CERTIFIED' as const,certificateId:cert.id,coveredItemCount:covered.length,noneItemCount:none};
 }
 
 /** Internal authority for claim intake and decisions. It never issues or alters a PDF. */

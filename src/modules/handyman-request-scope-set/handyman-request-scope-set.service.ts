@@ -262,18 +262,21 @@ export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, r
     scopes:members, quotationVersions, blockers, completionReadiness };
 }
 
+/** Authorized scope projection for consumers which must hold the same locks. */
+export async function readAuthorizedHandymanRequestScopeSetInTransaction(tx: PoolClient, requestInput: unknown, actorInput: string) {
+  const requestId=uuid(requestInput), actor=uuid(actorInput);
+  const request=await requestAt(tx,requestId);
+  await assertBuildingScopedResourceAccess(actor,{clientId:request.client_id,buildingId:request.building_id},tx);
+  const user=(await tx.query('SELECT status FROM users WHERE id=$1 FOR SHARE',[actor])).rows[0];
+  if (user?.status!=='ACTIVE') throw new AppError({code:ERROR_CODES.PERMISSION_DENIED,statusCode:403,message:'Active Operations authority is required.'});
+  await assertHandymanQuotationPricingAuthority({clientId:request.client_id,handymanRequestId:request.id,
+    tenantCompanyId:request.tenant_company_id,actorUserId:actor},tx);
+  return readHandymanRequestScopeSetInTransaction(tx,request);
+}
+
 /** Authenticated, exact-Building Operations read. No memberships or CLOSE are written. */
 export async function getHandymanRequestScopeSet(requestInput: unknown, actorInput: string) {
-  const requestId=uuid(requestInput), actor=uuid(actorInput);
-  return withTransaction(async tx=>{
-    const request=await requestAt(tx,requestId);
-    await assertBuildingScopedResourceAccess(actor,{clientId:request.client_id,buildingId:request.building_id},tx);
-    const user=(await tx.query('SELECT status FROM users WHERE id=$1 FOR SHARE',[actor])).rows[0];
-    if (user?.status!=='ACTIVE') throw new AppError({code:ERROR_CODES.PERMISSION_DENIED,statusCode:403,message:'Active Operations authority is required.'});
-    await assertHandymanQuotationPricingAuthority({clientId:request.client_id,handymanRequestId:request.id,
-      tenantCompanyId:request.tenant_company_id,actorUserId:actor},tx);
-    return readHandymanRequestScopeSetInTransaction(tx,request);
-  });
+  return withTransaction(tx=>readAuthorizedHandymanRequestScopeSetInTransaction(tx,requestInput,actorInput));
 }
 
 /** Future CLOSE consumers must call in their own transaction, hold the locks,

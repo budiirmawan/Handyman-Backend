@@ -163,7 +163,7 @@ async function render(source:Source,checksum:string) {
 }
 
 /** All reads below occur after the existing ledger lock, at READ COMMITTED. */
-async function reconcile(tx:PoolClient,invoice:OfficialInvoiceStored):Promise<{payments:Payment[];corrections:Correction[];settledAt:string}> {
+export async function readCurrentFinalReceiptReconciliation(tx:PoolClient,invoice:OfficialInvoiceStored):Promise<{payments:Payment[];corrections:Correction[];settledAt:string}> {
   verifyStoredOfficialInvoice(invoice);
   const refund=(await tx.query(`SELECT 1 FROM handyman_ledger_corrections WHERE transaction_id=$1 AND correction_kind='REFUND' LIMIT 1`,[invoice.transaction_id])).rowCount;
   if (refund) throw conflict('Refund settlement cannot be independently established: the existing refund correction has no outbound settlement verification.');
@@ -250,7 +250,7 @@ export async function issueFinalReceipt(actor:Actor,scopeInput:string,invoiceInp
       current_setting('synchronous_commit') AS sync_commit,pg_is_in_recovery() AS replica`)).rows[0];
     if (durable?.fsync!=='on' || durable.full_page_writes!=='on' || durable.sync_commit!=='on' || durable.replica)
       throw new AppError({code:ERROR_CODES.HANDYMAN_FINAL_RECEIPT_DURABILITY_UNAVAILABLE,statusCode:503,message:'Final Receipt requires durable primary PostgreSQL storage.'});
-    const data=await reconcile(tx,invoice);
+    const data=await readCurrentFinalReceiptReconciliation(tx,invoice);
     const sequence=(await tx.query<{number:string;issued_at:Date}>("SELECT nextval('handyman_final_receipt_number_seq')::text AS number,clock_timestamp() AS issued_at")).rows[0];
     const inv=invoice.source_snapshot, number=`FRC-${sequence.number.padStart(10,'0')}`;
     const source:Source={schema:'HANDYMAN_FINAL_RECEIPT_V1',status:'ISSUED',
