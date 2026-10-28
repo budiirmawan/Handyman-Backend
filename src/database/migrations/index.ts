@@ -1,3 +1,4 @@
+import { migration0533HandymanRequestScopeSet } from './0533_handyman_request_scope_set';
 import { migration0531HandymanFinalReceiptDelivery } from './0531_handyman_final_receipt_delivery';
 import { migration0532HandymanPaymentReceiptNumbering } from './0532_handyman_payment_receipt_numbering';
 import { migration0530HandymanFinalReceipts } from './0530_handyman_final_receipts';
@@ -1112,4 +1113,5 @@ export const migrations: readonly Migration[] = [
   migration0530HandymanFinalReceipts,
   migration0531HandymanFinalReceiptDelivery,
   migration0532HandymanPaymentReceiptNumbering,
+  migration0533HandymanRequestScopeSet,
 ];
