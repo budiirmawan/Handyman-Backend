@@ -7,7 +7,8 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import { getHandymanBmSettlementDetail, listHandymanBmSettlements,
   prepareHandymanBmSettlement, supersedeHandymanBmSettlement, approveHandymanBmSettlement,
-  recordHandymanBmSettlementPayment } from './handyman-bm-settlement.service';
+  recordHandymanBmSettlementPayment, readHandymanBmSettlementEvidence,
+  verifyHandymanBmSettlementPayment } from './handyman-bm-settlement.service';
 
 const base = '/handyman/clients/:clientId/buildings/:buildingId/bm-settlements';
 const readScope = requirePermission('handyman.finance.read');
@@ -209,6 +210,66 @@ export function createHandymanBmSettlementRouter(): Router {
           file,
         });
         res.status(result.replayed ? 200 : 201).json({ data: result });
+      } catch (error) { next(error); }
+    });
+  // CR-HM-BM-SETTLEMENT-API-01 PART 01B-4 — the ONE independent payout
+  // verification action. The handler first pulls the protected evidence as
+  // the calling verifier (readHandymanBmSettlementEvidence: exact settlement
+  // + payment, independent actor separate from creator/recorder, byte
+  // integrity, evidence-read receipt bound to this actor), then attests via
+  // verifyHandymanBmSettlementPayment with the reviewer's submitted amount,
+  // transfer reference/date, confirmed beneficiary account number and
+  // attestation — the service alone compares them against the recorded
+  // payment and inserts the single verification row. Only then does the
+  // authoritative status become SETTLED; an uploaded claim alone stays
+  // PAYMENT_RECORDED. Self-verification, duplicates, concurrency, stale
+  // settlements and cross-scope access all remain service/DB walls.
+  router.post(`${base}/:settlementId/verifications`, authenticationMiddleware,
+    requirePermission('handyman.finance.read'), requirePermission('handyman.bm_settlement.verify_payment'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        if (Object.keys(req.query).length) throw AppError.validation('No query fields are accepted.');
+        const clientId = req.params.clientId as string, buildingId = req.params.buildingId as string,
+          settlementId = req.params.settlementId as string;
+        if (!isValidUuid(clientId) || !isValidUuid(settlementId)) throw AppError.validation('Invalid settlement scope.');
+        const b = body(req.body, ['transferReference', 'amount', 'transferredAt', 'confirmedAccountNumber',
+          'attestedActualPayment', 'evidenceReference', 'evidenceReadId', 'contentSha256']);
+        const row = (await getPool().query<{ building_id: string }>(
+          'SELECT building_id FROM handyman_bm_settlements WHERE id=$1 AND client_id=$2',
+          [settlementId, clientId])).rows[0];
+        if (!row || row.building_id !== buildingId) throw settlementMissing();
+        // First call mints this verifier's evidence-read receipt (protected
+        // bytes + integrity). A retry or duplicate re-sends that receipt —
+        // the service proves its actor/payment/sha binding, so replay stays
+        // exact while a forged or foreign receipt can never verify.
+        let evidenceReadId: string, contentSha256: string;
+        if (b.evidenceReadId !== undefined || b.contentSha256 !== undefined) {
+          if (typeof b.evidenceReadId !== 'string' || !isValidUuid(b.evidenceReadId) ||
+              typeof b.contentSha256 !== 'string') {
+            throw AppError.validation('Invalid evidence receipt.');
+          }
+          evidenceReadId = b.evidenceReadId;
+          contentSha256 = b.contentSha256;
+        } else {
+          const receipt = await readHandymanBmSettlementEvidence(req.auth.userId, { clientId, settlementId });
+          evidenceReadId = receipt.evidenceReadId;
+          contentSha256 = receipt.contentSha256;
+        }
+        const result = await verifyHandymanBmSettlementPayment(req.auth.userId, {
+          clientId, settlementId, evidenceReadId, contentSha256,
+          transferReference: text(b.transferReference, 'transferReference'),
+          amount: text(b.amount, 'amount'),
+          transferredAt: text(b.transferredAt, 'transferredAt'),
+          confirmedAccountNumber: text(b.confirmedAccountNumber, 'confirmedAccountNumber'),
+          // Runtime-checked by the service (!==true is rejected there);
+          // typed as the required literal true for the input contract.
+          attestedActualPayment: b.attestedActualPayment as true,
+          evidenceReference: text(b.evidenceReference, 'evidenceReference'),
+        });
+        res.status(result.replayed ? 200 : 201).json({
+          data: { ...result, evidence: { evidenceReadId, contentSha256 } },
+        });
       } catch (error) { next(error); }
     });
   return router;
