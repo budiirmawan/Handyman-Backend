@@ -17,6 +17,7 @@ import {
   postHandymanQuotationRevisionHandler,
   postHandymanQuotationSupersedeHandler,
   putHandymanQuotationLineTaxPriceBasisHandler,
+  putHandymanQuotationLineWarrantyTermsHandler,
 } from './handyman-quotations-api.controller';
 
 /**
@@ -101,6 +102,8 @@ export function createHandymanQuotationsApiRouter(): Router {
   versionPost('/lines', postHandymanQuotationLineHandler);
   router.put('/handyman/quotation-versions/:quotationVersionId/lines/:quotationLineId/tax-price-basis',
     auth, manage, putHandymanQuotationLineTaxPriceBasisHandler);
+  router.put('/handyman/quotation-versions/:quotationVersionId/lines/:quotationLineId/warranty-terms',
+    auth, manage, putHandymanQuotationLineWarrantyTermsHandler);
   versionGet('/lines', getHandymanQuotationLinesHandler);
   versionGet('/totals', getHandymanQuotationTotalsHandler);
   versionPost('/issue', postHandymanQuotationIssueHandler);

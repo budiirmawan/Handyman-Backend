@@ -18,6 +18,8 @@ import {
   addText, blocks, exactText, verifyStoredQuotationDocument,
   type QuotationDocumentSource, type QuotationDocumentStored,
 } from '../handyman-quotations/handyman-quotation-document.service';
+import { appendWarrantyText, VARIATION_WARRANTY_PROTOCOL } from '../handyman-quotations/handyman-quotation-warranty-terms';
+import { variationWarrantyChanges, resolveWarrantyPredecessors, type VariationWarrantyChange, type WarrantyPredecessor } from './handyman-variation-warranty-terms';
 import { variationConsentSnapshot, type AddMaterialBinding } from './handyman-scope-variation-material-authority';
 import type { HandymanScopeVariationEventRecord, HandymanScopeVariationRecord } from './handyman-scope-variation.types';
 
@@ -27,6 +29,9 @@ type PriorVariation = { id: string; variationType: string; lineType: string; tit
 type Source = {
   schema: 'HANDYMAN_VARIATION_OFFER_V1'; status: 'ISSUED'; clientId: string; requestId: string; executionScopeId: string;
   priceBasisProtocol?: typeof VARIATION_PRICE_BASIS_PROTOCOL;
+  warrantyTermsProtocol?: typeof VARIATION_WARRANTY_PROTOCOL;
+  warrantyChanges?: VariationWarrantyChange[];
+  warrantyPredecessors?: WarrantyPredecessor[];
   issuance: { id: string; number: string; issuedAt: string; actorUserId: string };
   originalReference: Reference; original: QuotationDocumentSource;
   revisedReference: Reference; revised: QuotationDocumentSource;
@@ -137,8 +142,11 @@ export async function createIssuedVariationOfferDocument(
   // preserves the offered issuer, payment terms and bank rather than silently
   // substituting today's settings; VO makes the document number distinct.
   const number = `${revised.source_snapshot.settings.documentPrefix}-VO-${allocation.number.padStart(10, '0')}`;
+  const warrantyChanges = variationWarrantyChanges(revised.source_snapshot, variation.variationType, unitLine.id);
+  const warrantyPredecessors = await resolveWarrantyPredecessors(tx, variation.executionScopeId, variation.id, warrantyChanges);
   const source: Source = { schema: 'HANDYMAN_VARIATION_OFFER_V1', status: 'ISSUED', clientId: variation.clientId,
-    priceBasisProtocol: VARIATION_PRICE_BASIS_PROTOCOL,
+    priceBasisProtocol: VARIATION_PRICE_BASIS_PROTOCOL, warrantyTermsProtocol: VARIATION_WARRANTY_PROTOCOL,
+    warrantyChanges, warrantyPredecessors,
     requestId: variation.handymanRequestId, executionScopeId: variation.executionScopeId,
     issuance: { id: randomUUID(), number, issuedAt: allocation.issued_at.toISOString(), actorUserId },
     originalReference: reference(original), original: original.source_snapshot,
@@ -183,6 +191,22 @@ async function renderOffer(s: Source, sourceHash: string) {
   item('Original quotation line ID', v.targetQuotationLineId);
   item('Revised quotation line ID', v.revisedQuotationLineId);
   item('Work Order ID', v.workOrderId);
+  item('Warranty effect', 'Only listed ADD or AMEND warranty changes are proposed; other revised lines do not change previous warranties. Tenant approval and Operations authorization are required.');
+  for (const [i, change] of (s.warrantyChanges ?? []).entries()) {
+    item(`Warranty change ${i + 1}`, change.kind);
+    item('New quotation line ID', change.quotationLineId);
+    const current = s.revised.lines.find(line => line.id === change.quotationLineId);
+    item('New item', current?.description);
+    const parent = s.warrantyPredecessors?.find(p => p.quotationLineId === change.replacesQuotationLineId);
+    if (parent) {
+      item('Replaces agreed line ID', parent.quotationLineId);
+      item('Previous item', parent.description);
+      item('Previous agreement document ID', parent.documentId);
+      item('Previous agreement PDF SHA-256', parent.pdfSha256);
+      appendWarrantyText((label, value) => item(`Previous ${label}`, value), parent.warrantyTerms);
+    }
+    appendWarrantyText((label, value) => item(`Proposed ${label}`, value), change.warrantyTerms);
+  }
   if (s.previousAuthorizedVariations.length) item('Prior changes in revised total',
     s.reconciliation.mode === 'CUMULATIVE' ? 'YES' : 'NO - standalone quotation');
   for (const [i, prior] of s.previousAuthorizedVariations.entries()) {
@@ -194,7 +218,9 @@ async function renderOffer(s: Source, sourceHash: string) {
   function quotationLines(label: string, quote: QuotationDocumentSource) {
     quote.lines.forEach((line, i) => {
       item(`${label} ${i + 1}`, line.lineType);
-      item('Item', line.description); item('Quantity', `${line.quantity} ${line.unit}`);
+      item('Item', line.description); item('Quotation line ID', line.id);
+      appendWarrantyText((name, value) => item(name, value), quote.warrantyTermsProtocol ? line.warrantyTerms : null);
+      item('Quantity', `${line.quantity} ${line.unit}`);
       item('Unit price', `${line.currency} ${line.unitAmount}`);
       item('Line total', `${line.currency} ${line.total}`);
       item('Tax price basis', taxPriceBasisLabel(
@@ -240,6 +266,7 @@ async function renderOffer(s: Source, sourceHash: string) {
   addText(summary, 'Revised material subtotal', `${v.currency} ${s.revised.totals.material}`);
   addText(summary, 'Revised quoted line total', `${v.currency} ${s.reconciliation.revisedQuotedTotal}`);
   addText(summary, 'Tax note', 'Totals exclude any applicable PPN on lines marked EXCLUSIVE. Applicability is determined separately.');
+  addText(summary, 'Warranty precedence', 'Explicit warranty changes and item terms control over general warranty notes.');
   addText(summary, 'Basis precedence', 'Per-line price basis controls over general tax terms / basis per item berlaku atas ketentuan pajak umum.');
   addText(summary, 'Down payment required', s.revised.quotation.dpRequired ? 'YES' : 'NO');
   addText(summary, 'Down payment percentage', s.revised.quotation.dpPercentage);
@@ -287,7 +314,10 @@ function verifyStored(row: Stored): void {
         s.issuance.id !== row.id || s.issuance.number !== row.document_number || s.issuance.actorUserId !== row.issued_by_user_id ||
         s.issuance.issuedAt !== row.issued_at.toISOString() ||
         (s.priceBasisProtocol !== undefined && (s.priceBasisProtocol !== VARIATION_PRICE_BASIS_PROTOCOL ||
-          !s.variation.priceBasisLineId || !(HANDYMAN_TAX_PRICE_BASES as readonly string[]).includes(s.variation.taxPriceBasis ?? '')))) throw integrity();
+          !s.variation.priceBasisLineId || !(HANDYMAN_TAX_PRICE_BASES as readonly string[]).includes(s.variation.taxPriceBasis ?? ''))) ||
+        (s.warrantyTermsProtocol !== undefined && (s.warrantyTermsProtocol !== VARIATION_WARRANTY_PROTOCOL ||
+          !Array.isArray(s.warrantyChanges) || !Array.isArray(s.warrantyPredecessors) ||
+          stableJson(s.warrantyChanges) !== stableJson(variationWarrantyChanges(s.revised, s.variation.variationType, s.variation.priceBasisLineId ?? ''))))) throw integrity();
   } catch { throw integrity(); }
 }
 export { verifyStored as verifyStoredVariationOffer };
@@ -312,6 +342,12 @@ export async function requireVariationOfferForDecision(tx: PoolClient, variation
     [variation.id, variation.executionScopeId])).rows[0];
   if (!row) throw conflict('No official offer exists for this historical variation; issue a new governed variation for fresh consent.');
   verifyStored(row);
+  if (row.source_snapshot.warrantyTermsProtocol === VARIATION_WARRANTY_PROTOCOL) {
+    const predecessors = await resolveWarrantyPredecessors(tx, variation.executionScopeId, variation.id, row.source_snapshot.warrantyChanges ?? []);
+    if (stableJson(predecessors) !== stableJson(row.source_snapshot.warrantyPredecessors)) {
+      throw conflict('Warranty lineage changed after this offer; issue a new offer for fresh Tenant consent.');
+    }
+  }
   const prior = await priorAuthorizedVariations(tx, variation);
   if (stableJson(prior) !== stableJson(row.source_snapshot.previousAuthorizedVariations)) {
     throw conflict('The authorized scope changed after this offer; issue a new governed offer for fresh Tenant consent.');

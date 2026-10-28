@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { setHandymanQuotationLineWarrantyTerms } from '../handyman-quotations/handyman-quotation-warranty-terms';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
@@ -73,6 +74,8 @@ type CustomerHandymanQuotationLinePayload = Pick<
   | 'lineTotal'
   | 'currency'
   | 'taxPriceBasis'
+  | 'warrantyTerms'
+  | 'replacesQuotationLineId'
   | 'createdAt'
   | 'updatedAt'
 >;
@@ -91,6 +94,8 @@ function toCustomerQuotationLinePayload(
     lineTotal: line.lineTotal,
     currency: line.currency,
     taxPriceBasis: line.taxPriceBasis ?? null,
+    warrantyTerms: line.warrantyTerms ?? null,
+    replacesQuotationLineId: line.replacesQuotationLineId ?? null,
     createdAt: line.createdAt,
     updatedAt: line.updatedAt,
   };
@@ -356,6 +361,14 @@ export async function putHandymanQuotationLineTaxPriceBasisHandler(
       parseQuotationApiUuidParam(p(req.params.quotationVersionId), 'quotationVersionId'),
       parseQuotationApiUuidParam(p(req.params.quotationLineId), 'quotationLineId'),
       parseQuotationPriceBasisBody(req.body), actor(req)));
+  } catch (error) { next(error); }
+}
+
+export async function putHandymanQuotationLineWarrantyTermsHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(res, await setHandymanQuotationLineWarrantyTerms(
+      parseQuotationApiUuidParam(p(req.params.quotationVersionId), 'quotationVersionId'),
+      parseQuotationApiUuidParam(p(req.params.quotationLineId), 'quotationLineId'), req.body, actor(req)));
   } catch (error) { next(error); }
 }
 

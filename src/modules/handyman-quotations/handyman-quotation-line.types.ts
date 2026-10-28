@@ -8,6 +8,7 @@
  * an immutable line and inventory is never mutated from here).
  */
 
+import type { WarrantyTerms } from './handyman-quotation-warranty-terms';
 import type { HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
 
 export const HANDYMAN_QUOTATION_LINE_TYPES = ['LABOR', 'MATERIAL'] as const;
@@ -77,7 +78,7 @@ export type HandymanQuotationLineRecord = {
 export type HandymanQuotationLineServiceView = Omit<
   HandymanQuotationLineRecord,
   'createdAt' | 'updatedAt'
-> & { createdAt: string; updatedAt: string; taxPriceBasis?: HandymanTaxPriceBasis | null };
+> & { createdAt: string; updatedAt: string; taxPriceBasis?: HandymanTaxPriceBasis | null; warrantyTerms?: WarrantyTerms | null; replacesQuotationLineId?: string | null };
 
 /**
  * Caller input: the commercial facts ONLY (type, description, quantity,

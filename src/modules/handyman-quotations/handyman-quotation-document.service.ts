@@ -20,10 +20,12 @@ import { assertHandymanQuotationPricingAuthority } from './handyman-quotation-ac
 import { assertHandymanTenantDecisionActor } from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
 import { HANDYMAN_TAX_PRICE_BASES, QUOTATION_PRICE_BASIS_PROTOCOL, taxPriceBasisLabel,
   type HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
+import { QUOTATION_WARRANTY_PROTOCOL, appendWarrantyText, parseWarrantyTerms, type WarrantyTerms } from './handyman-quotation-warranty-terms';
 import type { HandymanQuotationRecord, HandymanQuotationVersionRecord } from './handyman-quotation.types';
 
 type Line = { id: string; lineType: string; description: string; quantity: string; uomId: string;
-  unit: string; unitAmount: string; total: string; currency: string; taxPriceBasis?: HandymanTaxPriceBasis };
+  unit: string; unitAmount: string; total: string; currency: string; taxPriceBasis?: HandymanTaxPriceBasis;
+  warrantyTerms?: WarrantyTerms; replacesQuotationLineId?: string | null };
 type Customer = { requestId: string; tenantCompanyId: string; tenantName: string; legalName: string | null;
   tenantPicName: string | null; buildingId: string; buildingName: string; spaceId: string | null;
   spaceName: string | null; serviceName: string | null; requestDescription: string | null };
@@ -33,6 +35,8 @@ export type QuotationDocumentSource = {
   schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1'; status: 'ISSUED'; clientId: string;
   /** Absent on historical documents; never inferred or backfilled. */
   priceBasisProtocol?: typeof QUOTATION_PRICE_BASIS_PROTOCOL;
+  /** Missing on legacy offers, which cannot establish agreed item coverage. */
+  warrantyTermsProtocol?: typeof QUOTATION_WARRANTY_PROTOCOL;
   issuance: { id: string; number: string; issuedAt: string; actorUserId: string };
   quotation: { id: string; versionId: string; versionNumber: number; validUntil: string; currency: string;
     dpRequired: boolean; dpPercentage: string | null; dpAmount: string | null; dpTermsNotes: string | null };
@@ -90,9 +94,13 @@ export async function createIssuedQuotationDocument(
   if (!version?.valid_until) throw conflict('Issued quotation source version is unavailable.');
   const lines = (await tx.query<Line>(`SELECT l.id,l.line_type AS "lineType",l.description,l.quantity::text AS quantity,
       l.uom_id AS "uomId",u.symbol AS unit,l.final_quoted_unit_amount::text AS "unitAmount",l.line_total::text AS total,l.currency,
-      b.tax_price_basis AS "taxPriceBasis"
+      b.tax_price_basis AS "taxPriceBasis",w.replaces_quotation_line_id AS "replacesQuotationLineId",
+      jsonb_build_object('coverage',w.coverage,'coveredServices',w.covered_services,'coveredMaterials',w.covered_materials,'conditions',w.conditions,'exclusions',w.exclusions,
+        'commencementRule',w.commencement_rule,'endRule',w.end_rule,'durationDays',w.duration_days,
+        'fixedEndDate',to_char(w.fixed_end_date,'YYYY-MM-DD')) AS "warrantyTerms"
     FROM handyman_quotation_lines l JOIN units_of_measure u ON u.id=l.uom_id AND u.client_id=$2
     JOIN handyman_quotation_line_price_bases b ON b.quotation_line_id=l.id AND b.quotation_version_id=l.quotation_version_id
+    JOIN handyman_quotation_line_warranty_terms w ON w.quotation_line_id=l.id AND w.quotation_version_id=l.quotation_version_id
     WHERE l.quotation_version_id=$1 ORDER BY l.created_at,l.id`, [issued.id, quotation.clientId])).rows;
   const sums = (await tx.query<{ count: string; currencies: string; currency: string | null; labor: string; material: string; total: string }>(`
     SELECT count(*)::text AS count,count(DISTINCT currency)::text AS currencies,min(currency) AS currency,
@@ -139,7 +147,7 @@ export async function createIssuedQuotationDocument(
   const documentNumber = `${settings.documentPrefix}-${allocation.number.padStart(10, '0')}`;
   if (version.valid_until.getTime() <= allocation.issued_at.getTime()) throw conflict('Quotation validity ended before document issuance.');
   const source: QuotationDocumentSource = { schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1', status: 'ISSUED', clientId: quotation.clientId,
-    priceBasisProtocol: QUOTATION_PRICE_BASIS_PROTOCOL,
+    priceBasisProtocol: QUOTATION_PRICE_BASIS_PROTOCOL, warrantyTermsProtocol: QUOTATION_WARRANTY_PROTOCOL,
     issuance: { id: randomUUID(), number: documentNumber, issuedAt: allocation.issued_at.toISOString(), actorUserId },
     quotation: { id: quotation.id, versionId: issued.id, versionNumber: issued.versionNumber,
       validUntil: version.valid_until.toISOString(), currency: sums.currency, dpRequired: version.dp_required,
@@ -200,6 +208,9 @@ async function renderQuotation(s: QuotationDocumentSource, sourceHash: string) {
     addText(rows, 'Unit price', `${line.currency} ${line.unitAmount}`);
     addText(rows, 'Line total', `${line.currency} ${line.total}`);
     addText(rows, 'Tax price basis', taxPriceBasisLabel(line.taxPriceBasis));
+    addText(rows, 'Quotation line ID', line.id);
+    appendWarrantyText((label, value) => addText(rows, label, value), line.warrantyTerms);
+    addText(rows, 'Proposed replacement of line', line.replacesQuotationLineId);
     rows.forEach(description => lineItems.push({ description }));
   });
   const scope: string[] = [];
@@ -227,6 +238,7 @@ async function renderQuotation(s: QuotationDocumentSource, sourceHash: string) {
   addText(summary, 'Material subtotal', `${s.quotation.currency} ${s.totals.material}`);
   addText(summary, 'Quoted line total', `${s.quotation.currency} ${s.totals.total}`);
   addText(summary, 'Tax note', 'Totals exclude any applicable PPN on lines marked EXCLUSIVE. Applicability is determined separately.');
+  addText(summary, 'Warranty precedence', 'The explicit per-item warranty terms control over general warranty notes.');
   addText(summary, 'Basis precedence', 'Per-line price basis controls over general tax terms / basis per item berlaku atas ketentuan pajak umum.');
   addText(summary, 'Down payment required', s.quotation.dpRequired ? 'YES' : 'NO');
   addText(summary, 'Down payment percentage', s.quotation.dpPercentage);
@@ -270,7 +282,14 @@ export function verifyStoredQuotationDocument(row: QuotationDocumentStored): voi
         s.bank.versionRowId !== row.bank_version_id || s.settings.settingsId !== row.settings_id || !s.lines.length ||
         (s.priceBasisProtocol !== undefined && (s.priceBasisProtocol !== QUOTATION_PRICE_BASIS_PROTOCOL ||
           s.lines.some(line => !(HANDYMAN_TAX_PRICE_BASES as readonly string[]).includes(line.taxPriceBasis ?? '')) ||
-          new Set(s.lines.map(line => line.id)).size !== s.lines.length))) throw integrity();
+          new Set(s.lines.map(line => line.id)).size !== s.lines.length)) ||
+        (s.warrantyTermsProtocol !== undefined && (s.warrantyTermsProtocol !== QUOTATION_WARRANTY_PROTOCOL ||
+          s.lines.some(line => {
+            if (!line.warrantyTerms) return true;
+            const parsed = parseWarrantyTerms({ ...line.warrantyTerms, replacesQuotationLineId: line.replacesQuotationLineId });
+            return stableJson(parsed.warrantyTerms) !== stableJson(line.warrantyTerms) ||
+              parsed.replacesQuotationLineId !== (line.replacesQuotationLineId ?? null);
+          })))) throw integrity();
   } catch { throw integrity(); }
 }
 export type QuotationDecisionOffer = { id: string; sourceSha256: string; pdfSha256: string };

@@ -101,3 +101,5 @@ export {
   handymanQuotationValidityInvalidError,
   handymanQuotationNotExpirableError,
 } from './handyman-quotation.errors';
+
+export { setHandymanQuotationLineWarrantyTerms } from './handyman-quotation-warranty-terms';

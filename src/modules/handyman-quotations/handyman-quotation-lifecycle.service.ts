@@ -245,6 +245,12 @@ export async function issueHandymanQuotationVersion(
       throw new AppError({ code: 'HANDYMAN_QUOTATION_PRICE_BASIS_REQUIRED', statusCode: 409,
         message: 'Explicit commercial tax price basis is required for every quotation line before issue.' });
     }
+    const warrantyCount = await tx.query<{ n: string }>(`SELECT count(*)::text AS n
+      FROM handyman_quotation_line_warranty_terms WHERE quotation_version_id=$1`, [version.id]);
+    if (Number(warrantyCount.rows[0]?.n) !== lines.length) {
+      throw new AppError({ code: 'HANDYMAN_QUOTATION_WARRANTY_TERMS_REQUIRED', statusCode: 409,
+        message: 'Explicit warranty terms, including NONE where applicable, are required for every quotation line before issue.' });
+    }
     if (!(validUntilMs > Date.now())) {
       throw handymanQuotationValidityInvalidError();
     }

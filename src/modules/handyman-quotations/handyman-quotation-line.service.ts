@@ -366,7 +366,15 @@ export async function listHandymanQuotationVersionLines(
   const bases = await getPool().query<{ quotation_line_id: string; tax_price_basis: HandymanTaxPriceBasis }>(
     'SELECT quotation_line_id,tax_price_basis FROM handyman_quotation_line_price_bases WHERE quotation_version_id=$1', [version.id]);
   const byLine = new Map(bases.rows.map(row => [row.quotation_line_id, row.tax_price_basis]));
-  return lines.map(line => ({ ...toServiceLineView(line), taxPriceBasis: byLine.get(line.id) ?? null }));
+  const warranties = await getPool().query<{ quotation_line_id: string; replaces_quotation_line_id: string | null; terms: import('./handyman-quotation-warranty-terms').WarrantyTerms }>(
+    `SELECT quotation_line_id,replaces_quotation_line_id,jsonb_build_object('coverage',coverage,'coveredServices',covered_services,'coveredMaterials',covered_materials,
+      'conditions',conditions,'exclusions',exclusions,'commencementRule',commencement_rule,'endRule',end_rule,
+      'durationDays',duration_days,'fixedEndDate',to_char(fixed_end_date,'YYYY-MM-DD')) AS terms
+      FROM handyman_quotation_line_warranty_terms WHERE quotation_version_id=$1`, [version.id]);
+  const warrantyByLine = new Map(warranties.rows.map(row => [row.quotation_line_id, row]));
+  return lines.map(line => ({ ...toServiceLineView(line), taxPriceBasis: byLine.get(line.id) ?? null,
+    warrantyTerms: warrantyByLine.get(line.id)?.terms ?? null,
+    replacesQuotationLineId: warrantyByLine.get(line.id)?.replaces_quotation_line_id ?? null }));
 }
 
 /** Bounded derived totals (F4/F5: derived, never persisted). */
