@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
@@ -161,6 +162,7 @@ async function authorityPreamble(scopeUuid: string, actorUserId: string) {
 export async function recordHandymanCustomerPayment(
   input: RecordHandymanCustomerPaymentInput,
   actorUserId: string,
+  authorize?: (tx: PoolClient) => Promise<void>,
 ): Promise<HandymanCustomerPaymentCommandResult> {
   const scopeUuid = ensureUuid(input.executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
@@ -185,6 +187,7 @@ export async function recordHandymanCustomerPayment(
 
   try {
     return await withTransaction(async (tx) => {
+      if (authorize) await authorize(tx);
       // Serialize every payment mutation of ONE ledger transaction on
       // that transaction's row: lookup-then-insert is atomic, so a
       // replayed key can never mint a second payment.
@@ -217,7 +220,21 @@ export async function recordHandymanCustomerPayment(
             'idempotency-key-bound-to-unknown-payment',
           );
         }
+        const cents = (value: string) => {
+          const [whole, fraction = ''] = value.split('.');
+          return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+        };
+        if (cents(replayed.amount) !== cents(amount) || replayed.channel !== channel ||
+            replayed.obligationStage !== obligationStage || replayed.providerName !== providerName ||
+            replayed.providerReference !== providerReference || replayed.externalReference !== externalReference) {
+          throw handymanCustomerPaymentConflictError('idempotency-key-bound-to-another-payment');
+        }
         return { payment: replayed, event: replayEvent, replayed: true };
+      }
+      if (!externalReference && (await tx.query(
+        'SELECT 1 FROM handyman_official_invoices WHERE transaction_id=$1', [transactionId],
+      )).rowCount) {
+        throw handymanCustomerPaymentConflictError('official-invoice-payment-requires-reference');
       }
       // The payment currency is the ledger transaction's own; the
       // caller cannot introduce a second currency (no FX, I8).

@@ -1,3 +1,4 @@
+import { migration0521HandymanOfficialInvoicePayments } from './0521_handyman_official_invoice_payments';
 import { migration0520HandymanOfficialInvoices } from './0520_handyman_official_invoices';
 import { migration0519HandymanQuotationPriceBasis } from './0519_handyman_quotation_price_basis';
 import { migration0518HandymanInclusiveCustomerTax } from './0518_handyman_inclusive_customer_tax';
@@ -1088,4 +1089,5 @@ export const migrations: readonly Migration[] = [
   migration0518HandymanInclusiveCustomerTax,
   migration0519HandymanQuotationPriceBasis,
   migration0520HandymanOfficialInvoices,
+  migration0521HandymanOfficialInvoicePayments,
 ];

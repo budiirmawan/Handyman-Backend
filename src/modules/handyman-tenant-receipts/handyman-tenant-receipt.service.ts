@@ -195,7 +195,8 @@ async function readSource(tx: PoolClient, scope: ScopeRow, input: Scope, actor: 
     to_char(p.decided_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS decided_at_exact,
     t.quotation_version_id, s.handyman_request_id AS request_id,
     s.tenant_company_id,s.space_id,tc.tenant_name,tc.legal_name,b.name AS building_name,b.code AS building_code,
-    i.id AS invoice_id,i.invoice_number,i.status AS invoice_status
+    COALESCE(oi.id,i.id) AS invoice_id, COALESCE(oi.document_number,i.invoice_number) AS invoice_number,
+    CASE WHEN oi.id IS NOT NULL THEN 'ISSUED' ELSE i.status END AS invoice_status
     FROM handyman_customer_payments p JOIN handyman_customer_transactions t ON t.id=p.transaction_id AND t.client_id=p.client_id
     JOIN handyman_execution_scopes s ON s.id=t.execution_scope_id AND s.client_id=t.client_id
     JOIN handyman_service_requests r ON r.id=s.handyman_request_id AND r.client_id=s.client_id AND r.building_id=s.building_id
@@ -205,6 +206,10 @@ async function readSource(tx: PoolClient, scope: ScopeRow, input: Scope, actor: 
     LEFT JOIN tenant_invoices i ON i.handyman_execution_scope_id=s.id AND i.client_id=s.client_id
       AND i.tenant_company_id=s.tenant_company_id AND i.building_id=s.building_id
       AND i.space_id IS NOT DISTINCT FROM s.space_id AND i.currency_code=t.currency
+    LEFT JOIN handyman_official_invoice_payment_links link ON link.payment_id=p.id
+    LEFT JOIN handyman_official_invoices oi ON oi.id=link.invoice_id AND oi.execution_scope_id=s.id
+      AND oi.transaction_id=t.id AND oi.client_id=s.client_id AND oi.request_id=s.handyman_request_id
+      AND oi.tenant_company_id=s.tenant_company_id AND oi.building_id=s.building_id AND oi.currency=t.currency
     WHERE p.id=$1 AND t.id=$2 AND s.id=$3 AND s.client_id=$4 AND s.building_id=$5`,
   [input.paymentId, anchor.id, input.executionScopeId, scope.client_id, scope.building_id])).rows[0];
   if (!p) throw AppError.notFound('Payment not found in this execution scope.');

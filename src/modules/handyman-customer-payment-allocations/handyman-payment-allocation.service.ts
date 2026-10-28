@@ -226,7 +226,7 @@ export async function allocateHandymanCustomerPayment(
       FROM handyman_charge_lines l WHERE l.id=$1 AND EXISTS
         (SELECT 1 FROM handyman_reduce_financial_corrections b WHERE b.charge_line_id=l.id)`,
     [chargeLineUuid]);
-    const allocationChargeAmount = reduced.rows[0]?.amount ?? String(chargeLine.amount);
+    let allocationChargeAmount = reduced.rows[0]?.amount ?? String(chargeLine.amount);
 
     // Net applied basis (CR-HM-E2E-LIFECYCLE-01 repair): allocation
     // facts are immutable, but a PART 05 ALLOCATION REVERSAL negates
@@ -278,6 +278,22 @@ export async function allocateHandymanCustomerPayment(
         ),
         replayed: true,
       };
+    }
+
+    // Official inclusive invoices use a separate immutable source, never the
+    // generic invoice table. Pre-invoice payments must first be explicitly
+    // linked by Finance; the link itself does not verify or allocate funds.
+    const official = (await tx.query<{ linked: boolean; gross: string | null }>(`SELECT
+      EXISTS(SELECT 1 FROM handyman_official_invoice_payment_links l WHERE l.invoice_id=i.id AND l.payment_id=$2) AS linked,
+      (SELECT x->>'grossAmount' FROM jsonb_array_elements(i.source_snapshot#>'{calculation,commercialSource,lines}') x
+        WHERE x->>'chargeLineId'=$3::text) AS gross
+      FROM handyman_official_invoices i WHERE i.transaction_id=$1`,
+    [transaction.id, paymentUuid, chargeLineUuid])).rows[0];
+    if (official) {
+      if (!official.linked || official.gross === null) {
+        throw handymanPaymentAllocationConflictError('payment-or-charge-not-linked-to-official-invoice');
+      }
+      if (toCents(official.gross) < toCents(allocationChargeAmount)) allocationChargeAmount = official.gross;
     }
 
     // New Handyman invoice-bound payments may be allocated only through
@@ -359,7 +375,7 @@ export async function allocateHandymanCustomerPayment(
           'exceeds-payment-unallocated-amount',
         );
       }
-      if (/allocation exceeds the charge line amount|Allocation exceeds the corrected REDUCE charge line/.test(message)) {
+      if (/allocation exceeds the charge line amount|Allocation exceeds the corrected REDUCE charge line|Allocation exceeds the official invoice net charge line/.test(message)) {
         throw handymanPaymentAllocationConflictError(
           'exceeds-charge-line-outstanding-amount',
         );

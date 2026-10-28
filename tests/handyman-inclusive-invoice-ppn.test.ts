@@ -59,12 +59,13 @@ import { updateHandymanDocumentIssuerProfile, updateHandymanDocumentSettings,
 import { composeHandymanChargeLine, openHandymanCustomerTransaction } from '../src/modules/handyman-customer-transactions';
 import { recordHandymanCustomerPayment, confirmHandymanCustomerPayment } from '../src/modules/handyman-customer-payments';
 import { allocateHandymanCustomerPayment, summarizeHandymanPaymentAllocations } from '../src/modules/handyman-customer-payment-allocations';
-import { adjustHandymanCustomerLedger } from '../src/modules/handyman-customer-ledger-corrections';
+import { adjustHandymanCustomerLedger, refundHandymanCustomerPayment, reverseHandymanCustomerPayment,
+  reverseHandymanPaymentAllocation } from '../src/modules/handyman-customer-ledger-corrections';
 import { readHandymanLedgerTransactionAt, readHandymanLedgerClientBasisAt } from '../src/modules/handyman-customer-ledger-read';
 import { issueTenantPaymentReceipt, downloadTenantPaymentReceipt } from '../src/modules/handyman-tenant-receipts/handyman-tenant-receipt.service';
 import { tenantInvoiceRepository } from '../src/modules/tenant-invoices';
 
-import { prepareHandymanTaxProfile } from '../src/modules/handyman-customer-transactions/handyman-financial-tax.service';
+import { prepareHandymanTaxProfile, reconcileHandymanPayment } from '../src/modules/handyman-customer-transactions/handyman-financial-tax.service';
 import { proposeHandymanBuyerBinding, decideHandymanBuyerBinding } from '../src/modules/handyman-buyer-binding';
 import { captureHandymanTaxIdentity, submitHandymanTaxIdentityForApproval, decideHandymanTaxIdentityApproval } from '../src/modules/handyman-tax-identity';
 import { createHandymanTaxRule, submitHandymanTaxRule, decideHandymanTaxRule } from '../src/modules/handyman-tax-rules';
@@ -843,6 +844,8 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       obligationStage:'DP',externalReference:key(),idempotencyKey:key()},admin)).payment.id;
     await confirmHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,idempotencyKey:key()},verifier);
     await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,chargeLineId:chargeLabor,amount:'10.00',idempotencyKey:key()},admin);
+    const noReference=(await recordHandymanCustomerPayment({executionScopeId:scope,amount:'3.00',channel:'BANK_TRANSFER',
+      obligationStage:'DP',idempotencyKey:key()},admin)).payment.id;
     const receipt=await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp});
     const receiptBeforeInvoice=(await downloadTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp})).bytes;
     assert.ok(receipt.id);
@@ -878,7 +881,36 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     const laterGeneric=await genericDraft();
     await assert.rejects(q('UPDATE tenant_invoices SET handyman_execution_scope_id=$2 WHERE id=$1',[laterGeneric.id,scope]),/already has an invoice/);
     assert.equal((await q('SELECT handyman_execution_scope_id FROM tenant_invoices WHERE id=$1',[laterGeneric.id])).rows[0].handyman_execution_scope_id,null);
+    // The already-confirmed pre-invoice DP is never invented or counted twice:
+    // Finance explicitly links its existing immutable payment and allocations.
+    const paymentBase=`${invoicePath}/${invoice.id}/payments`, statusPath=`${invoicePath}/${invoice.id}/payment-status`;
+    const getStatus=async()=>data(await api().get(statusPath).set(auth(adminToken)));
+    let paymentStatus=await getStatus();
+    assert.equal(paymentStatus.status,'RECONCILIATION_REQUIRED');
+    assert.equal(paymentStatus.appliedAmount,'0.00'); assert.equal(paymentStatus.outstandingAmount,'560.00');
+    assert.equal(paymentStatus.unlinkedAllocationAmount,'10.00'); assert.equal(paymentStatus.unlinkedVerifiedAmount,'25.00');
+    await assert.rejects(allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,chargeLineId:chargeLabor,
+      amount:'15.00',idempotencyKey:key()},admin));
+    denied(await post(`${paymentBase}/${dp}/link`,picToken,{}),403);
+    denied(await post(`${paymentBase}/${dp}/link`,outsiderToken,{}),403);
+    denied(await post(`${invoicePath}/${id()}/payments/${dp}/link`,adminToken,{}),404);
+    assert.equal(data(await post(`${paymentBase}/${dp}/link`,adminToken,{}),201).replayed,false);
+    assert.equal(data(await post(`${paymentBase}/${dp}/link`,adminToken,{}),200).replayed,true);
+    // A historic claim without any reference is not fabricated into a link;
+    // a separately confirmed, actual Finance bank reconciliation supplies it.
+    denied(await post(`${paymentBase}/${noReference}/link`,adminToken,{}),409);
+    await confirmHandymanCustomerPayment({executionScopeId:scope,paymentId:noReference,idempotencyKey:key()},verifier);
+    await reconcileHandymanPayment(scope,noReference,{bankReference:`LEGACY-${id()}`,
+      actualReceivedAt:new Date(Date.now()-5000).toISOString(),idempotencyKey:key()},verifier);
+    data(await post(`${paymentBase}/${noReference}/link`,adminToken,{}),201);
+    await reverseHandymanCustomerPayment({executionScopeId:scope,paymentId:noReference,
+      reason:'Independent correction',idempotencyKey:key()},admin);
+    paymentStatus=await getStatus();
+    assert.equal(paymentStatus.appliedAmount,'10.00'); assert.equal(paymentStatus.outstandingAmount,'550.00');
+    assert.equal(paymentStatus.verifiedReceivedAmount,'25.00'); assert.equal(paymentStatus.unallocatedVerifiedAmount,'15.00');
     await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,chargeLineId:chargeLabor,amount:'15.00',idempotencyKey:key()},admin);
+    paymentStatus=await getStatus(); assert.equal(paymentStatus.appliedAmount,'25.00'); assert.equal(paymentStatus.outstandingAmount,'535.00');
+    await assert.rejects(q('UPDATE handyman_official_invoice_payment_links SET invoice_id=$2 WHERE payment_id=$1',[dp,invoice.id]),/immutable/i);
     // A later, independent ledger adjustment cannot alter the issued invoice.
     await adjustHandymanCustomerLedger({executionScopeId:scope,chargeLineId:chargeB,amount:'1.00',reason:'independent post-invoice adjustment',idempotencyKey:key()},admin);
     const after=(await q('SELECT total_amount::text,pdf_bytes,pdf_sha256,source_sha256 FROM handyman_official_invoices WHERE id=$1',[invoice.id])).rows[0];
@@ -886,6 +918,7 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     assert.deepEqual((await downloadTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp})).bytes,receiptBeforeInvoice);
     await assert.rejects(q('TRUNCATE handyman_invoice_scope_claims'),/immutable/i);
 
+    let observedRefForDuplicate = '';
     const integrationCode=`INVOICE_${id().slice(0,8).toUpperCase()}`, secret='test-scoped-care-invoice-workspace-secret';
     try {
       const integration=await handoffRuntimeRepository.createIntegration({integrationCode,displayName:'Invoice Care'});
@@ -907,9 +940,121 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       denied(await api().get(carePath).query({...selection,tenantCompanyId:id()}).set(auth(token)),404);
       denied(await api().get(`/api/v1/handyman/care/requests/${id()}/invoices/${invoice.id}/document.pdf`).query(selection).set(auth(token)),404);
       denied(await api().get(carePath).query(selection),401);
-      const view=data(await api().get(`/api/v1/handyman/care/requests/${requestId}/projection`).query(selection).set(auth(token)));
+      let view=data(await api().get(`/api/v1/handyman/care/requests/${requestId}/projection`).query(selection).set(auth(token)));
       assert.equal(view.invoicePayment.officialInvoice.id,invoice.id); assert.equal(view.invoicePayment.officialInvoice.totalAmount,'560.00');
-      assert.equal(view.invoicePayment.paymentStatus,null);
+      assert.equal(view.invoicePayment.paymentStatus.appliedAmount,'25.00');
+      assert.equal(view.invoicePayment.paymentStatus.outstandingAmount,'535.00');
+
+      // A real Building Care user reports an installment; the separate Care
+      // workspace actor attaches existing evidence without impersonating a user.
+      const careUser=await userService.createUser({email:`${id()}@care.test`,displayName:'Building Care'});
+      await grant(careUser.id,['handyman.care.building']);
+      await buildingAssignmentService.createAssignment(careUser.id,{buildingId:realm.building.id});
+      const careUserToken=await login(careUser);
+      const claimRef=`CLAIM-${id()}`, claimKey=key();
+      const careReport=`/api/v1/handyman/care/buildings/${realm.building.id}/requests/${requestId}/payments`;
+      const claimBody={amount:'70.00',channel:'BANK_TRANSFER',obligationStage:'TERMIN',externalReference:claimRef,idempotencyKey:claimKey};
+      const claim=data(await post(careReport,careUserToken,claimBody),201).payment;
+      assert.equal(claim.status,'PENDING'); assert.equal(claim.recordedByUserId,careUser.id);
+      assert.equal((await q('SELECT invoice_id FROM handyman_official_invoice_payment_links WHERE payment_id=$1',[claim.id])).rows[0].invoice_id,invoice.id);
+      assert.equal(data(await post(careReport,careUserToken,claimBody),200).payment.id,claim.id);
+      denied(await post(careReport,careUserToken,{...claimBody,amount:'71.00'}),409);
+      denied(await post(careReport,careUserToken,{...claimBody,externalReference:null,idempotencyKey:key()}),409);
+      denied(await post(`${base()}/customer-payments/${claim.id}/confirm`,careUserToken,{idempotencyKey:key()}),403);
+      denied(await post(`${base()}/customer-payments/${claim.id}/confirm`,picToken,{idempotencyKey:key()}),403);
+      await assert.rejects(allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:claim.id,
+        chargeLineId:chargeA,amount:'70.00',idempotencyKey:key()},admin));
+      await assert.rejects(issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:claim.id}));
+      const proofPath=`/api/v1/handyman/care/requests/${requestId}/invoices/${invoice.id}/payments/${claim.id}/proof`;
+      const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+      const tenantClaim=data(await post(`${base()}/customer-payments`,picToken,{amount:'5.00',channel:'BANK_TRANSFER',
+        obligationStage:'DP',externalReference:`TENANT-${id()}`,idempotencyKey:key()})).payment;
+      const tenantProof=await api().post(`${base()}/customer-payments/${tenantClaim.id}/payment-proof`).set(auth(picToken))
+        .field('evidenceType','PHOTO').attach('file',png,{filename:'tenant-transfer.png',contentType:'image/png'});
+      data(tenantProof,201);
+      assert.equal((await q('SELECT status FROM handyman_customer_payments WHERE id=$1',[tenantClaim.id])).rows[0].status,'PENDING');
+      assert.equal((await q('SELECT invoice_id FROM handyman_official_invoice_payment_links WHERE payment_id=$1',[tenantClaim.id])).rows[0].invoice_id,invoice.id);
+      const proof=await api().post(proofPath).query(selection).set(auth(token)).field('evidenceType','PHOTO')
+        .attach('file',png,{filename:'transfer.png',contentType:'image/png'});
+      const proofData=data(proof,201); assert.equal(proofData.proof.executionId,claim.id); assert.equal(proofData.proof.submittedByUserId,null);
+      const proofReplay=await api().post(proofPath).query(selection).set(auth(token)).field('evidenceType','PHOTO')
+        .attach('file',png,{filename:'transfer.png',contentType:'image/png'});
+      assert.equal(data(proofReplay,200).replayed,true);
+      denied(await api().post(proofPath.replace(invoice.id,id())).query(selection).set(auth(token)).field('evidenceType','PHOTO')
+        .attach('file',png,{filename:'transfer.png',contentType:'image/png'}),404);
+      assert.equal((await q('SELECT status FROM handyman_customer_payments WHERE id=$1',[claim.id])).rows[0].status,'PENDING');
+      view=data(await api().get(`/api/v1/handyman/care/requests/${requestId}/projection`).query(selection).set(auth(token)));
+      const projectedClaim=view.invoicePayment.payments.find((p:any)=>p.id===claim.id);
+      assert.equal(projectedClaim.invoiceId,invoice.id); assert.equal(projectedClaim.verificationStatus,'PENDING_VERIFICATION');
+      assert.equal(projectedClaim.allocatedToInvoice,'0.00'); assert.equal(view.invoicePayment.paymentStatus.outstandingAmount,'535.00');
+      const financeProof=await api().get(`${base()}/customer-payments/${claim.id}/payment-proof/content`).set(auth(adminToken));
+      assert.equal(financeProof.status,200); assert.deepEqual(financeProof.body,png);
+      data(await post(`${base()}/customer-payments/${claim.id}/confirm`,adminToken,{idempotencyKey:key()}));
+      const claimAllocation=await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:claim.id,
+        chargeLineId:chargeA,amount:'70.00',idempotencyKey:key()},admin);
+      assert.ok(claimAllocation.allocation.id);
+      const claimReceipt=await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:claim.id});
+      assert.equal((await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:claim.id})).id,claimReceipt.id);
+      const claimSource=(await q('SELECT source_snapshot FROM handyman_tenant_payment_receipts WHERE payment_id=$1',[claim.id])).rows[0].source_snapshot;
+      assert.equal(claimSource.reference.invoice.id,invoice.id); assert.equal(claimSource.reference.invoice.number,invoice.number);
+      const careReceipt=await api().get(proofPath.replace('/proof','/receipt.pdf')).query(selection).set(auth(token));
+      assert.equal(careReceipt.status,200,JSON.stringify(careReceipt.body));
+      const oldSource=(await q('SELECT source_snapshot FROM handyman_tenant_payment_receipts WHERE payment_id=$1',[dp])).rows[0].source_snapshot;
+      assert.equal(oldSource.reference.invoice,null); // issued before the invoice; never relabeled
+      paymentStatus=await getStatus(); assert.equal(paymentStatus.appliedAmount,'95.00'); assert.equal(paymentStatus.outstandingAmount,'465.00');
+
+      // Independently observed Finance bank receipt: no proof upload is needed,
+      // and reporting it neither confirms, allocates, nor issues a receipt.
+      const observedRef=`BANK-${id()}`, observedKey=key();
+      const observedBody={amount:'500.00',channel:'BANK_TRANSFER',obligationStage:'PELUNASAN',externalReference:observedRef,idempotencyKey:observedKey};
+      denied(await post(`${paymentBase}/observed`,picToken,observedBody),403);
+      denied(await post(`${paymentBase}/observed`,outsiderToken,observedBody),403);
+      const observed=data(await post(`${paymentBase}/observed`,adminToken,observedBody),201);
+      const finalPayment=observed.payment.id as string; assert.equal(observed.verificationStatus,'PENDING_VERIFICATION');
+      assert.equal((await q("SELECT count(*) n FROM evidence_submissions WHERE execution_type='HANDYMAN_CUSTOMER_PAYMENT' AND execution_id=$1",[finalPayment])).rows[0].n,'0');
+      assert.equal((await q('SELECT count(*) n FROM handyman_tenant_payment_receipts WHERE payment_id=$1',[finalPayment])).rows[0].n,'0');
+      denied(await post(`${paymentBase}/observed`,adminToken,{...observedBody,idempotencyKey:key(),externalReference:` ${observedRef.toLowerCase()} `}),409);
+      denied(await post(`${paymentBase}/observed`,adminToken,{...observedBody,amount:'501.00'}),409);
+      data(await post(`${base()}/customer-payments/${finalPayment}/confirm`,adminToken,{idempotencyKey:key()}));
+      await assert.rejects(issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:finalPayment}));
+      await reconcileHandymanPayment(scope,finalPayment,{bankReference:observedRef,actualReceivedAt:new Date(Date.now()-5000).toISOString(),idempotencyKey:key()},verifier);
+      paymentStatus=await getStatus(); assert.equal(paymentStatus.status,'EXCESS_FUNDS');
+      assert.equal(paymentStatus.verifiedReceivedAmount,'595.00'); assert.equal(paymentStatus.excessFundsAmount,'35.00');
+      const staleAllocation=await pool.connect();
+      try {
+        await staleAllocation.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+        await assert.rejects(staleAllocation.query(`INSERT INTO handyman_payment_allocations
+          (id,client_id,transaction_id,payment_id,charge_line_id,line_kind,currency,amount,allocated_by_user_id,idempotency_key)
+          VALUES($1,$2,$3,$4,$5,'LABOR','IDR',1,$6,$7)`,[id(),realm.client.id,transactionId,finalPayment,chargeLabor,admin,key()]),
+        /READ COMMITTED/);
+      } finally { await staleAllocation.query('ROLLBACK'); staleAllocation.release(); }
+      const laborKey=key();
+      const laborAllocation=await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:finalPayment,
+        chargeLineId:chargeLabor,amount:'75.00',idempotencyKey:laborKey},admin);
+      assert.equal((await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:finalPayment,
+        chargeLineId:chargeLabor,amount:'75.00',idempotencyKey:laborKey},admin)).allocation.id,laborAllocation.allocation.id);
+      await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:finalPayment,chargeLineId:chargeA,amount:'80.00',idempotencyKey:key()},admin);
+      await assert.rejects(allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:finalPayment,chargeLineId:chargeA,amount:'1.00',idempotencyKey:key()},admin));
+      const allocationRace=await Promise.allSettled([0,1].map(()=>allocateHandymanCustomerPayment({executionScopeId:scope,
+        paymentId:finalPayment,chargeLineId:chargeB,amount:'200.00',idempotencyKey:key()},admin)));
+      assert.equal(allocationRace.filter(r=>r.status==='fulfilled').length,1);
+      assert.equal(allocationRace.filter(r=>r.status==='rejected').length,1);
+      const addCharge=result.commercialSource.lines.find((l:any)=>l.addVariationId===add)!.chargeLineId;
+      await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:finalPayment,chargeLineId:addCharge,amount:'110.00',idempotencyKey:key()},admin);
+      paymentStatus=await getStatus(); assert.equal(paymentStatus.appliedAmount,'560.00'); assert.equal(paymentStatus.outstandingAmount,'0.00');
+      assert.equal(paymentStatus.unallocatedVerifiedAmount,'35.00'); assert.equal(paymentStatus.status,'EXCESS_FUNDS');
+      const finalReceipt=await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:finalPayment});
+      const finalSource=(await q('SELECT source_snapshot FROM handyman_tenant_payment_receipts WHERE id=$1',[finalReceipt.id])).rows[0].source_snapshot;
+      assert.equal(finalSource.reference.invoice.id,invoice.id); assert.equal(finalSource.verification.basis,'INDEPENDENT_RECONCILIATION');
+      await refundHandymanCustomerPayment({executionScopeId:scope,paymentId:claim.id,amount:'5.00',reason:'Corrected receipt',idempotencyKey:key()},admin);
+      paymentStatus=await getStatus(); assert.equal(paymentStatus.appliedAmount,'555.00'); assert.equal(paymentStatus.outstandingAmount,'5.00');
+      assert.equal(paymentStatus.excessFundsAmount,'30.00');
+      await reverseHandymanPaymentAllocation({executionScopeId:scope,allocationId:laborAllocation.allocation.id,reason:'Correction',idempotencyKey:key()},admin);
+      paymentStatus=await getStatus(); assert.equal(paymentStatus.appliedAmount,'480.00'); assert.equal(paymentStatus.outstandingAmount,'80.00');
+      view=data(await api().get(`/api/v1/handyman/care/requests/${requestId}/projection`).query(selection).set(auth(token)));
+      assert.equal(view.invoicePayment.paymentStatus.outstandingAmount,'80.00'); assert.equal(view.invoicePayment.paymentStatus.excessFundsAmount,'30.00');
+      // Remember the immutable reference for a second scope in this Client.
+      observedRefForDuplicate=observedRef;
       await revokeCareActorProperty({careActorId:actor.id,propertyId:realm.property.id,clientId:realm.client.id},admin);
       assert.notEqual((await api().get(carePath).query(selection).set(auth(token))).status,200);
     } finally { delete process.env[handoffIntegrationSecretEnvName(integrationCode)]; }
@@ -952,6 +1097,17 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       await stale.query('SELECT revision FROM handyman_invoice_source_fences WHERE execution_scope_id=$1',[up.sid]);
       const upInvoice=data(await post(`/api/v1/handyman/execution-scopes/${up.sid}/invoices`,adminToken,up.command),201);
       assert.equal(upInvoice.totalAmount,'110.00');
+      // One bank reference is unique across this Client, not merely within a
+      // transaction, including concurrent recordings on two invoices.
+      await assert.rejects(recordHandymanCustomerPayment({executionScopeId:up.sid,amount:'1.00',channel:'BANK_TRANSFER',
+        externalReference:observedRefForDuplicate.toLowerCase(),idempotencyKey:key()},admin));
+      const racingRef=`RACE-${id()}`;
+      const raced=await Promise.allSettled([scope,up.sid].map(executionScopeId=>recordHandymanCustomerPayment({executionScopeId,
+        amount:'1.00',channel:'BANK_TRANSFER',externalReference:racingRef,idempotencyKey:key()},admin)));
+      assert.equal(raced.filter(r=>r.status==='fulfilled').length,1);
+      assert.equal(raced.filter(r=>r.status==='rejected').length,1);
+      assert.equal((await q('SELECT count(*) n FROM handyman_payment_reference_claims WHERE client_id=$1 AND reference_key=$2',
+        [realm.client.id,racingRef.toLowerCase()])).rows[0].n,'1');
       const offeredUnit=(await q('SELECT source_snapshot FROM handyman_official_invoices WHERE id=$1',[upInvoice.id])).rows[0];
       assert.equal(offeredUnit.source_snapshot.lineDetails[0].unit,'pc');
       await assert.rejects(stale.query('UPDATE handyman_invoice_source_fences SET revision=revision+1 WHERE execution_scope_id=$1',[up.sid]),
@@ -979,6 +1135,14 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     // usage and an explicitly governed pricing mode, on another Client. Its
     // legitimate ledger amount is not enough to infer an inclusive tax basis.
     const partialRealm = await realmFixture('Partial charge'); const partialChain = await locationChain(partialRealm);
+    const foreignFinance=await userService.createUser({email:`${id()}@foreign.test`,displayName:'Other Client Finance'});
+    await grant(foreignFinance.id,['handyman.finance.manage','handyman.finance.read']);
+    await buildingAssignmentService.createAssignment(foreignFinance.id,{buildingId:partialRealm.building.id});
+    const foreignToken=await login(foreignFinance);
+    denied(await api().get(statusPath).set(auth(foreignToken)),403);
+    denied(await post(`${paymentBase}/${dp}/link`,foreignToken,{}),403);
+    denied(await post(`${paymentBase}/observed`,foreignToken,{amount:'1.00',channel:'BANK_TRANSFER',
+      externalReference:key(),idempotencyKey:key()}),403);
     await clientMonetaryContextService.setClientMonetaryContext({ clientId: partialRealm.client.id, baseCurrencyCode: 'IDR',
       defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
     await updateHandymanDocumentIssuerProfile({ clientId: partialRealm.client.id, expectedVersion: null, legalName: 'PT Partial',

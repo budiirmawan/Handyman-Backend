@@ -392,7 +392,22 @@ async function readOperationalProjection(
              WHERE i.handyman_execution_scope_id = s."executionScopeId"
                AND i.client_id = s."clientId"
              LIMIT 1),
-          'paymentStatus', (
+          'paymentStatus', COALESCE((
+            SELECT jsonb_build_object(
+              'status', v.status, 'invoiceTotal', v.invoice_total::text,
+              'appliedAmount', v.applied_amount::text, 'outstandingAmount', v.outstanding_amount::text,
+              'verifiedReceivedAmount', v.verified_received_amount::text,
+              'unallocatedVerifiedAmount', v.unallocated_verified_amount::text,
+              'excessFundsAmount', v.excess_funds_amount::text,
+              'unlinkedAllocationAmount', v.unlinked_allocation_amount::text,
+              'unlinkedVerifiedAmount', v.unlinked_verified_amount::text,
+              'unlinkedVerifiedCount', v.unlinked_verified_count,
+              'currencyCode', v.currency, 'evaluatedAt', statement_timestamp())
+            FROM handyman_official_invoice_payment_status v JOIN handyman_official_invoices oi ON oi.id=v.invoice_id
+            WHERE oi.execution_scope_id=s."executionScopeId" AND v.client_id=s."clientId"
+              AND v.building_id=s."buildingId" AND v.tenant_company_id=s."tenantCompanyId"
+              AND oi.request_id=s."requestId" LIMIT 1
+          ), (
             SELECT jsonb_build_object(
               'status', CASE
                 WHEN i.status = 'CANCELLED' THEN 'CANCELLED'
@@ -426,10 +441,14 @@ async function readOperationalProjection(
               ) a ON TRUE
              WHERE i.handyman_execution_scope_id = s."executionScopeId"
                AND i.client_id = s."clientId"
-             LIMIT 1),
+             LIMIT 1)),
           'payments', COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
-              'id', p.id, 'status', p.status, 'amount', p.amount::numeric(18,2)::text,
+              'id', p.id, 'status', p.status,
+              'verificationStatus', CASE WHEN p.status='PENDING' THEN 'PENDING_VERIFICATION' ELSE p.status END,
+              'invoiceId', (SELECT l.invoice_id FROM handyman_official_invoice_payment_links l WHERE l.payment_id=p.id),
+              'obligationStage', p.obligation_stage, 'externalReference', p.external_reference,
+              'amount', p.amount::numeric(18,2)::text,
               'currency', p.currency, 'channel', p.channel, 'receivedAt', p.received_at,
               'allocatedToInvoice', COALESCE(a.applied, 0)::numeric(18,2)::text,
               'proofs', COALESCE((
@@ -453,18 +472,27 @@ async function readOperationalProjection(
                        AND client_id = s."clientId"
                      ORDER BY received_at DESC, id DESC LIMIT 50) p
               LEFT JOIN LATERAL (
-                SELECT COALESCE(SUM(a.amount) FILTER (WHERE rev.source_allocation_id IS NULL), 0) AS applied
+                SELECT GREATEST(COALESCE(SUM(a.amount) FILTER (WHERE rev.source_allocation_id IS NULL
+                         AND p.status='CONFIRMED'), 0) - CASE WHEN EXISTS
+                       (SELECT 1 FROM handyman_official_invoice_payment_links l WHERE l.payment_id=p.id)
+                     THEN COALESCE((SELECT sum(c.amount) FROM handyman_ledger_corrections c
+                       WHERE c.correction_kind='REFUND' AND c.source_payment_id=p.id),0) ELSE 0 END, 0) AS applied
                   FROM handyman_payment_allocations a
                   LEFT JOIN handyman_ledger_corrections rev
                     ON rev.correction_kind = 'REVERSAL'
                    AND rev.source_allocation_id = a.id
                  WHERE a.payment_id = p.id
-                   AND a.charge_line_id IN (
+                   AND (a.charge_line_id IN (
                      SELECT il.handyman_charge_line_id FROM tenant_invoice_lines il
                       JOIN tenant_invoices i ON i.id = il.invoice_id
                      WHERE i.handyman_execution_scope_id = s."executionScopeId"
                        AND i.client_id = s."clientId"
-                       AND il.source_type = 'HANDYMAN_CHARGE')
+                       AND il.source_type = 'HANDYMAN_CHARGE') OR EXISTS (
+                     SELECT 1 FROM handyman_official_invoice_payment_links l
+                       JOIN handyman_official_invoices i ON i.id=l.invoice_id
+                       CROSS JOIN LATERAL jsonb_array_elements(i.source_snapshot#>'{calculation,commercialSource,lines}') x
+                     WHERE l.payment_id=p.id AND i.execution_scope_id=s."executionScopeId"
+                       AND i.client_id=s."clientId" AND x->>'chargeLineId'=a.charge_line_id::text))
               ) a ON TRUE
           ), '[]'::jsonb)),
         'warranty', (
