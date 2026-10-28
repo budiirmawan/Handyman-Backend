@@ -1,3 +1,4 @@
+import { migration0535HandymanFieldEvidenceWorkSession } from './0535_handyman_field_evidence_work_session';
 import { migration0534HandymanBmSettlementSupersession } from './0534_handyman_bm_settlement_supersession';
 import { migration0533HandymanRequestScopeSet } from './0533_handyman_request_scope_set';
 import { migration0531HandymanFinalReceiptDelivery } from './0531_handyman_final_receipt_delivery';
@@ -1116,4 +1117,5 @@ export const migrations: readonly Migration[] = [
   migration0532HandymanPaymentReceiptNumbering,
   migration0533HandymanRequestScopeSet,
   migration0534HandymanBmSettlementSupersession,
+  migration0535HandymanFieldEvidenceWorkSession,
 ];

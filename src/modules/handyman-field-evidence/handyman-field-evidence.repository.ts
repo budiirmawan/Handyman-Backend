@@ -16,6 +16,7 @@ interface EvidenceRow {
   building_id: string;
   handyman_request_id: string;
   execution_scope_id: string | null;
+  work_session_id: string | null;
   variation_id: string | null;
   material_purchase_record_id: string | null;
   purpose: HandymanFieldEvidencePurpose;
@@ -53,6 +54,7 @@ function mapEvidenceRow(row: EvidenceRow): HandymanFieldEvidenceUploadRecord {
     buildingId: row.building_id,
     handymanRequestId: row.handyman_request_id,
     executionScopeId: row.execution_scope_id,
+    workSessionId: row.work_session_id,
     variationId: row.variation_id,
     materialPurchaseRecordId: row.material_purchase_record_id,
     purpose: row.purpose,
@@ -80,7 +82,7 @@ function mapEvidenceRow(row: EvidenceRow): HandymanFieldEvidenceUploadRecord {
 
 const EVIDENCE_COLUMNS = `
   id, client_id, tenant_company_id, building_id, handyman_request_id,
-  execution_scope_id, variation_id, material_purchase_record_id,
+  execution_scope_id, work_session_id, variation_id, material_purchase_record_id,
   purpose, upload_status, original_file_name, mime_type, storage_key,
   declared_byte_size, verified_byte_size, sha256_checksum,
   attachment_reference, uploaded_by_user_id, uploaded_by_role,
@@ -140,9 +142,10 @@ export const handymanFieldEvidenceRepository = {
       clientId: string;
       tenantCompanyId: string;
       buildingId: string;
-      handymanRequestId: string;
-      executionScopeId: string | null;
-      variationId: string | null;
+    handymanRequestId: string;
+    executionScopeId: string | null;
+    workSessionId: string | null;
+    variationId: string | null;
       materialPurchaseRecordId: string | null;
       purpose: HandymanFieldEvidencePurpose;
       uploadStatus: HandymanFieldEvidenceUploadStatus;
@@ -163,14 +166,14 @@ export const handymanFieldEvidenceRepository = {
     const res = await tx.query<EvidenceRow>(
       `INSERT INTO handyman_field_evidence_uploads (
          id, client_id, tenant_company_id, building_id, handyman_request_id,
-         execution_scope_id, variation_id, material_purchase_record_id,
+         execution_scope_id, work_session_id, variation_id, material_purchase_record_id,
          purpose, upload_status, original_file_name, mime_type, storage_key,
          declared_byte_size, verified_byte_size, sha256_checksum,
          attachment_reference, uploaded_by_user_id, uploaded_by_role,
          notes, idempotency_key, verified_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22
+         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
        )
        RETURNING ${EVIDENCE_COLUMNS}`,
       [
@@ -180,6 +183,7 @@ export const handymanFieldEvidenceRepository = {
         input.buildingId,
         input.handymanRequestId,
         input.executionScopeId,
+        input.workSessionId,
         input.variationId,
         input.materialPurchaseRecordId,
         input.purpose,

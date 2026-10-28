@@ -84645,7 +84645,7 @@ paths:
         purpose (VARIATION_FINDING, MATERIAL_RECEIPT, INSPECTION_EVIDENCE,
         BEFORE_AFTER_WORK or QC_EVIDENCE).
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EVIDENCE_UPLOAD_VERIFICATION_FAILED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, INVALID_STORAGE_KEY]
+      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EVIDENCE_UPLOAD_VERIFICATION_FAILED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, HANDYMAN_WORK_SESSION_NOT_AUTHORIZED, HANDYMAN_WORK_SESSION_NOT_FOUND, INVALID_STORAGE_KEY]
       requestBody:
         required: true
         content:
@@ -84690,7 +84690,7 @@ paths:
         body field. Same authentication, role, file, verification and
         idempotency semantics as POST /handyman/field/evidence/upload.
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EVIDENCE_UPLOAD_VERIFICATION_FAILED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, INVALID_STORAGE_KEY]
+      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EVIDENCE_UPLOAD_VERIFICATION_FAILED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, HANDYMAN_WORK_SESSION_NOT_AUTHORIZED, HANDYMAN_WORK_SESSION_NOT_FOUND, INVALID_STORAGE_KEY]
       requestBody:
         required: true
         content:
@@ -84735,7 +84735,7 @@ paths:
         any body field. Same authentication, role, file, verification and
         idempotency semantics as POST /handyman/field/evidence/upload.
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EVIDENCE_UPLOAD_VERIFICATION_FAILED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, INVALID_STORAGE_KEY]
+      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EVIDENCE_UPLOAD_VERIFICATION_FAILED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, HANDYMAN_WORK_SESSION_NOT_AUTHORIZED, HANDYMAN_WORK_SESSION_NOT_FOUND, INVALID_STORAGE_KEY]
       requestBody:
         required: true
         content:
@@ -84780,7 +84780,7 @@ paths:
         server verification passes. Replaying the same idempotencyKey and
         intent returns 200 with replayed true.
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_VARIATION_NOT_FOUND, HANDYMAN_WORK_SESSION_NOT_AUTHORIZED, HANDYMAN_WORK_SESSION_NOT_FOUND]
       requestBody:
         required: true
         content:
@@ -137232,7 +137232,7 @@ components:
     HandymanFieldEvidenceUpload:
       type: object
       description: "Source: HandymanFieldEvidenceUploadRecord (handyman-field-evidence.types.ts)."
-      required: [id, clientId, tenantCompanyId, buildingId, handymanRequestId, executionScopeId, variationId, materialPurchaseRecordId, purpose, uploadStatus, uploadCompleted, originalFileName, mimeType, storageKey, declaredByteSize, verifiedByteSize, sha256Checksum, attachmentReference, downloadPath, previewPath, uploadedByUserId, uploadedByRole, notes, idempotencyKey, verifiedAt, createdAt, updatedAt]
+      required: [id, clientId, tenantCompanyId, buildingId, handymanRequestId, executionScopeId, workSessionId, variationId, materialPurchaseRecordId, purpose, uploadStatus, uploadCompleted, originalFileName, mimeType, storageKey, declaredByteSize, verifiedByteSize, sha256Checksum, attachmentReference, downloadPath, previewPath, uploadedByUserId, uploadedByRole, notes, idempotencyKey, verifiedAt, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
@@ -137240,6 +137240,8 @@ components:
         buildingId: { type: string, format: uuid }
         handymanRequestId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid, nullable: true }
+        workSessionId:
+          { type: string, format: uuid, nullable: true, description: "Authoritative Work Session binding for execution-photo evidence (null for historical and non-session evidence)." }
         variationId: { type: string, format: uuid, nullable: true }
         materialPurchaseRecordId: { type: string, format: uuid, nullable: true }
         purpose: { type: string, enum: [VARIATION_FINDING, MATERIAL_RECEIPT, INSPECTION_EVIDENCE, BEFORE_AFTER_WORK, QC_EVIDENCE] }
@@ -137276,11 +137278,21 @@ components:
         evidence: { $ref: "#/components/schemas/HandymanFieldEvidenceUpload" }
     HandymanFieldEvidencePresignRequest:
       type: object
-      description: "Source: createPresignedFieldEvidenceIntent input. File bytes are then PUT to the returned uploadUrl and confirmed separately."
+      description: >-
+        Source: createPresignedFieldEvidenceIntent input. File bytes are
+        then PUT to the returned uploadUrl and confirmed separately.
+        Optional workSessionId is the authoritative Work Session binding
+        for Crew Leader execution-photo evidence: when supplied it must
+        exist, belong to the exact executionScopeId target, match the
+        Client/Building, be led by the authenticated Crew Leader and be in
+        an open lifecycle state; it is validated again at finalization.
+        Omitting it preserves the existing non-session contract
+        (arrival/inspection/pre-session evidence).
       required: [purpose, originalFileName, mimeType, declaredByteSize, idempotencyKey]
       properties:
         executionScopeId: { type: string, format: uuid }
         handymanRequestId: { type: string, format: uuid }
+        workSessionId: { type: string, format: uuid }
         variationId: { type: string, format: uuid }
         materialPurchaseRecordId: { type: string, format: uuid }
         purpose: { type: string, enum: [VARIATION_FINDING, MATERIAL_RECEIPT, INSPECTION_EVIDENCE, BEFORE_AFTER_WORK, QC_EVIDENCE] }
@@ -137309,6 +137321,7 @@ components:
         file: { type: string, format: binary }
         executionScopeId: { type: string, format: uuid }
         handymanRequestId: { type: string, format: uuid }
+        workSessionId: { type: string, format: uuid }
         variationId: { type: string, format: uuid }
         materialPurchaseRecordId: { type: string, format: uuid }
         purpose: { type: string, enum: [VARIATION_FINDING, MATERIAL_RECEIPT, INSPECTION_EVIDENCE, BEFORE_AFTER_WORK, QC_EVIDENCE] }

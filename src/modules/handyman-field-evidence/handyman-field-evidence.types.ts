@@ -34,6 +34,10 @@ export interface HandymanFieldEvidenceUploadRecord {
   buildingId: string;
   handymanRequestId: string;
   executionScopeId: string | null;
+  /** CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — authoritative Work Session
+   * binding for execution-photo submissions; null for historical and
+   * non-session evidence (arrival/inspection, pre-session uploads). */
+  workSessionId: string | null;
   variationId: string | null;
   materialPurchaseRecordId: string | null;
   purpose: HandymanFieldEvidencePurpose;

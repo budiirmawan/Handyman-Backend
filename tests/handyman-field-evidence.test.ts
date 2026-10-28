@@ -273,6 +273,17 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
       await migration0435CreateHandymanScopeVariations.up(client);
       await migration0436CreateHandymanMaterialPurchasing.up(client);
       await migration0437CreateHandymanFieldEvidenceUploads.up(client);
+      // CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE: the evidence service now
+      // reads/writes the authoritative Work Session link added by migration
+      // 0535. This focused fixture intentionally stops at 0437 (it omits
+      // `handyman_work_sessions` entirely), so only the nullable column the
+      // bound repository selects is added here — 0535 itself needs the work
+      // session table and is exercised by the full-migration suites. No
+      // fixture row ever sets it, matching historical unbound evidence.
+      await client.query(
+        `ALTER TABLE handyman_field_evidence_uploads
+           ADD COLUMN IF NOT EXISTS work_session_id UUID`,
+      );
       // CR-HM-FIELD-OPS-ACK-01 PART 02 repair: the evidence service binds the
       // receipt binary digest through `receipt_sha256_checksum` (added to this
       // table by migration 0470). The stale fixture stopped at 0437, so this

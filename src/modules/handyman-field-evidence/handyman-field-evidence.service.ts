@@ -16,6 +16,10 @@ import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/han
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { handymanFieldEvidenceRepository } from './handyman-field-evidence.repository';
 import {
+  handymanWorkSessionNotAuthorizedError,
+  handymanWorkSessionNotFoundError,
+} from '../handyman-work-sessions';
+import {
   HANDYMAN_FIELD_EVIDENCE_MAX_BYTES,
   HANDYMAN_FIELD_EVIDENCE_MIME_TYPES,
   HANDYMAN_FIELD_EVIDENCE_PURPOSES,
@@ -461,6 +465,103 @@ async function assertDomainObjectOwnership(
 }
 
 /**
+ * CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — authoritative Work Session
+ * binding for Crew Leader execution-photo evidence.
+ *
+ * Validates, inside the caller's locked evidence transaction, that the
+ * referenced Work Session:
+ *   - exists (fabricated ids are bounded 404s),
+ *   - belongs to the EXACT execution scope and Work Order request of this
+ *     evidence target (cross-scope / cross-request references refused),
+ *   - matches the evidence's Client and Building (cross-Client /
+ *     cross-Building references refused),
+ *   - is associated with the required Crew Lead identity — the
+ *     authenticated actor at presign/upload, or the recorded initiating
+ *     uploader at finalization (wrong-Leader references refused),
+ *   - is in a lifecycle state that still permits submission: only the
+ *     terminal CHECKED_OUT state closes the session's presence window
+ *     (governance §5), so stale/completed-ineligible references are
+ *     refused.
+ *
+ * The same helper revalidates at finalization (and idempotent replay) so
+ * a stale upload intent cannot bypass authorization. Sessions are never
+ * invented: a submission without an explicit workSessionId keeps the
+ * historical unbound contract (arrival/inspection/pre-session evidence).
+ */
+async function assertWorkSessionEvidenceBinding(
+  tx: PoolClient,
+  target: EvidenceTargetContext,
+  workSessionId: string,
+  expectedLeadUserId: string,
+): Promise<void> {
+  if (!target.executionScopeId) {
+    throw AppError.validation(
+      'workSessionId requires the evidence to be targeted at an executionScopeId.',
+    );
+  }
+
+  const res = await tx.query<{
+    id: string;
+    client_id: string;
+    execution_scope_id: string;
+    lead_user_id: string;
+    status: string;
+    building_id: string;
+    handyman_request_id: string;
+  }>(
+    `SELECT ws.id, ws.client_id, ws.execution_scope_id, ws.lead_user_id,
+            ws.status, s.building_id, s.handyman_request_id
+       FROM handyman_work_sessions ws
+       JOIN handyman_execution_scopes s ON s.id = ws.execution_scope_id
+      WHERE ws.id = $1`,
+    [workSessionId],
+  );
+  const session = res.rows[0];
+  if (!session) {
+    throw handymanWorkSessionNotFoundError();
+  }
+  if (
+    session.execution_scope_id !== target.executionScopeId ||
+    session.handyman_request_id !== target.handymanRequestId
+  ) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+      message:
+        'Referenced workSessionId does not belong to the exact execution scope and Work Order request of this evidence.',
+    });
+  }
+  if (session.client_id !== target.clientId) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+      message: 'Referenced workSessionId belongs to a different Client.',
+    });
+  }
+  if (session.building_id !== target.buildingId) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+      message: 'Referenced workSessionId belongs to a different Building.',
+    });
+  }
+  if (session.lead_user_id !== expectedLeadUserId) {
+    throw handymanWorkSessionNotAuthorizedError();
+  }
+  // Governance §5: CHECKED_OUT is the only terminal state — the presence
+  // window is closed, so the session is stale for any new submission or
+  // finalization of an upload intent.
+  if (session.status === 'CHECKED_OUT') {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+      message:
+        'Referenced workSessionId is stale: a CHECKED_OUT Work Session no longer permits evidence submission.',
+    });
+  }
+}
+
+/**
  * P0-C — evidence binding is an explicit, versioned, audited mutation of the
  * owning aggregate, never a silent side effect of uploading bytes:
  *  - the aggregate `version` is incremented (optimistic-concurrency visible),
@@ -812,6 +913,7 @@ export async function uploadFieldEvidenceBinary(
     handymanRequestId?: unknown;
     variationId?: unknown;
     materialPurchaseRecordId?: unknown;
+    workSessionId?: unknown;
     purpose?: unknown;
     originalFileName?: unknown;
     mimeType?: unknown;
@@ -876,6 +978,10 @@ export async function uploadFieldEvidenceBinary(
           'materialPurchaseRecordId',
         )
       : null;
+  const workSessionId =
+    input.workSessionId !== undefined && input.workSessionId !== null
+      ? assertUuid(input.workSessionId, 'workSessionId')
+      : null;
   const notes =
     typeof input.notes === 'string' && input.notes.trim().length > 0
       ? input.notes.trim()
@@ -897,7 +1003,8 @@ export async function uploadFieldEvidenceBinary(
       if (
         existing.handymanRequestId !== target.handymanRequestId ||
         existing.executionScopeId !== target.executionScopeId ||
-        existing.buildingId !== target.buildingId
+        existing.buildingId !== target.buildingId ||
+        existing.workSessionId !== workSessionId
       ) {
         throw new AppError({
           statusCode: 409,
@@ -919,7 +1026,29 @@ export async function uploadFieldEvidenceBinary(
             'idempotencyKey was already used with a different evidence upload payload or binary content.',
         });
       }
+      // CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — replay of a bound
+      // intent revalidates the stored Work Session linkage (existence,
+      // exact scope, identity, currentness) instead of trusting it.
+      if (existing.workSessionId) {
+        await assertWorkSessionEvidenceBinding(
+          tx,
+          target,
+          existing.workSessionId,
+          existing.uploadedByUserId,
+        );
+      }
       return { replayed: true, evidence: existing };
+    }
+
+    // CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — validate the explicit
+    // execution-photo Work Session binding before any bytes are stored.
+    if (workSessionId) {
+      await assertWorkSessionEvidenceBinding(
+        tx,
+        target,
+        workSessionId,
+        actorUserId,
+      );
     }
 
     const evidenceId = randomUUID();
@@ -962,6 +1091,7 @@ export async function uploadFieldEvidenceBinary(
       buildingId: target.buildingId,
       handymanRequestId: target.handymanRequestId,
       executionScopeId: target.executionScopeId,
+      workSessionId,
       variationId,
       materialPurchaseRecordId,
       purpose,
@@ -992,6 +1122,7 @@ export async function uploadFieldEvidenceBinary(
         metadata: {
           executionScopeId: target.executionScopeId,
           handymanRequestId: target.handymanRequestId,
+          workSessionId,
           purpose,
           mimeType,
           verifiedByteSize,
@@ -1017,6 +1148,7 @@ export async function createPresignedFieldEvidenceIntent(
     handymanRequestId?: unknown;
     variationId?: unknown;
     materialPurchaseRecordId?: unknown;
+    workSessionId?: unknown;
     purpose: unknown;
     originalFileName: unknown;
     mimeType: unknown;
@@ -1070,6 +1202,10 @@ export async function createPresignedFieldEvidenceIntent(
           'materialPurchaseRecordId',
         )
       : null;
+  const workSessionId =
+    input.workSessionId !== undefined && input.workSessionId !== null
+      ? assertUuid(input.workSessionId, 'workSessionId')
+      : null;
   const notes =
     typeof input.notes === 'string' && input.notes.trim().length > 0
       ? input.notes.trim()
@@ -1090,7 +1226,8 @@ export async function createPresignedFieldEvidenceIntent(
         existing.executionScopeId !== target.executionScopeId ||
         existing.purpose !== purpose ||
         existing.mimeType !== mimeType ||
-        existing.declaredByteSize !== declaredByteSize
+        existing.declaredByteSize !== declaredByteSize ||
+        existing.workSessionId !== workSessionId
       ) {
         throw new AppError({
           statusCode: 409,
@@ -1098,6 +1235,17 @@ export async function createPresignedFieldEvidenceIntent(
           message:
             'idempotencyKey was already used with a different evidence upload intent.',
         });
+      }
+      // CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — a replayed bound
+      // intent revalidates its Work Session linkage (existence, exact
+      // scope, identity, currentness) before it is handed back.
+      if (existing.workSessionId) {
+        await assertWorkSessionEvidenceBinding(
+          tx,
+          target,
+          existing.workSessionId,
+          existing.uploadedByUserId,
+        );
       }
       return {
         replayed: true,
@@ -1112,6 +1260,17 @@ export async function createPresignedFieldEvidenceIntent(
       materialPurchaseRecordId,
     });
 
+    // CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — validate the explicit
+    // execution-photo Work Session binding for this presigned intent.
+    if (workSessionId) {
+      await assertWorkSessionEvidenceBinding(
+        tx,
+        target,
+        workSessionId,
+        actorUserId,
+      );
+    }
+
     const evidenceId = randomUUID();
     const storageKey = evidenceStorageKey(evidenceId);
 
@@ -1122,6 +1281,7 @@ export async function createPresignedFieldEvidenceIntent(
       buildingId: target.buildingId,
       handymanRequestId: target.handymanRequestId,
       executionScopeId: target.executionScopeId,
+      workSessionId,
       variationId,
       materialPurchaseRecordId,
       purpose,
@@ -1284,6 +1444,20 @@ export async function confirmFieldEvidenceUpload(
       return record;
     }
 
+    // CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01A-BE — revalidate the stored
+    // Work Session linkage at finalization (existence, exact scope,
+    // Client/Building, source-identity lead, current lifecycle state) so
+    // an upload intent staged while the session was open cannot be
+    // confirmed after the session's presence window has closed.
+    if (record.workSessionId) {
+      await assertWorkSessionEvidenceBinding(
+        tx,
+        target,
+        record.workSessionId,
+        record.uploadedByUserId,
+      );
+    }
+
     const storage = createEvidenceStorage();
     let storedBuffer: Buffer | null = null;
     try {
@@ -1335,6 +1509,7 @@ export async function confirmFieldEvidenceUpload(
         metadata: {
           executionScopeId: target.executionScopeId,
           handymanRequestId: target.handymanRequestId,
+          workSessionId: record.workSessionId,
           purpose: verified.purpose,
           verifiedByteSize: verified.verifiedByteSize,
           sha256Checksum: verified.sha256Checksum,

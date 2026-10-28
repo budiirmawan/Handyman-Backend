@@ -467,7 +467,7 @@ before(async () => {
       storage_key text NOT NULL UNIQUE, declared_byte_size int, verified_byte_size int NOT NULL DEFAULT 0,
       sha256_checksum varchar(64), attachment_reference text UNIQUE, uploaded_by_user_id uuid NOT NULL,
       uploaded_by_role text NOT NULL, notes text, idempotency_key text NOT NULL,
-      verified_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+      work_session_id uuid, verified_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
     );
   `);
   const client = await pool.connect();
