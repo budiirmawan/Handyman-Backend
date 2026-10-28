@@ -50,7 +50,7 @@ import { addHandymanQuotationLine, createHandymanQuotation, createHandymanQuotat
 import { COMMERCIAL_CONSENT_PURPOSE, COMMERCIAL_CONSENT_METHOD, commercialConsentSecretEnvName,
   signCommercialConsentAssertion, type CommercialConsentAssertion } from '../src/modules/handyman-commercial-consent/commercial-consent.assertion';
 import { quotationCommercialTarget } from '../src/modules/handyman-commercial-consent/commercial-consent.targets';
-import { grantCareActorProperty, handymanCareActorService } from '../src/modules/handyman-care-actors';
+import { grantCareActorProperty, revokeCareActorProperty, handymanCareActorService } from '../src/modules/handyman-care-actors';
 import { handoffRuntimeRepository, handoffIntegrationSecretEnvName } from '../src/modules/handyman-handoff';
 import { admitCareWorkspace, signCareWorkspaceAssertion, type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
@@ -598,7 +598,8 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       basisDescription:fullDesc,ratePercent:'10.000000',roundingMode:'NO_ROUNDING',roundingScale:null}));
   });
 
-  it('01C-A projects an eligible ADD and REDUCE only with exact price-basis offers and reviewed per-line PPN', async () => {
+  it('01C-B issues an immutable official invoice for consented ADD/REDUCE and allows scoped Care download', async () => {
+    const existingScope = scope;
     // A separate request keeps this case independent of the preceding stateful
     // cases, including when the whole focused file is run in the future.
     const attribution = await createChannelAttribution({ tenantCompanyId: tenantId, buildingId: realm.building.id,
@@ -810,6 +811,169 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     } finally { await tx.query('ROLLBACK'); tx.release(); }
     assert.deepEqual(await financialCounts(), counts);
     assert.equal((await calculate(classification, verified)).checksum, result.checksum);
+
+    // The official invoice is issued only from the reviewed pins, never from
+    // caller prices or from a generic invoice's incompatible monetary model.
+    await grant(admin, ['handyman.finance.manage','handyman.finance.read','handyman.customer_tax.read']);
+    const invoicePath = `${base()}/invoices`;
+    const command = { classification: pin(classification, verified) };
+    denied(await post(invoicePath, picToken, command), 403);
+    denied(await post(invoicePath, outsiderToken, command), 403);
+    denied(await post(invoicePath, adminToken, { ...command, totalAmount: '1.00' }), 400);
+    denied(await post(invoicePath, adminToken, { classification: { ...command.classification, digest: '0'.repeat(64) } }), 409);
+    denied(await post(invoicePath, adminToken, command), 409); // INVOICE settings not configured
+    assert.equal(Number((await q('SELECT count(*) n FROM handyman_official_invoices WHERE execution_scope_id=$1',[scope])).rows[0].n), 0);
+    await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'INVOICE', language: 'id',
+      expectedVersion: null, documentPrefix: 'INV', termsLines: ['Contact Finance for invoice questions'], paymentNote: 'Use verified bank details',
+      warrantyNote: null, contactNote: null, footerNote: null, signatoryName: 'Finance Manager', signatoryTitle: 'Finance' }, admin);
+
+    // A generic draft on a different scope precludes official issuance; the
+    // same rule applies to all generic statuses, including CANCELLED.
+    const genericDraft = async () => tenantInvoiceRepository.create({clientId:realm.client.id,tenantCompanyId:tenantId,
+      buildingId:realm.building.id,spaceId:chain.space.id,invoiceNumber:`LEG-${id()}`,invoiceDate:day(0),dueDate:day(1),
+      currencyCode:'IDR',notes:null,createdByUserId:admin});
+    const generic = await genericDraft();
+    await q('UPDATE tenant_invoices SET handyman_execution_scope_id=$2 WHERE id=$1',[generic.id,existingScope]);
+    denied(await post(`/api/v1/handyman/execution-scopes/${existingScope}/invoices`,adminToken,command),409);
+    assert.equal(Number((await q('SELECT count(*) n FROM handyman_official_invoices WHERE execution_scope_id=$1',[existingScope])).rows[0].n),0);
+
+    // Independently confirmed DP is not an invoice total or status and does
+    // not change the original agreed gross when the document is issued.
+    const dp=(await recordHandymanCustomerPayment({executionScopeId:scope,amount:'25.00',channel:'BANK_TRANSFER',
+      obligationStage:'DP',externalReference:key(),idempotencyKey:key()},admin)).payment.id;
+    await confirmHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,idempotencyKey:key()},verifier);
+    await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,chargeLineId:chargeLabor,amount:'10.00',idempotencyKey:key()},admin);
+    const receipt=await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp});
+    const receiptBeforeInvoice=(await downloadTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp})).bytes;
+    assert.ok(receipt.id);
+    const beforeFunds=(await q('SELECT id,status,amount::text FROM handyman_customer_payments WHERE transaction_id=$1',[transactionId])).rows;
+    const competing = await Promise.all([post(invoicePath,adminToken,command),post(invoicePath,adminToken,command)]);
+    assert.deepEqual(competing.map(r=>r.status).sort(),[201,409]);
+    const invoice = data(competing.find(r=>r.status===201)!,201);
+    assert.equal(invoice.totalAmount,'560.00'); assert.equal(invoice.status,'ISSUED');
+    assert.deepEqual((await q('SELECT id,status,amount::text FROM handyman_customer_payments WHERE transaction_id=$1',[transactionId])).rows,beforeFunds);
+    const row=(await q('SELECT * FROM handyman_official_invoices WHERE id=$1',[invoice.id])).rows[0];
+    assert.equal(row.total_amount,'560.00'); assert.equal(row.source_snapshot.calculation.checksum,result.checksum);
+    assert.equal(row.source_snapshot.calculation.dppAmount,'391.00'); assert.equal(row.source_snapshot.calculation.ppnAmount,'19.00');
+    assert.equal(row.source_snapshot.calculation.considerationBeforePpn,'541.00');
+    assert.equal(row.source_snapshot.variations.length,2);
+    assert.equal(row.source_snapshot.quotation.pdfSha256,decision.offerPdfSha256);
+    assert.equal(row.source_snapshot.calculation.commercialSource.lines.find((x:any)=>x.chargeLineId===chargeA).grossAmount,'150.00');
+    assert.equal(createHash('sha256').update(row.pdf_bytes).digest('hex'),row.pdf_sha256);
+    assert.equal(createHash('sha256').update(row.source_canonical).digest('hex'),row.source_sha256);
+    assert.equal(stableJson(row.source_snapshot),row.source_canonical);
+    assert.equal(row.pdf_bytes.subarray(0,5).toString(),'%PDF-');
+    const invoiceText=await pdfText(row.pdf_bytes);
+    for (const text of ['INV-', 'PT Issuer', 'Customer', 'Material A', 'Approved ADD', 'Approved REDUCE',
+      'DPP', 'PPN', '560.00', '391.00', '19.00', 'Test Bank', '1234567890', 'Transfer within'])
+      assert.ok(invoiceText.includes(text),`missing invoice PDF text: ${text}`);
+    assert.equal(row.source_snapshot.quotation.snapshot.settings.paymentNote, 'Transfer within seven days');
+    assert.equal(invoiceText.includes('PAID'),false);
+    await assert.rejects(q('UPDATE handyman_official_invoices SET pdf_bytes=$2 WHERE id=$1',[invoice.id,Buffer.from('tampered')]),/immutable/i);
+    await assert.rejects(q('DELETE FROM handyman_official_invoices WHERE id=$1',[invoice.id]),/immutable/i);
+    assert.equal((await q('SELECT invoiced FROM handyman_scope_variations WHERE id=$1',[add])).rows[0].invoiced,true);
+    await assert.rejects(q(`INSERT INTO handyman_charge_lines(id,client_id,transaction_id,quotation_line_id,line_kind,currency,amount,created_by_user_id)
+      SELECT $2,client_id,transaction_id,quotation_line_id,line_kind,currency,amount,created_by_user_id FROM handyman_charge_lines WHERE id=$1`,
+      [chargeLabor,id()]),/new charge cannot be added/i);
+    const laterGeneric=await genericDraft();
+    await assert.rejects(q('UPDATE tenant_invoices SET handyman_execution_scope_id=$2 WHERE id=$1',[laterGeneric.id,scope]),/already has an invoice/);
+    assert.equal((await q('SELECT handyman_execution_scope_id FROM tenant_invoices WHERE id=$1',[laterGeneric.id])).rows[0].handyman_execution_scope_id,null);
+    await allocateHandymanCustomerPayment({executionScopeId:scope,paymentId:dp,chargeLineId:chargeLabor,amount:'15.00',idempotencyKey:key()},admin);
+    // A later, independent ledger adjustment cannot alter the issued invoice.
+    await adjustHandymanCustomerLedger({executionScopeId:scope,chargeLineId:chargeB,amount:'1.00',reason:'independent post-invoice adjustment',idempotencyKey:key()},admin);
+    const after=(await q('SELECT total_amount::text,pdf_bytes,pdf_sha256,source_sha256 FROM handyman_official_invoices WHERE id=$1',[invoice.id])).rows[0];
+    assert.equal(after.total_amount,'560.00'); assert.deepEqual(after.pdf_bytes,row.pdf_bytes); assert.equal(after.source_sha256,row.source_sha256);
+    assert.deepEqual((await downloadTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp})).bytes,receiptBeforeInvoice);
+    await assert.rejects(q('TRUNCATE handyman_invoice_scope_claims'),/immutable/i);
+
+    const integrationCode=`INVOICE_${id().slice(0,8).toUpperCase()}`, secret='test-scoped-care-invoice-workspace-secret';
+    try {
+      const integration=await handoffRuntimeRepository.createIntegration({integrationCode,displayName:'Invoice Care'});
+      await handymanCareActorService.setIntegrationActorCapability({integrationId:integration.id,capability:'CUSTOMER_CARE'});
+      const actor=await handymanCareActorService.createCareActor({integrationId:integration.id,actorReference:'care',displayName:'Care'});
+      process.env[handoffIntegrationSecretEnvName(integrationCode)]=secret;
+      await grantCareActorProperty({careActorId:actor.id,propertyId:realm.property.id,clientId:realm.client.id},admin);
+      const now=Date.now();
+      const assertion:CareWorkspaceAssertion={purpose:'HANDYMAN_CARE_WORKSPACE',integrationCode,assertionId:id(),
+        issuedAt:new Date(now-1000).toISOString(),expiresAt:new Date(now+240000).toISOString(),
+        actor:{type:'CUSTOMER_CARE',actorReference:'care'}};
+      const token=(await admitCareWorkspace(assertion,signCareWorkspaceAssertion(assertion,secret))).workspaceToken;
+      const selection={propertyId:realm.property.id,tenantCompanyId:tenantId,buildingId:realm.building.id,spaceId:chain.space.id};
+      const carePath=`/api/v1/handyman/care/requests/${requestId}/invoices/${invoice.id}/document.pdf`;
+      const downloaded=await api().get(carePath).query(selection).set(auth(token));
+      assert.equal(downloaded.status,200,JSON.stringify(downloaded.body)); assert.equal(downloaded.headers['content-type'],'application/pdf');
+      assert.equal(downloaded.headers['x-content-sha256'],row.pdf_sha256); assert.deepEqual(downloaded.body,row.pdf_bytes);
+      denied(await api().get(carePath).query({...selection,buildingId:siblingId}).set(auth(token)),404);
+      denied(await api().get(carePath).query({...selection,tenantCompanyId:id()}).set(auth(token)),404);
+      denied(await api().get(`/api/v1/handyman/care/requests/${id()}/invoices/${invoice.id}/document.pdf`).query(selection).set(auth(token)),404);
+      denied(await api().get(carePath).query(selection),401);
+      const view=data(await api().get(`/api/v1/handyman/care/requests/${requestId}/projection`).query(selection).set(auth(token)));
+      assert.equal(view.invoicePayment.officialInvoice.id,invoice.id); assert.equal(view.invoicePayment.officialInvoice.totalAmount,'560.00');
+      assert.equal(view.invoicePayment.paymentStatus,null);
+      await revokeCareActorProperty({careActorId:actor.id,propertyId:realm.property.id,clientId:realm.client.id},admin);
+      assert.notEqual((await api().get(carePath).query(selection).set(auth(token))).status,200);
+    } finally { delete process.env[handoffIntegrationSecretEnvName(integrationCode)]; }
+
+    // Exercise the upfront path with no BAST, QC, execution or fabricated Work
+    // Order: the base quotation's agreed charges alone are invoiceable.
+    async function upfront(name:string) {
+      const a=await createChannelAttribution({tenantCompanyId:tenantId,buildingId:realm.building.id,tenantPicId:picId,spaceId:chain.space.id,
+        originChannel:'BM_SUPER_APP',originReference:`bm-handoff:BM_SUPER_APP:${id()}`,createdByUserId:customerId});
+      const r=await handymanServiceRequestService.createHandymanServiceRequest({channelAttributionId:a.id,serviceCatalogId:serviceId,description:name},admin);
+      await handymanServiceRequestTriageService.recordHandymanRequestTriage({handymanRequestId:r.id,triageDisposition:'DIAGNOSIS',triageNote:'Reviewed'},admin);
+      await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis({handymanRequestId:r.id,disciplineId,diagnosis:'Repair'},admin);
+      const qt=await createHandymanQuotation({handymanRequestId:r.id},admin), v=qt.versions[0].id;
+      const l=await line(v,'LABOR',1,110,'Upfront base labor');
+      await prepareHandymanTaxProfile({quotationVersionId:v},taxFacts(),admin);
+      await issueHandymanQuotationVersion(v,{validUntil:validUntil()},admin);
+      const d=await decideHandymanQuotation(v,{decision:'APPROVE',...await quotationOffer(v),idempotencyKey:key()},customerId);
+      assert.ok(d.executionScope); const sid=d.executionScope.id;
+      await openHandymanCustomerTransaction({executionScopeId:sid,idempotencyKey:key()},admin);
+      const charge=(await composeHandymanChargeLine({executionScopeId:sid,quotationLineId:l.id,idempotencyKey:key()},admin)).chargeLine.id;
+      const b=await proposeHandymanBuyerBinding(maker,{clientId:realm.client.id,requestId:r.id,buyerTenantCompanyId:tenantId,
+        expectedVersion:null,evidenceSource:'TEST',evidenceReference:key()});
+      const bd=await decideHandymanBuyerBinding(checkerId,{clientId:realm.client.id,requestId:r.id,bindingId:b.snapshot.id,
+        bindingVersion:b.snapshot.version,bindingDigest:b.digest,decision:'VERIFY',evidenceSource:'TEST',evidenceReference:key()});
+      const p={...proposal('110.00',null),requestId:r.id,buyer:{bindingId:b.snapshot.id,bindingVersion:b.snapshot.version,
+        bindingDigest:b.digest,decisionId:bd.id,decisionDigest:bd.decisionDigest},
+        invoice:{executionScopeId:sid,supplier,lines:[{chargeLineId:charge,taxpayerClassification:taxClass,rule:taxRule,evidenceReferenceId:id()}]}};
+      const c=await proposeCustomerTaxClassification(maker,p);
+      const cd=await decideCustomerTaxClassification(checkerId,{clientId:realm.client.id,requestId:r.id,classificationId:c.snapshot.id,
+        version:c.snapshot.version,digest:c.digest,decision:'VERIFY',evidenceReferenceId:id()});
+      return {sid,req:r.id,command:{classification:pin(c,cd)}};
+    }
+    const up=await upfront('Legitimate upfront invoice');
+    assert.equal(Number((await q('SELECT count(*) n FROM handyman_bast_documents WHERE execution_scope_id=$1',[up.sid])).rows[0].n),0);
+    // Issuance must render the unit frozen in the customer offer, not a later master-data rename.
+    await q("UPDATE units_of_measure SET symbol='renamed-unit' WHERE id=$1",[uom]);
+    const stale=await pool.connect();
+    try {
+      await stale.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      await stale.query('SELECT revision FROM handyman_invoice_source_fences WHERE execution_scope_id=$1',[up.sid]);
+      const upInvoice=data(await post(`/api/v1/handyman/execution-scopes/${up.sid}/invoices`,adminToken,up.command),201);
+      assert.equal(upInvoice.totalAmount,'110.00');
+      const offeredUnit=(await q('SELECT source_snapshot FROM handyman_official_invoices WHERE id=$1',[upInvoice.id])).rows[0];
+      assert.equal(offeredUnit.source_snapshot.lineDetails[0].unit,'pc');
+      await assert.rejects(stale.query('UPDATE handyman_invoice_source_fences SET revision=revision+1 WHERE execution_scope_id=$1',[up.sid]),
+        /could not serialize access/);
+    } finally { await stale.query('ROLLBACK'); stale.release(); await q("UPDATE units_of_measure SET symbol='pc' WHERE id=$1",[uom]); }
+    assert.equal(Number((await q('SELECT count(*) n FROM handyman_bast_documents WHERE execution_scope_id=$1',[up.sid])).rows[0].n),0);
+
+    // Competing generic binding and official issuance arbitrate on one unique
+    // claim. The generic transaction wins; the official write must roll back.
+    const race=await upfront('Concurrent generic and official invoice'); const racer=await genericDraft();
+    const locker=await pool.connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query('UPDATE tenant_invoices SET handyman_execution_scope_id=$2 WHERE id=$1',[racer.id,race.sid]);
+      const pending=post(`/api/v1/handyman/execution-scopes/${race.sid}/invoices`,adminToken,race.command);
+      const resultPromise=Promise.resolve(pending);
+      await new Promise(resolve=>setTimeout(resolve,300));
+      await locker.query('COMMIT');
+      denied(await resultPromise,409);
+    } finally { await locker.query('ROLLBACK').catch(()=>undefined); locker.release(); }
+    assert.equal(Number((await q('SELECT count(*) n FROM handyman_official_invoices WHERE execution_scope_id=$1',[race.sid])).rows[0].n),0);
+    assert.equal((await q('SELECT generic_invoice_id FROM handyman_invoice_scope_claims WHERE execution_scope_id=$1',[race.sid])).rows[0].generic_invoice_id,racer.id);
 
     // Independently produce a genuine partial material charge from settled
     // usage and an explicitly governed pricing mode, on another Client. Its

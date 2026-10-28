@@ -111,7 +111,8 @@ export async function postReduceFinancialCorrection(actorInput: string, input: P
         }
         return { replayed: true, binding: await bindingView(tx, b.id) };
       }
-      if (invoices.rows.some(i => i.status === 'FINALIZED')) {
+      const official = await tx.query('SELECT 1 FROM handyman_official_invoices WHERE execution_scope_id=$1 AND client_id=$2 FOR SHARE', [scopeId, scope.client_id]);
+      if (official.rowCount || invoices.rows.some(i => i.status === 'FINALIZED')) {
         throw conflict('A finalized invoice already exists; an independent governed financial correction is required.');
       }
       const variation = await handymanScopeVariationRepository.findByIdForUpdate(tx, variationId, scopeId);

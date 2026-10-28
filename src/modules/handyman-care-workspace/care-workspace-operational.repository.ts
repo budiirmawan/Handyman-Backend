@@ -361,6 +361,14 @@ async function readOperationalProjection(
                    ORDER BY created_at DESC, id DESC LIMIT 10) b
         ), '[]'::jsonb),
         'invoicePayment', jsonb_build_object(
+          'officialInvoice', (
+            SELECT jsonb_build_object('id', i.id, 'invoiceNumber', i.document_number,
+              'status', 'ISSUED', 'issuedAt', i.issued_at, 'totalAmount', i.total_amount::numeric(18,2)::text,
+              'currencyCode', i.currency, 'pdfSha256', i.pdf_sha256, 'sourceSha256', i.source_sha256)
+              FROM handyman_official_invoices i
+             WHERE i.execution_scope_id=s."executionScopeId" AND i.client_id=s."clientId"
+               AND i.request_id=s."requestId" AND i.building_id=s."buildingId" AND i.tenant_company_id=s."tenantCompanyId"
+             LIMIT 1),
           'invoice', (
             SELECT jsonb_build_object(
               'id', i.id, 'invoiceNumber', i.invoice_number,

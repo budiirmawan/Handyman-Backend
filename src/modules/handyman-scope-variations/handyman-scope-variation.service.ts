@@ -2992,7 +2992,9 @@ export async function confirmVariationFinalChargeEligibility(
         FOR SHARE`,
       [ctx.executionScopeId, ctx.clientId],
     );
-    if (finalizedInvoiceRes.rows[0]) {
+    const officialInvoiceRes = await tx.query('SELECT id FROM handyman_official_invoices WHERE execution_scope_id=$1 AND client_id=$2 FOR SHARE',
+      [ctx.executionScopeId, ctx.clientId]);
+    if (finalizedInvoiceRes.rows[0] || officialInvoiceRes.rows[0]) {
       throw new AppError({
         statusCode: 409,
         code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
