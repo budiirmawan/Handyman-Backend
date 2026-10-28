@@ -28,6 +28,34 @@ with its existing property, Building, tenant and space selection. Downloads are
 private/no-store, verify source/PDF checksums and do not mark a document sent or
 delivered.
 
+## Care workspace discovery
+
+The existing scoped `GET /api/v1/handyman/care/requests/{requestId}` detail
+includes a `finalReceipt` object. It uses the same workspace Bearer session,
+property grant and current Client/Building/tenant/space occupancy as the
+request itself; pass `propertyId`, `buildingId`, `tenantCompanyId`, and, where
+applicable, `spaceId` as query parameters. It is a private/no-store read, not an
+issuance or download, and needs no caller-supplied receipt or invoice ID.
+
+* If no Final Receipt exists, `status` is `NOT_ISSUED`, `finalReceiptId` and
+  all receipt document/settlement fields are `null`. `requestId` is the selected
+  request; `invoiceId` and `invoiceNumber` are populated only if exactly one
+  matching official invoice exists, otherwise they are `null`.
+* If exactly one valid receipt exists, `status` is `ISSUED`. `finalReceiptId`,
+  `documentNumber`, `documentVersion` (1), `requestId`, `invoiceId`,
+  `invoiceNumber`, `issuedAt`, `settledAt`, `currency`, `grossAmount`,
+  `settledAmount`, `sourceSha256` and `pdfSha256` come from the immutable
+  issued receipt and its linked official invoice. Amounts are decimal strings
+  in the receipt's as-of snapshot, not a recalculation of current balances.
+  The hashes and version pin the existing delivery journal; `invoiceId` enables
+  the existing PDF route.
+* Multiple linked receipts or conflicting request/invoice/scope/tenant/Client/
+  Building lineage return `409 HANDYMAN_FINAL_RECEIPT_INTEGRITY_ERROR` without
+  choosing or disclosing a receipt. Unavailable or unauthorized contexts remain
+  indistinguishable `404`s, and invalid workspace sessions are rejected. The
+  PDF download and delivery journal continue to perform their existing byte
+  verification and authorization; discovery does not record delivery events.
+
 ## PART 02 — Care delivery journal
 
 A Final Receipt is issued once per official invoice. Its immutable document

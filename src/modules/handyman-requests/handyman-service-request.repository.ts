@@ -313,6 +313,24 @@ type JsonWorkspaceRequestRow = Omit<WorkspaceRequestRow, 'createdAt' | 'updatedA
   createdAt: string; updatedAt: string; attributionCreatedAt: string; items?: unknown[];
 };
 
+/** Metadata from the immutable issued document, never a derived settlement. */
+export type CareFinalReceiptDiscovery = {
+  status: 'ISSUED' | 'NOT_ISSUED';
+  finalReceiptId: string | null;
+  documentNumber: string | null;
+  documentVersion: 1 | null;
+  requestId: string;
+  invoiceId: string | null;
+  invoiceNumber: string | null;
+  issuedAt: string | null;
+  settledAt: string | null;
+  currency: string | null;
+  grossAmount: string | null;
+  settledAmount: string | null;
+  sourceSha256: string | null;
+  pdfSha256: string | null;
+};
+
 /** Workspace read adapter, NOT the local User/PIC/admin read wall. Reuse the
  * exact existing request projection and current occupancy authority. Every row
  * must match the selected tenant/building AND its applicable current occupancy,
@@ -353,13 +371,15 @@ async function listWorkspaceProjectionsScoped(principal: CareWorkspacePrincipal,
   })) };
 }
 
-/** Detail uses the same represented-context authority as PART 06A. The ID
- * never authenticates a request: match scope/occupancy and project together,
- * without an unscoped existence lookup or the local admin historical wall. */
+/** Detail and receipt discovery share one authorized statement snapshot. The
+ * request ID is never authority. Examine every invoice/receipt connected by
+ * request, invoice or execution scope, including inconsistent edges, before
+ * returning any document ID. Do not read or recompute payment/ledger totals. */
 async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, requestId: string,
   selection: Pick<WorkspaceRequestSelection, 'propertyId' | 'tenantCompanyId' | 'buildingId' | 'spaceId'>) {
   const result = await getPool().query<{
     authenticated: boolean; item: Omit<JsonWorkspaceRequestRow, 'cursorCreatedAt'> | null;
+    finalReceipt: CareFinalReceiptDiscovery | null; receiptConflict: boolean;
   }>(`
     ${WORKSPACE_OCCUPANCY_CTES}, matched AS (
       SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
@@ -369,6 +389,82 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
           AND c."tenantCompanyId" = r.tenant_company_id AND c."buildingId" = r.building_id
           AND c."spaceId" IS NOT DISTINCT FROM r.space_id
       ) LIMIT $6
+    ), candidate_invoices AS (
+      SELECT i.id, i.document_number, i.execution_scope_id, i.transaction_id, i.classification_id,
+        i.client_id, i.building_id, i.request_id, i.tenant_company_id,
+        i.currency, i.total_amount, i.source_sha256, i.pdf_sha256,
+        (i.request_id = m.id AND i.client_id = m."clientId"
+          AND i.building_id = m."buildingId" AND i.tenant_company_id = m."tenantCompanyId"
+          AND s.handyman_request_id = m.id AND s.client_id = m."clientId"
+          AND s.building_id = m."buildingId" AND s.tenant_company_id = m."tenantCompanyId"
+          AND s.space_id IS NOT DISTINCT FROM m."spaceId"
+          AND s.tenant_pic_id IS NOT DISTINCT FROM m."tenantPicId"
+          AND s.channel_attribution_id = m."channelAttributionId" AND s.scope_kind = 'ORIGINAL'
+          AND t.execution_scope_id = s.id AND t.client_id = m."clientId"
+          AND t.quotation_version_id = s.approved_quotation_version_id AND t.currency = i.currency
+          AND claim.official_invoice_id = i.id
+          AND i.source_snapshot->>'schema' = 'HANDYMAN_OFFICIAL_INVOICE_V1'
+          AND i.source_snapshot->>'status' = 'ISSUED'
+          AND i.source_snapshot#>>'{issuance,id}' = i.id::text
+          AND i.source_snapshot#>>'{issuance,number}' = i.document_number
+          AND i.source_snapshot#>>'{calculation,clientId}' = i.client_id::text
+          AND i.source_snapshot#>>'{calculation,requestId}' = i.request_id::text
+          AND i.source_snapshot#>>'{calculation,commercialSource,buildingId}' = i.building_id::text
+          AND i.source_snapshot#>>'{calculation,commercialSource,tenantCompanyId}' = i.tenant_company_id::text
+          AND i.source_snapshot#>>'{calculation,commercialSource,executionScopeId}' = i.execution_scope_id::text
+          AND i.source_snapshot#>>'{calculation,commercialSource,transactionId}' = i.transaction_id::text
+          AND i.source_snapshot#>>'{calculation,classification,pin,classificationId}' = i.classification_id::text
+          AND i.source_snapshot#>>'{calculation,currency}' = i.currency
+          AND i.source_snapshot#>>'{calculation,totalIncludingPpn}' = i.total_amount::text) IS TRUE AS valid
+      FROM matched m
+      JOIN handyman_official_invoices i ON i.request_id = m.id OR i.execution_scope_id IN (
+        SELECT id FROM handyman_execution_scopes WHERE handyman_request_id = m.id
+      )
+      LEFT JOIN handyman_execution_scopes s ON s.id = i.execution_scope_id
+      LEFT JOIN handyman_customer_transactions t ON t.id = i.transaction_id
+      LEFT JOIN handyman_invoice_scope_claims claim ON claim.execution_scope_id = i.execution_scope_id
+    ), candidate_receipts AS (
+      SELECT f.id, f.document_number, f.invoice_id, f.issued_at, f.settled_at,
+        f.currency, f.invoice_total, f.settled_total, f.source_sha256, f.pdf_sha256,
+        i.document_number AS invoice_number,
+        (i.valid AND f.status = 'ISSUED' AND f.request_id = m.id
+          AND f.client_id = m."clientId" AND f.building_id = m."buildingId"
+          AND f.tenant_company_id = m."tenantCompanyId"
+          AND f.invoice_id = i.id AND f.transaction_id = i.transaction_id
+          AND f.execution_scope_id = i.execution_scope_id AND f.currency = i.currency
+          AND f.invoice_total = i.total_amount AND f.settled_total = f.invoice_total AND f.remaining_amount = 0
+          AND f.source_snapshot->>'schema' = 'HANDYMAN_FINAL_RECEIPT_V1'
+          AND f.source_snapshot->>'status' = 'ISSUED'
+          AND f.source_snapshot#>>'{issuance,id}' = f.id::text
+          AND f.source_snapshot#>>'{issuance,number}' = f.document_number
+          AND f.source_snapshot#>>'{issuance,issuedAt}' = to_char(f.issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          AND f.source_snapshot#>>'{invoice,id}' = i.id::text
+          AND f.source_snapshot#>>'{invoice,number}' = i.document_number
+          AND f.source_snapshot#>>'{invoice,classificationId}' = i.classification_id::text
+          AND f.source_snapshot#>>'{invoice,sourceSha256}' = i.source_sha256
+          AND f.source_snapshot#>>'{invoice,pdfSha256}' = i.pdf_sha256
+          AND f.source_snapshot#>>'{scope,clientId}' = f.client_id::text
+          AND f.source_snapshot#>>'{scope,buildingId}' = f.building_id::text
+          AND f.source_snapshot#>>'{scope,tenantCompanyId}' = f.tenant_company_id::text
+          AND f.source_snapshot#>>'{scope,requestId}' = f.request_id::text
+          AND f.source_snapshot#>>'{scope,executionScopeId}' = f.execution_scope_id::text
+          AND f.source_snapshot#>>'{scope,transactionId}' = f.transaction_id::text
+          AND f.source_snapshot#>>'{settlement,settledAt}' = to_char(f.settled_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          AND f.source_snapshot#>>'{settlement,currency}' = f.currency
+          AND f.source_snapshot#>>'{settlement,invoiceTotal}' = f.invoice_total::text
+          AND f.source_snapshot#>>'{settlement,totalSettled}' = f.settled_total::text
+          AND f.source_snapshot#>>'{settlement,remaining}' = f.remaining_amount::text) IS TRUE AS valid
+      FROM matched m
+      JOIN handyman_final_receipts f ON f.request_id = m.id
+        OR f.invoice_id IN (SELECT id FROM candidate_invoices)
+        OR f.execution_scope_id IN (SELECT id FROM handyman_execution_scopes WHERE handyman_request_id = m.id)
+      LEFT JOIN candidate_invoices i ON i.id = f.invoice_id
+    ), discovery_state AS (
+      SELECT (EXISTS (SELECT 1 FROM candidate_invoices WHERE NOT valid)
+        OR EXISTS (SELECT 1 FROM candidate_receipts WHERE NOT valid)
+        OR (SELECT count(*) FROM candidate_receipts) > 1) AS conflict,
+        (SELECT count(*) FROM candidate_receipts) AS receipt_count,
+        (SELECT count(*) FROM candidate_invoices) AS invoice_count
     )
     SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
       (SELECT to_jsonb(matched) || jsonb_build_object('items', COALESCE((
@@ -385,11 +481,29 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
               FROM handyman_service_request_items
              WHERE handyman_request_id = matched.id AND client_id = matched."clientId"
                AND status = 'ACTIVE'
-          ) ri), '[]'::jsonb)) FROM matched) AS item`,
+          ) ri), '[]'::jsonb)) FROM matched) AS item,
+      (SELECT conflict FROM discovery_state) AS "receiptConflict",
+      (SELECT CASE WHEN d.conflict THEN NULL
+        WHEN d.receipt_count = 1 THEN (SELECT jsonb_build_object(
+          'status', 'ISSUED', 'finalReceiptId', f.id, 'documentNumber', f.document_number,
+          'documentVersion', 1, 'requestId', m.id, 'invoiceId', f.invoice_id,
+          'invoiceNumber', f.invoice_number,
+          'issuedAt', to_char(f.issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          'settledAt', to_char(f.settled_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          'currency', f.currency, 'grossAmount', f.invoice_total::text, 'settledAmount', f.settled_total::text,
+          'sourceSha256', f.source_sha256, 'pdfSha256', f.pdf_sha256) FROM candidate_receipts f)
+        ELSE jsonb_build_object(
+          'status', 'NOT_ISSUED', 'finalReceiptId', NULL, 'documentNumber', NULL,
+          'documentVersion', NULL, 'requestId', m.id,
+          'invoiceId', CASE WHEN d.invoice_count = 1 THEN (SELECT id FROM candidate_invoices) ELSE NULL END,
+          'invoiceNumber', CASE WHEN d.invoice_count = 1 THEN (SELECT document_number FROM candidate_invoices) ELSE NULL END,
+          'issuedAt', NULL, 'settledAt', NULL, 'currency', NULL, 'grossAmount', NULL,
+          'settledAmount', NULL, 'sourceSha256', NULL, 'pdfSha256', NULL)
+        END FROM matched m CROSS JOIN discovery_state d) AS "finalReceipt"`,
     [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
       requestId, 1, selection.tenantCompanyId, selection.buildingId, selection.spaceId]);
-  const { authenticated, item } = result.rows[0];
-  return { authenticated, item: item ? { ...item,
+  const { authenticated, item, finalReceipt, receiptConflict } = result.rows[0];
+  return { authenticated, receiptConflict, finalReceipt, item: item ? { ...item,
     createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
     attributionCreatedAt: new Date(item.attributionCreatedAt),
   } : null };

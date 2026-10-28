@@ -25,5 +25,9 @@ export async function getCareWorkspaceRequestDetail(token: string, requestInput:
   if (!result.authenticated) throw workspaceUnauthorized();
   if (!result.item) throw new AppError({ code: ERROR_CODES.HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND,
     message: 'Care workspace resource not found.', statusCode: 404 });
-  return { ...toCustomerCarePublic(result.item), items: result.item.items ?? [] };
+  if (result.receiptConflict || !result.finalReceipt) throw new AppError({
+    code: ERROR_CODES.HANDYMAN_FINAL_RECEIPT_INTEGRITY_ERROR, statusCode: 409,
+    message: 'Final Receipt discovery has ambiguous or conflicting invoice/request lineage.',
+  });
+  return { ...toCustomerCarePublic(result.item), items: result.item.items ?? [], finalReceipt: result.finalReceipt };
 }
