@@ -128,21 +128,21 @@ export const migration0524HandymanWarrantyClaimAssessments: Migration = {
       -- record ID or a FINALIZE event alone establishes that bytes exist.
       CREATE FUNCTION hm_warranty_assessment_evidence_valid(snapshot JSONB, expected_client UUID,
         expected_scope UUID, require_verified BOOLEAN) RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
-      DECLARE f JSONB; record_id UUID; finish_id UUID;
+      DECLARE f JSONB; v_record_id UUID; finish_id UUID;
       BEGIN
         IF jsonb_typeof(snapshot)<>'object' OR jsonb_typeof(snapshot->'files')<>'array' THEN RETURN false; END IF;
         BEGIN
-          record_id := (snapshot->>'recordId')::uuid;
+          v_record_id := (snapshot->>'recordId')::uuid;
           finish_id := (snapshot->>'finalizeEventId')::uuid;
         EXCEPTION WHEN invalid_text_representation THEN RETURN false; END;
-        IF record_id IS NULL OR NOT EXISTS (SELECT 1 FROM handyman_evidence_records e
-          WHERE e.id=record_id AND e.client_id=expected_client AND e.execution_scope_id=expected_scope) THEN RETURN false; END IF;
+        IF v_record_id IS NULL OR NOT EXISTS (SELECT 1 FROM handyman_evidence_records e
+          WHERE e.id=v_record_id AND e.client_id=expected_client AND e.execution_scope_id=expected_scope) THEN RETURN false; END IF;
         IF finish_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM handyman_evidence_record_events e
-          WHERE e.id=finish_id AND e.record_id=record_id AND e.client_id=expected_client AND e.event_type='FINALIZE') THEN RETURN false; END IF;
+          WHERE e.id=finish_id AND e.record_id=v_record_id AND e.client_id=expected_client AND e.event_type='FINALIZE') THEN RETURN false; END IF;
         IF require_verified AND (finish_id IS NULL OR jsonb_array_length(snapshot->'files')=0
           OR snapshot->'byteVerified' IS DISTINCT FROM 'true'::jsonb) THEN RETURN false; END IF;
         FOR f IN SELECT value FROM jsonb_array_elements(snapshot->'files') LOOP
-          IF NOT EXISTS (SELECT 1 FROM handyman_evidence_record_files ef WHERE ef.record_id=record_id
+          IF NOT EXISTS (SELECT 1 FROM handyman_evidence_record_files ef WHERE ef.record_id=v_record_id
             AND ef.id::text=f->>'id' AND ef.media_kind=f->>'mediaKind' AND ef.content_type=f->>'contentType'
             AND ef.byte_size::text=f->>'byteSize' AND ef.sha256_digest=f->>'sha256Digest'
             AND ef.sha256_digest ~ '^[0-9a-f]{64}$') THEN RETURN false; END IF;

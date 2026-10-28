@@ -22,4 +22,4 @@ Historical claims and certificates are retained without invented consent or retr
 
 ## Verification status
 
-The single focused PostgreSQL suite stopped in migration setup on a PL/pgSQL parsing error; no scenario executed. The identified expression was corrected, but the correction and workflow have not been rerun under the one-suite limit. The final TypeScript typecheck passed. Treat this part as **blocked from deployment until the focused suite passes**.
+Run `NODE_ENV=test LOG_LEVEL=error npx tsx --test --test-concurrency=1 tests/handyman-warranty-claim-assessment.test.ts` to verify migration setup and the certificate binding, assessor, evidence, period and historical fail-closed scenarios. A passing focused suite is required before deployment.

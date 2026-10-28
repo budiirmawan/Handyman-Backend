@@ -517,7 +517,14 @@ describe('Warranty 01C-A — authoritative claim assessment',()=>{
     rejected(await api().get(`${claimBase(claimId)}/assessments`).set(auth(foreignToken)),403);
     assert.equal((await pool.query('SELECT hm_warranty_claim_has_covered_approval($1) AS valid',[claimId])).rows[0].valid,true);
     await assert.rejects(pool.query('UPDATE handyman_warranty_claim_bindings SET coverage_kind=$2 WHERE claim_id=$1',[claimId,'PARTS']),/immutable/i);
-    await assert.rejects(pool.query('TRUNCATE handyman_warranty_claim_assessments'),/immutable/i);
+    const truncateTx=await pool.connect();
+    try {
+      await truncateTx.query('BEGIN');
+      await assert.rejects(truncateTx.query('TRUNCATE handyman_warranty_claim_assessments CASCADE'),/immutable/i);
+    } finally {
+      await truncateTx.query('ROLLBACK');
+      truncateTx.release();
+    }
     // A real source correction makes the old certificate historical; it cannot authorize new intake.
     data(await post(`${scopePath()}/completion-declarations/${materialDeclarationId}/revoke`,leadToken,
       {reason:'Correct prior declaration',idempotencyKey:key()}));
