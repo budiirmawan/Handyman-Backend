@@ -47,12 +47,13 @@ type Source = { schema: 'HANDYMAN_BAST_OFFICIAL_V1'; status: 'ISSUED';
   verification: { id: string; verifiedByUserId: string; verifiedAt: string; qcRunId: string;
     qcRunVersion: number; qcFinishEventId: string; qcFinishedByUserId: string; qcFinishedAt: string };
   evidence: Evidence[]; units: Unit[]; issuer: HandymanDocumentIssuerSnapshot; settings: HandymanDocumentSettingsSnapshot };
-type Stored = { id: string; bast_id: string; issue_event_id: string; client_id: string; building_id: string;
+export type OfficialBastStored = { id: string; bast_id: string; issue_event_id: string; client_id: string; building_id: string;
   request_id: string; execution_scope_id: string; tenant_company_id: string; completion_verification_id: string;
   manifest_id: string; manifest_version: number; manifest_sha256: string; qc_run_id: string; qc_run_version: number;
   qc_finish_event_id: string; issuer_profile_id: string; settings_id: string; document_number: string;
   issued_by_user_id: string; issued_at: Date; source_snapshot: Source; source_canonical: string; source_sha256: string;
   pdf_filename: string; pdf_bytes: Buffer; pdf_size: number; pdf_sha256: string };
+type Stored = OfficialBastStored;
 type EvidenceRow = { id: string; client_id: string; building_id: string; tenant_company_id: string;
   handyman_request_id: string; execution_scope_id: string | null; purpose: string; upload_status: string;
   attachment_reference: string; mime_type: string; verified_byte_size: number; sha256_checksum: string; storage_key: string };
@@ -275,10 +276,10 @@ export async function createOfficialBastDocument(tx: PoolClient, bast: HandymanB
     bast.qcRunId, row.qc_run_version, row.qc_finish_id, issuer.profileId, settings.settingsId, source.issuance.number,
     event.actorUserId, canonical, digest, pdf.filename, pdf.bytes, pdf.fileSize, pdf.checksum])).rows[0];
   if (!stored) throw integrity();
-  verifyStored(stored);
+  verifyStoredOfficialBast(stored);
 }
 
-function verifyStored(row: Stored): void {
+export function verifyStoredOfficialBast(row: OfficialBastStored): void {
   try {
     const s = row.source_snapshot;
     if (!Buffer.isBuffer(row.pdf_bytes) || row.pdf_bytes.length !== row.pdf_size || row.pdf_size < 1 || row.pdf_size > MAX_PDF_BYTES ||
@@ -298,7 +299,7 @@ function verifyStored(row: Stored): void {
   } catch { throw integrity(); }
 }
 function asDownload(row: Stored) {
-  verifyStored(row);
+  verifyStoredOfficialBast(row);
   return { id: row.id, number: row.document_number, filename: row.pdf_filename, fileSize: row.pdf_size,
     sourceChecksum: row.source_sha256, pdfChecksum: row.pdf_sha256, bytes: row.pdf_bytes };
 }

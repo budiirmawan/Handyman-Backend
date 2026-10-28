@@ -1,3 +1,4 @@
+import { createHandymanWarrantyCertificateRouter } from '../modules/handyman-warranty-certificates/handyman-warranty-certificate.routes';
 import { createHandymanOfficialInvoiceRouter } from '../modules/handyman-official-invoices/handyman-official-invoice.routes';
 import { createOfficialBastDocumentRouter } from '../modules/handyman-bast/handyman-bast-document.routes';
 import { createHandymanCompletionManifestRouter } from '../modules/handyman-completion-manifest/handyman-completion-manifest.routes';
@@ -916,6 +917,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanBmStatementRouter()); // CR-HM-BM-COMMISSION-04 PART 01 — scoped, non-issued statement preview
   router.use(createHandymanBmReportRouter()); // CR-HM-BM-REPORT-05 — Building-wide, non-issued monthly preview
   router.use(createHandymanBmDocumentsRouter()); // CR-HM-BM-DOCUMENT-06 — immutable issued BM PDFs
+  router.use(createHandymanWarrantyCertificateRouter());
   router.use(createHandymanOfficialInvoiceRouter()); // Immutable inclusive tenant invoice
   router.use(createHandymanTenantReceiptRouter()); // Independently verified tenant payment receipts
   router.use(createHandymanInspectionWorkLinkRouter());

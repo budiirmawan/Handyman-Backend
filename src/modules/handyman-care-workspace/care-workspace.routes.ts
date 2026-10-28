@@ -1,3 +1,5 @@
+import { downloadWarrantyCertificateForCare } from '../handyman-warranty-certificates/handyman-warranty-certificate.service';
+import { sendWarrantyCertificatePdf } from '../handyman-warranty-certificates/handyman-warranty-certificate.routes';
 import { downloadOfficialHandymanInvoiceForCare } from '../handyman-official-invoices/handyman-official-invoice.service';
 import { sendOfficialInvoicePdf } from '../handyman-official-invoices/handyman-official-invoice.routes';
 import { downloadOfficialBastDocumentForCare } from '../handyman-bast/handyman-bast-document.service';
@@ -145,6 +147,16 @@ export function createCareWorkspaceRouter(): Router {
       sendSuccess(res, await getCareWorkspaceOperationalProjection(
         match[1], req.params.requestId, req.query, req.body));
     } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/warranty-certificates/:certificateId/document.pdf', async (req,res,next) => {
+    res.setHeader('Cache-Control','private, no-store');
+    try {
+      const match=/^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length))
+        throw AppError.validation('Warranty download does not accept a body.');
+      sendWarrantyCertificatePdf(res,await downloadWarrantyCertificateForCare(match[1],req.params.requestId,req.params.certificateId,req.query));
+    } catch(error) { next(error); }
   });
   router.get('/handyman/care/requests/:requestId/invoices/:invoiceId/document.pdf', async (req, res, next) => {
     res.setHeader('Cache-Control', 'private, no-store');
