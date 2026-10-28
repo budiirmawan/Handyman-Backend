@@ -175,7 +175,9 @@ async function readSnapshot(actor: string, n: BmStatementInput, existingTx?: Poo
       LEFT JOIN handyman_bm_settlement_verifications v ON v.settlement_id=s.id
       LEFT JOIN handyman_bm_settlement_evidence_reads er ON er.id=v.evidence_read_id
       WHERE s.client_id=$1 AND s.building_id=$2 AND s.counterparty_id=$3 AND s.agreement_version_id=$4
-        AND s.entitlement_id=ANY($5::uuid[]) ORDER BY s.id`,
+        AND s.entitlement_id=ANY($5::uuid[])
+        AND NOT EXISTS(SELECT 1 FROM handyman_bm_settlements n WHERE n.supersedes_settlement_id=s.id)
+      ORDER BY s.id`,
       [n.clientId, n.buildingId, n.counterpartyId, n.agreementVersionId, ids])).rows : [];
     const settlements = settlementRows.map((r: any) => {
       const pins = r.snapshot?.ledgerEntries;

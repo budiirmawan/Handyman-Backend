@@ -23,7 +23,11 @@ import {
   createHandymanQuotation,
   decideHandymanQuotation,
   issueHandymanQuotationVersion,
+  setHandymanQuotationLineWarrantyTerms,
 } from '../../src/modules/handyman-quotations';
+import { updateHandymanDocumentIssuerProfile, updateHandymanDocumentSettings,
+  createHandymanDocumentBankAccount, activateHandymanDocumentBankAccount } from '../../src/modules/handyman-documents';
+import { clientMonetaryContextService } from '../../src/modules/client-monetary-contexts';
 import { organizationService } from '../../src/modules/organizations';
 import { positionService } from '../../src/modules/positions';
 import { propertyService } from '../../src/modules/properties';
@@ -343,15 +347,53 @@ export async function scopeFixture(
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [uomId, realm.client.id, `M_${suffix()}`, 'Meter', 'm', 'LENGTH'],
   );
-  await addHandymanQuotationLine(version.id, {
+  const fixtureLine = await addHandymanQuotationLine(version.id, {
     lineType: 'LABOR', description: 'Hours', quantity: 1, uomId,
     currency: 'IDR', finalQuotedUnitAmount: 100,
+    // Issue gates (0519 price basis, 0522 warranty terms) require both
+    // commercial records on every line before the version can issue.
+    taxPriceBasis: 'GROSS_INCLUSIVE',
   }, adminUserId);
+  await setHandymanQuotationLineWarrantyTerms(
+    version.id, fixtureLine.id, { coverage: 'NONE' }, adminUserId,
+  );
+  // Issued quotation documents (0490–0492) pin an issuer profile, exactly one
+  // ACTIVE QUOTATION settings language and an activated issuer bank account.
+  // Created once per fixture Client; later per-suite callers that expect
+  // "no profile yet" must reuse these rows instead of re-creating them.
+  if (!(await sql(`SELECT 1 FROM handyman_document_issuer_profiles
+    WHERE client_id=$1 AND status='ACTIVE' LIMIT 1`, [realm.client.id])).rows[0]) {
+    await updateHandymanDocumentIssuerProfile({ clientId: realm.client.id, expectedVersion: null,
+      legalName: 'PT Handyman Fixture', displayName: 'Handyman', registeredAddress: 'Jl. Merdeka 1',
+      businessAddress: null, city: 'Jakarta', province: 'Jakarta', postalCode: '10110',
+      email: 'issuer@example.test', phone: '+62 21 5000 1111', whatsapp: '+62 811 2000 3000',
+      website: null, taxId: null, businessRegistrationId: null, logoReference: null }, adminUserId);
+  }
+  if (!(await sql(`SELECT 1 FROM handyman_document_issuer_document_settings
+    WHERE client_id=$1 AND document_kind='QUOTATION' AND status='ACTIVE' LIMIT 1`, [realm.client.id])).rows[0]) {
+    await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'QUOTATION', language: 'id',
+      expectedVersion: null, documentPrefix: 'QTN', termsLines: ['Work after approval'],
+      paymentNote: 'Transfer within seven days', warrantyNote: null, contactNote: null, footerNote: null,
+      signatoryName: 'Manager', signatoryTitle: 'Operations' }, adminUserId);
+  }
+  if (!(await sql(`SELECT 1 FROM handyman_document_issuer_bank_accounts
+    WHERE client_id=$1 LIMIT 1`, [realm.client.id])).rows[0]) {
+    await clientMonetaryContextService.setClientMonetaryContext({ clientId: realm.client.id,
+      baseCurrencyCode: 'IDR', defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, adminUserId);
+    const issuerBank = await createHandymanDocumentBankAccount({ clientId: realm.client.id, bankCode: 'BANK',
+      bankName: 'Test Bank', accountNumber: '1234567890', accountHolderName: 'PT Issuer', currency: 'IDR' }, adminUserId);
+    await activateHandymanDocumentBankAccount({ clientId: realm.client.id, bankAccountId: issuerBank.bankAccountId,
+      expectedVersion: issuerBank.version, confirmAccountNumber: '1234567890',
+      verificationReference: 'Verified statement', asDefault: true, authorizeReplacement: false }, adminUserId);
+  }
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  const offerRow=(await sql('SELECT id,pdf_sha256 FROM handyman_quotation_documents WHERE quotation_version_id=$1',
+    [version.id])).rows[0];
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
+    offerDocumentId: offerRow.id, offerPdfSha256: offerRow.pdf_sha256,
   }, linkedUser.id);
   return { scope: decision.executionScope };
 }

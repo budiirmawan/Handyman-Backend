@@ -16,6 +16,8 @@ import { hash } from '../handyman-pph-calculation/handyman-pph-core';
 type Scope=Readonly<{clientId:string;settlementId:string}>;
 export type PrepareBmSettlementInput=Readonly<{clientId:string;entitlementId:string;ledgerEntryIds:readonly string[];
   bankVersionId:string;idempotencyKey:string;evidenceReference:string}>;
+export type SupersedeBmSettlementInput=Readonly<{clientId:string;settlementId:string;supersessionReason:string;
+  ledgerEntryIds:readonly string[];bankVersionId:string;idempotencyKey:string;evidenceReference:string}>;
 export type ApproveBmSettlementInput=Scope & Readonly<{settlementDigest:string;evidenceReference:string}>;
 export type RecordBmSettlementPaymentInput=Scope & Readonly<{transferReference:string;amount:string;transferredAt:string;
   idempotencyKey:string;file:Readonly<{buffer:Buffer;mimeType:string}>}>;
@@ -28,6 +30,10 @@ const err=(key:ErrorKey,message:string,statusCode=409)=>new AppError({code:ERROR
 const invalid=(field:string)=>err('HANDYMAN_BM_SETTLEMENT_INVALID',`Invalid ${field}.`,400);
 const missing=()=>err('HANDYMAN_BM_SETTLEMENT_NOT_FOUND','BM settlement not found in this Client.',404);
 const conflict=()=>err('HANDYMAN_BM_SETTLEMENT_CONFLICT','BM settlement, payment, evidence or idempotency conflicts.');
+function mapUnique(err:unknown):never{
+  if((err as {code?:string}).code==='23505')throw conflict();
+  throw err;
+}
 const stale=()=>err('HANDYMAN_BM_SETTLEMENT_STALE','The authoritative commission ledger, beneficiary or approved bank version is stale.');
 const unavailable=()=>err('HANDYMAN_BM_SETTLEMENT_EVIDENCE_UNAVAILABLE','Protected payment evidence is missing, unreadable or inconsistent.',503);
 function dbError(e:unknown):never {
@@ -115,6 +121,11 @@ async function ledger(tx:PoolClient,actor:string,clientId:string,entitlementId:s
 }
 async function fresh(tx:PoolClient,actor:string,s:any,currentBank:boolean) {
   await tx.query('SELECT hm_bm_settlement_lock(s) FROM handyman_bm_settlements s WHERE s.id=$1',[s.id]);
+  // A superseded preparation keeps its history but can never be approved,
+  // paid or reviewed again: every successor action targets the replacement.
+  if((await tx.query('SELECT 1 FROM handyman_bm_settlements WHERE supersedes_settlement_id=$1',[s.id])).rows.length)
+    throw err('HANDYMAN_BM_SETTLEMENT_CONFLICT',
+      'This settlement preparation was superseded; approval, payment and review must target its replacement.',409);
   const ok=(await tx.query('SELECT hm_bm_settlement_anchors_valid(s,$2) AS valid FROM handyman_bm_settlements s WHERE id=$1',[s.id,currentBank])).rows[0]?.valid;
   if(!ok)throw stale();const rows=await ledger(tx,actor,s.client_id,s.entitlement_id);
   if(rows[0].id!==s.original_entry_id||rows[rows.length-1].id!==s.latest_entry_id||
@@ -124,8 +135,12 @@ async function publicView(tx:PoolClient,s:any) {
   const a=(await tx.query('SELECT * FROM handyman_bm_settlement_approvals WHERE settlement_id=$1',[s.id])).rows[0];
   const p=(await tx.query('SELECT * FROM handyman_bm_settlement_payments WHERE settlement_id=$1',[s.id])).rows[0];
   const v=(await tx.query('SELECT * FROM handyman_bm_settlement_verifications WHERE settlement_id=$1',[s.id])).rows[0];
+  const sup=(await tx.query('SELECT id FROM handyman_bm_settlements WHERE supersedes_settlement_id=$1',[s.id])).rows[0];
   return Object.freeze({snapshot:s.snapshot,digest:s.digest,status:(v?'SETTLED':p?'PAYMENT_RECORDED':a?'APPROVED':'PREPARED') as
     'PREPARED'|'APPROVED'|'PAYMENT_RECORDED'|'SETTLED',createdAt:(s.created_at as Date).toISOString(),
+    supersession:s.supersedes_settlement_id?Object.freeze({settlementId:s.supersedes_settlement_id as string,
+      reason:s.supersession_reason as string}):null,
+    supersededBySettlementId:(sup?.id as string|undefined)??null,
     bank:Object.freeze({versionId:s.bank_version_id,decisionId:s.bank_decision_id,bankAccountId:s.bank_account_id,
       bankCode:s.bank_code,bankName:s.bank_name,accountHolderName:s.account_holder_name,
       accountNumberMasked:maskHandymanDocumentAccountNumber(s.account_number),version:s.bank_version,bankVerificationStatus:'NOT_VERIFIED_BY_SYSTEM' as const}),
@@ -142,6 +157,40 @@ async function stored(p:any):Promise<Buffer> {
     if(data.size!==p.file_size||data.buffer.length!==p.file_size||computeEvidenceSha256(data.buffer)!==p.content_sha256)throw unavailable();
     return data.buffer;
   }catch{throw unavailable();}
+}
+
+/** Revalidates the current authoritative ledger chain and approved
+ * beneficiary, assembles the digest-locked snapshot and inserts the one
+ * preparation row. Shared by prepare and supersede so a replacement is
+ * always recomputed, never copied, from live entitlement, correction,
+ * tax-case and bank facts. */
+async function assemble(tx:PoolClient,actor:string,p:{clientId:string;entitlementId:string;buildingId:string;
+    agreementVersionId:string;ids:readonly string[];bankVersionId:string;key:string;audit:string},
+  supersede?:{predecessorId:string;reason:string}):Promise<string> {
+  const rows=await ledger(tx,actor,p.clientId,p.entitlementId),last=rows[rows.length-1];
+  if(JSON.stringify(p.ids)!==JSON.stringify(rows.map(r=>r.id))||last.net_payable==='0.00')throw stale();
+  const bank=(await tx.query(`SELECT b.*,d.id AS decision_id FROM handyman_bm_bank_account_versions b
+    JOIN handyman_bm_bank_account_decisions d ON d.proposal_id=b.id AND d.decision='APPROVE'
+    WHERE b.id=$1 AND b.client_id=$2 AND b.counterparty_id=$3`,[p.bankVersionId,p.clientId,last.counterparty_id])).rows[0];
+  if(!bank||bank.currency!==last.currency||bank.proposed_status!=='ACTIVE')throw stale();
+  noNumber(bank.account_number,p.audit,p.key,...(supersede?[supersede.reason]:[]));
+  const id=randomUUID(),snapshot={schema:'HANDYMAN_BM_SETTLEMENT_V1',id,clientId:p.clientId,buildingId:p.buildingId,
+    counterpartyId:last.counterparty_id,entitlementId:p.entitlementId,agreementVersionId:p.agreementVersionId,
+    bankVersionId:p.bankVersionId,bankDecisionId:bank.decision_id,
+    ledgerEntries:rows.map(r=>({id:r.id,digest:r.digest})),currency:last.currency,netPayable:last.net_payable,
+    pphWithholdingProjection:last.pph_withholding_projection,assertions:{withholding:'NOT_ASSERTED',remittance:'NOT_ASSERTED'},
+    createdByUserId:actor,idempotencyKey:p.key,evidenceReference:p.audit,
+    ...(supersede?{supersedesSettlementId:supersede.predecessorId,supersessionReason:supersede.reason}:{})};
+  try {
+    await tx.query(`INSERT INTO handyman_bm_settlements(id,client_id,building_id,counterparty_id,entitlement_id,agreement_version_id,
+      original_entry_id,latest_entry_id,bank_version_id,bank_decision_id,currency,net_payable,snapshot,digest,idempotency_key,
+      evidence_reference,created_by_user_id,supersedes_settlement_id,supersession_reason)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      [id,p.clientId,p.buildingId,last.counterparty_id,p.entitlementId,p.agreementVersionId,rows[0].id,last.id,
+        p.bankVersionId,bank.decision_id,last.currency,last.net_payable,JSON.stringify(snapshot),hash(snapshot),p.key,
+        p.audit,actor,supersede?.predecessorId??null,supersede?.reason??null]);
+    return id;
+  } catch (err) { return mapUnique(err); }
 }
 
 /** One entitlement per immutable settlement; every original/correction ledger entry is pinned. */
@@ -161,24 +210,64 @@ export async function prepareHandymanBmSettlement(actorInput:string,input:Prepar
     const prior=(await tx.query('SELECT id FROM handyman_bm_settlements WHERE client_id=$1 AND idempotency_key=$2',[clientId,key])).rows[0];
     if(prior){const s=await load(tx,actor,clientId,prior.id,'maker');
       if(s.entitlement_id!==entitlementId||s.created_by_user_id!==actor||s.bank_version_id!==bankVersionId||s.evidence_reference!==audit||
+        s.supersedes_settlement_id!==null||
         JSON.stringify(s.snapshot.ledgerEntries.map((e:any)=>e.id))!==JSON.stringify(ids))throw conflict();
       return {settlement:await publicView(tx,s),replayed:true};}
-    const rows=await ledger(tx,actor,clientId,entitlementId),last=rows[rows.length-1];
-    if(JSON.stringify(ids)!==JSON.stringify(rows.map(r=>r.id))||last.net_payable==='0.00')throw stale();
-    const bank=(await tx.query(`SELECT b.*,d.id AS decision_id FROM handyman_bm_bank_account_versions b
-      JOIN handyman_bm_bank_account_decisions d ON d.proposal_id=b.id AND d.decision='APPROVE'
-      WHERE b.id=$1 AND b.client_id=$2 AND b.counterparty_id=$3`,[bankVersionId,clientId,last.counterparty_id])).rows[0];
-    if(!bank||bank.currency!==last.currency||bank.proposed_status!=='ACTIVE')throw stale();noNumber(bank.account_number,audit,key);
-    const id=randomUUID(),snapshot={schema:'HANDYMAN_BM_SETTLEMENT_V1',id,clientId,buildingId:f.building_id,counterpartyId:last.counterparty_id,
-      entitlementId,agreementVersionId:f.agreement_version_id,bankVersionId,bankDecisionId:bank.decision_id,
-      ledgerEntries:rows.map(r=>({id:r.id,digest:r.digest})),currency:last.currency,netPayable:last.net_payable,
-      pphWithholdingProjection:last.pph_withholding_projection,assertions:{withholding:'NOT_ASSERTED',remittance:'NOT_ASSERTED'},
-      createdByUserId:actor,idempotencyKey:key,evidenceReference:audit};
-    await tx.query(`INSERT INTO handyman_bm_settlements(id,client_id,building_id,counterparty_id,entitlement_id,agreement_version_id,
-      original_entry_id,latest_entry_id,bank_version_id,bank_decision_id,currency,net_payable,snapshot,digest,idempotency_key,evidence_reference,created_by_user_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [id,clientId,f.building_id,last.counterparty_id,entitlementId,f.agreement_version_id,rows[0].id,last.id,bankVersionId,bank.decision_id,
-        last.currency,last.net_payable,JSON.stringify(snapshot),hash(snapshot),key,audit,actor]);
+    const id=await assemble(tx,actor,{clientId,entitlementId,buildingId:f.building_id,agreementVersionId:f.agreement_version_id,
+      ids,bankVersionId,key,audit});
+    return {settlement:await publicView(tx,await load(tx,actor,clientId,id,'maker')),replayed:false};
+  });}catch(e){return dbError(e);}
+}
+
+/** CR-HM-BM-SETTLEMENT-01 PART 01 — supersede a STALE, unfinalized
+ * preparation. Only authorized scoped Finance makers may do it, only
+ * while the original is stale (anchors/ledger/snapshot no longer
+ * current) and still without payment or verification (a finalized or
+ * settled payout can never be replaced). The original row, its approval,
+ * evidence and reviewer history stay immutable and readable; the
+ * replacement is recomputed from the current authoritative entitlement,
+ * corrections, approved tax case and approved beneficiary bank version,
+ * carries the explicit reason, and always starts PREPARED — approval is
+ * never inherited. Concurrent or repeated supersession conflicts on the
+ * scope lock, successor lookup and the 0534 unique successor index. */
+export async function supersedeHandymanBmSettlement(actorInput:string,input:SupersedeBmSettlementInput) {
+  keys(input,['clientId','settlementId','supersessionReason','ledgerEntryIds','bankVersionId','idempotencyKey','evidenceReference']);
+  const actor=uuid(actorInput,'actorUserId'),clientId=uuid(input.clientId,'clientId'),settlementId=uuid(input.settlementId,'settlementId');
+  const bankVersionId=uuid(input.bankVersionId,'bankVersionId'),key=text(input.idempotencyKey,'idempotencyKey',200),
+    audit=evidence(input.evidenceReference),reason=text(input.supersessionReason,'supersessionReason',500,3);
+  if(!Array.isArray(input.ledgerEntryIds)||input.ledgerEntryIds.length<1||input.ledgerEntryIds.length>2)throw invalid('ledgerEntryIds');
+  const ids=input.ledgerEntryIds.map(v=>uuid(v,'ledgerEntryIds'));if(new Set(ids).size!==ids.length)throw invalid('ledgerEntryIds');
+  try{return await withTransaction(async tx=>{
+    await tx.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+    const s=await load(tx,actor,clientId,settlementId,'maker');
+    // Serialize with prepare/supersede/ledger writers of this entitlement
+    // before any idempotency or successor decision.
+    await lockBmTaxPostingScopeAndLedger(tx,clientId,s.entitlement_id);
+    // The explicit reason is validated against the pinned account number
+    // before any staleness, idempotency or successor decision.
+    noNumber(s.account_number,reason,audit,key);
+    const prior=(await tx.query('SELECT * FROM handyman_bm_settlements WHERE client_id=$1 AND idempotency_key=$2',[clientId,key])).rows[0];
+    if(prior){
+      if(prior.supersedes_settlement_id!==s.id||prior.created_by_user_id!==actor||prior.bank_version_id!==bankVersionId||
+        prior.evidence_reference!==audit||prior.supersession_reason!==reason||
+        JSON.stringify(prior.snapshot.ledgerEntries.map((e:any)=>e.id))!==JSON.stringify(ids))throw conflict();
+      return {settlement:await publicView(tx,await load(tx,actor,clientId,prior.id,'maker')),replayed:true};
+    }
+    if((await tx.query('SELECT 1 FROM handyman_bm_settlements WHERE supersedes_settlement_id=$1',[s.id])).rows.length)
+      throw conflict();
+    if((await tx.query(`SELECT EXISTS(SELECT 1 FROM handyman_bm_settlement_payments WHERE settlement_id=$1)
+      OR EXISTS(SELECT 1 FROM handyman_bm_settlement_verifications WHERE settlement_id=$1) AS done`,[s.id])).rows[0].done)
+      throw err('HANDYMAN_BM_SETTLEMENT_CONFLICT',
+        'A finalized or settled BM payout can never be superseded.',409);
+    let isStale=false;
+    try{await fresh(tx,actor,s,true);}
+    catch(e){
+      if(e instanceof AppError&&e.code===ERROR_CODES.HANDYMAN_BM_SETTLEMENT_STALE)isStale=true;else throw e;
+    }
+    if(!isStale)throw err('HANDYMAN_BM_SETTLEMENT_CONFLICT',
+      'Only a stale, unfinalized BM settlement preparation can be superseded.',409);
+    const id=await assemble(tx,actor,{clientId,entitlementId:s.entitlement_id,buildingId:s.building_id,
+      agreementVersionId:s.agreement_version_id,ids,bankVersionId,key,audit},{predecessorId:s.id,reason});
     return {settlement:await publicView(tx,await load(tx,actor,clientId,id,'maker')),replayed:false};
   });}catch(e){return dbError(e);}
 }
