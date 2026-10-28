@@ -4,11 +4,14 @@
  * Exactly: auth actor → whitelist parse (path identity + content vocabulary) →
  * the existing service → bounded serialization. Kind and language come from the
  * PATH only, so a body can never re-target another provider, another document
- * type or another language, and no handler here decides anything about prices,
- * acceptance, warranty activation or numbering.
+ * type or another language. The separate Payment Receipt action records only
+ * an explicit numbering-policy approval, not a price, customer acceptance,
+ * warranty activation or issued number.
  */
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { AppError } from '../../shared/errors';
+import { activatePaymentReceiptNumbering } from './handyman-payment-receipt-numbering.service';
 import { authenticationRequiredError } from '../auth';
 import {
   getHandymanDocumentSettings,
@@ -107,4 +110,22 @@ export async function listHandymanDocumentSettingsHistoryHandler(
   } catch (error) {
     next(error);
   }
+}
+
+/** This records a separate authorized policy decision; it never issues a receipt. */
+export async function activatePaymentReceiptNumberingHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.auth) throw authenticationRequiredError();
+    const target = parseSettingsTarget({ clientId: req.params.clientId, documentKind: req.params.documentKind, language: req.params.language });
+    const body: unknown = req.body;
+    if (target.documentKind !== 'PAYMENT_RECEIPT' || !body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).some(k => !['settingsId', 'settingsVersion', 'policyCode', 'approve'].includes(k))) {
+      throw AppError.validation('Invalid Payment Receipt numbering approval.');
+    }
+    const value = body as Record<string, unknown>;
+    const approval = await activatePaymentReceiptNumbering({ clientId: target.clientId, language: target.language,
+      settingsId: value.settingsId, settingsVersion: value.settingsVersion, policyCode: value.policyCode, approve: value.approve,
+      actorUserId: req.auth.userId, sessionId: req.auth.sessionId });
+    sendSuccess(res, approval, approval.replayed ? 200 : 201);
+  } catch (error) { next(error); }
 }

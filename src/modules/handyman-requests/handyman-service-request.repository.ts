@@ -334,7 +334,7 @@ export type CareFinalReceiptDiscovery = {
 /** Issued Payment Receipt metadata. Receipt amounts and invoice references
  * are historical document facts, not an assertion of invoice settlement. */
 export type CarePaymentReceiptDiscovery = {
-  receiptId: string; documentNumber: null; status: 'ISSUED';
+  receiptId: string; documentNumber: string | null; status: 'ISSUED';
   paymentId: string; requestId: string; executionScopeId: string; transactionId: string;
   amount: string; currency: string; obligationStage: 'DP' | 'TERMIN' | 'PELUNASAN';
   issuedAt: string; sourceAsOf: string;
@@ -476,7 +476,7 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
       -- Include inconsistent edges as candidates too: filtering them out would
       -- falsely turn conflicting lineage into a successful empty list. The
       -- only public output comes after the request's matched authority above.
-      SELECT pr.id, pr.payment_id, pr.request_id, pr.execution_scope_id, pr.transaction_id,
+      SELECT pr.id, pr.client_id, pr.document_number, pr.payment_id, pr.request_id, pr.execution_scope_id, pr.transaction_id,
         pr.issued_at, pr.source_as_of, pr.source_sha256, pr.pdf_sha256,
         p.amount, p.currency, p.obligation_stage,
         pr.source_snapshot#>'{reference,invoice}' AS invoice_at_issuance,
@@ -517,6 +517,28 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
           AND pr.source_snapshot#>>'{reference,quotationVersionId}' = t.quotation_version_id::text
           AND pr.source_snapshot#>>'{reference,spaceId}' IS NOT DISTINCT FROM s.space_id::text
           AND pr.source_snapshot#>>'{issuance,id}' = pr.id::text
+          -- Legacy artifacts have no assigned number. Numbered artifacts must
+          -- retain the exact approved settings, policy and Jakarta issuance year.
+          AND ((pr.document_number IS NULL AND pr.numbering_approval_id IS NULL)
+            OR (pr.document_number ~ '^HM-PR-[0-9]{4}-[0-9]{6}$'
+              AND substring(pr.document_number, 12, 6) <> '000000'
+              AND substring(pr.document_number, 7, 4) = to_char(pr.issued_at AT TIME ZONE 'Asia/Jakarta', 'YYYY')
+              AND pr.source_snapshot#>>'{issuance,number}' = pr.document_number
+              AND EXISTS (SELECT 1 FROM handyman_payment_receipt_numbering_approvals a
+                JOIN handyman_document_issuer_document_settings ds ON ds.id = a.settings_id
+                WHERE a.id = pr.numbering_approval_id AND a.client_id = pr.client_id
+                  AND a.policy_code = 'HM_PR_ISSUER_YEAR_V1' AND ds.client_id = a.client_id
+                  AND ds.document_kind = 'PAYMENT_RECEIPT' AND ds.document_prefix = 'HM-PR'
+                  AND ds.version = a.settings_version
+                  AND pr.source_snapshot#>>'{numberingPolicy,approvalId}' = a.id::text
+                  AND pr.source_snapshot#>>'{numberingPolicy,settingsId}' = ds.id::text
+                  AND pr.source_snapshot#>>'{numberingPolicy,settingsVersion}' = ds.version::text
+                  AND pr.source_snapshot#>>'{numberingPolicy,language}' = ds.language
+                  AND pr.source_snapshot#>>'{numberingPolicy,policyCode}' = a.policy_code
+                  AND pr.source_snapshot#>>'{numberingPolicy,format}' = 'HM-PR-{YYYY}-{SEQ:06}'
+                  AND pr.source_snapshot#>>'{numberingPolicy,timeZone}' = 'Asia/Jakarta'
+                  AND pr.source_snapshot#>>'{numberingPolicy,scope}' = 'ISSUER_CLIENT_CALENDAR_YEAR'
+                  AND pr.source_snapshot#>>'{numberingPolicy,calendarYear}' = hm_pr_calendar_year(pr.issued_at)::text)))
           AND pr.source_snapshot#>>'{issuance,issuedByUserId}' = pr.issued_by_user_id::text
           AND pr.source_snapshot#>>'{issuer,profileId}' = pr.issuer_profile_id::text
           AND pr.source_snapshot#>>'{issuance,issuedAt}' = to_char(pr.issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
@@ -646,9 +668,13 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
           'settledAmount', NULL, 'sourceSha256', NULL, 'pdfSha256', NULL)
         END FROM matched m CROSS JOIN discovery_state d) AS "finalReceipt",
       (EXISTS (SELECT 1 FROM payment_receipt_candidates WHERE NOT valid)
-        OR EXISTS (SELECT 1 FROM payment_receipt_candidates GROUP BY payment_id HAVING count(*) > 1)) AS "paymentReceiptConflict",
+        OR EXISTS (SELECT 1 FROM payment_receipt_candidates GROUP BY payment_id HAVING count(*) > 1)
+        OR EXISTS (SELECT 1 FROM payment_receipt_candidates candidate
+          JOIN handyman_tenant_payment_receipts duplicate ON duplicate.client_id = candidate.client_id
+            AND duplicate.document_number = candidate.document_number AND duplicate.id <> candidate.id
+          WHERE candidate.document_number IS NOT NULL)) AS "paymentReceiptConflict",
       COALESCE((SELECT jsonb_agg(jsonb_build_object(
-        'receiptId', pr.id, 'documentNumber', NULL, 'status', 'ISSUED',
+        'receiptId', pr.id, 'documentNumber', pr.document_number, 'status', 'ISSUED',
         'paymentId', pr.payment_id, 'requestId', pr.request_id, 'executionScopeId', pr.execution_scope_id,
         'transactionId', pr.transaction_id, 'amount', pr.amount::text, 'currency', pr.currency,
         'obligationStage', pr.obligation_stage,

@@ -1,3 +1,4 @@
+import { approveTestPaymentReceiptPolicy } from './helpers/payment-receipt-policy';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -95,6 +96,7 @@ before(async () => {
   const d = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN'); assert.ok(d); discipline = d.id;
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline, query: q });
   realm = await realmFixture('Inspection Link'); chain = await locationChain(realm);
+  await approveTestPaymentReceiptPolicy(realm.client.id, adminToken);
   tenant = (await tenantCompanyService.createTenantCompany({ clientId: realm.client.id,
     tenantCode: `T_${id().slice(0,8).toUpperCase()}`, tenantName: 'Link tenant' }, admin)).id;
   const user = await userService.createUser({ email: `${id()}@link.test`, displayName: 'Tenant PIC' }); person = user.id;

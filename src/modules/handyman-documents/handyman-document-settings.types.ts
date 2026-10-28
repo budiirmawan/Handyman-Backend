@@ -11,16 +11,16 @@
  * warranty start date and no signature image. Prices and totals come from the
  * quotation, acceptance from the BAST record, warranty activation from the
  * warranty record, the payment destination from the verified bank-account master
- * (PART 01B), and a signature is a human act this module cannot represent. The
- * kind and language vocabularies are the renderer's frozen ones - this module
- * introduces no parallel enumeration.
+ * (PART 01B), and a signature is a human act this module cannot represent.
+ * Existing renderer kinds retain their frozen vocabulary. PAYMENT_RECEIPT has
+ * its own renderer and is added here for its separately approved number policy.
  */
 import {
   HANDYMAN_DOCUMENT_KINDS,
   HANDYMAN_DOCUMENT_LOCALES,
 } from './handyman-document-pdf.types';
 
-export const HANDYMAN_DOCUMENT_SETTINGS_KINDS = HANDYMAN_DOCUMENT_KINDS;
+export const HANDYMAN_DOCUMENT_SETTINGS_KINDS = [...HANDYMAN_DOCUMENT_KINDS, 'PAYMENT_RECEIPT'] as const;
 export type HandymanDocumentSettingsKind = (typeof HANDYMAN_DOCUMENT_SETTINGS_KINDS)[number];
 export const HANDYMAN_DOCUMENT_SETTINGS_LANGUAGES = HANDYMAN_DOCUMENT_LOCALES;
 export type HandymanDocumentSettingsLanguage =

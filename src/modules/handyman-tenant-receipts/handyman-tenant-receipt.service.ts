@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { withTransaction } from '../../database';
+import { getPool, withTransaction } from '../../database';
+import { PAYMENT_RECEIPT_NUMBER_FORMAT, PAYMENT_RECEIPT_NUMBER_SCOPE, PAYMENT_RECEIPT_POLICY_CODE,
+  PAYMENT_RECEIPT_TIME_ZONE } from '../handyman-documents/handyman-payment-receipt-numbering.service';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { stableJson } from '../../shared/stable-json';
 import { isValidUuid } from '../clients';
@@ -30,7 +32,9 @@ type Correction = { id: string; correction_kind: string; source_kind: string; so
   source_allocation_id: string | null; currency: string; amount: string; corrected_by_user_id: string; occurred_at_exact: string };
 type ReceiptSource = {
   schema: 'HANDYMAN_TENANT_PAYMENT_RECEIPT_V1'; status: 'ISSUED'; clientId: string; asOf: string;
-  issuance: { id: string; issuedByUserId: string; issuedAt: string };
+  issuance: { id: string; issuedByUserId: string; issuedAt: string; number?: string };
+  numberingPolicy?: { approvalId: string; settingsId: string; settingsVersion: number; language: 'id' | 'en';
+    policyCode: string; format: string; timeZone: string; scope: string; calendarYear: number };
   issuer: Awaited<ReturnType<typeof resolveHandymanDocumentIssuerSnapshot>>;
   building: { id: string; code: string; name: string };
   payer: { tenantCompanyId: string; tenantName: string; legalName: string | null; basis: 'EXECUTION_SCOPE_CUSTOMER'; remitterIdentity: 'NOT_VERIFIED' };
@@ -45,7 +49,7 @@ type ReceiptSource = {
 };
 type Stored = { id: string; client_id: string; building_id: string; tenant_company_id: string; request_id: string;
   execution_scope_id: string; transaction_id: string; payment_id: string; record_event_id: string; confirmation_event_id: string;
-  issuer_profile_id: string; issued_by_user_id: string;
+  issuer_profile_id: string; issued_by_user_id: string; document_number: string | null; numbering_approval_id: string | null;
   issued_at: Date; source_as_of: Date; source_snapshot: ReceiptSource; source_canonical: string; source_sha256: string;
   pdf_filename: string; pdf_bytes: Buffer; pdf_size: number; pdf_sha256: string };
 
@@ -93,7 +97,7 @@ async function requireDurablePrimary(tx: PoolClient): Promise<void> {
   }
 }
 function metadata(row: Stored) {
-  return { id: row.id, status: 'ISSUED' as const, paymentId: row.payment_id, executionScopeId: row.execution_scope_id,
+  return { id: row.id, documentNumber: row.document_number, status: 'ISSUED' as const, paymentId: row.payment_id, executionScopeId: row.execution_scope_id,
     clientId: row.client_id, buildingId: row.building_id, issuedAt: iso(row.issued_at), sourceAsOf: iso(row.source_as_of),
     sourceChecksum: row.source_sha256, pdfChecksum: row.pdf_sha256, filename: row.pdf_filename, fileSize: row.pdf_size };
 }
@@ -108,6 +112,18 @@ export function verifyStoredTenantPaymentReceipt(row: Stored): void {
       s.reference.executionScopeId !== row.execution_scope_id || s.reference.transactionId !== row.transaction_id ||
       s.payment.id !== row.payment_id || s.issuer.profileId !== row.issuer_profile_id || s.issuance.id !== row.id ||
       s.issuance.issuedByUserId !== row.issued_by_user_id || s.issuance.issuedAt !== iso(row.issued_at) || s.asOf !== iso(row.source_as_of)) throw integrity();
+  if ((row.document_number === null) !== (row.numbering_approval_id === null)) throw integrity();
+  if (row.document_number !== null) {
+    const policy = s.numberingPolicy;
+    const year = Number(new Intl.DateTimeFormat('en', { timeZone: PAYMENT_RECEIPT_TIME_ZONE, year: 'numeric' }).format(row.issued_at));
+    if (!/^HM-PR-[0-9]{4}-(?!000000)[0-9]{6}$/.test(row.document_number) ||
+        s.issuance.number !== row.document_number || !policy || policy.approvalId !== row.numbering_approval_id ||
+        !policy.settingsId || !Number.isInteger(policy.settingsVersion) || policy.settingsVersion < 1 ||
+        !['id', 'en'].includes(policy.language) || policy.policyCode !== PAYMENT_RECEIPT_POLICY_CODE ||
+        policy.format !== PAYMENT_RECEIPT_NUMBER_FORMAT || policy.timeZone !== PAYMENT_RECEIPT_TIME_ZONE ||
+        policy.scope !== PAYMENT_RECEIPT_NUMBER_SCOPE || policy.calendarYear !== year ||
+        row.document_number.slice(6, 10) !== String(year).padStart(4, '0')) throw integrity();
+  }
 }
 
 /** Reuse the shared PDF renderer with lossless, bounded cell encoding before durable storage. */
@@ -138,6 +154,7 @@ function table(key: string, label: string, rows: ReportingExportRow[]): Reportin
 async function renderReceipt(s: ReceiptSource, sourceChecksum: string) {
   const identity: ReportingExportRow[] = [], payment: ReportingExportRow[] = [], allocations: ReportingExportRow[] = [];
   add(identity, 'Status', 'ISSUED - immutable Payment Receipt'); add(identity, 'Receipt ID', s.issuance.id);
+  add(identity, 'Receipt number', s.issuance.number);
   add(identity, 'Issued at UTC', s.issuance.issuedAt); add(identity, 'Source as of UTC', s.asOf);
   add(identity, 'Issuer legal name', s.issuer.legalName); add(identity, 'Issuer address', s.issuer.registeredAddress);
   add(identity, 'Issuer city', `${s.issuer.city}, ${s.issuer.province} ${s.issuer.postalCode}`);
@@ -270,45 +287,108 @@ async function readSource(tx: PoolClient, scope: ScopeRow, input: Scope, actor: 
       correctedByUserId: c.corrected_by_user_id, occurredAt: c.occurred_at_exact })) };
 }
 
+/** Allocate inside the issuance transaction under the active, explicitly
+ * approved settings version. The counter and artifact commit or roll back together. */
+async function allocateReceiptNumber(tx: PoolClient, source: ReceiptSource): Promise<void> {
+  // Pin the decision first and the settings second, matching activation's lock
+  // order; a concurrent replacement cannot pass between the checks and insert.
+  const policy = (await tx.query<{ id: string; settings_id: string; settings_version: number }>(`
+    SELECT id,settings_id,settings_version FROM handyman_payment_receipt_numbering_approvals
+    WHERE client_id=$1 AND status='ACTIVE' AND policy_code=$2 FOR SHARE`,
+  [source.clientId, PAYMENT_RECEIPT_POLICY_CODE])).rows[0];
+  if (!policy) throw conflict('No explicitly approved active Payment Receipt numbering policy exists for this issuer.');
+  const settings = (await tx.query<{ language: 'id' | 'en' }>(`SELECT language
+    FROM handyman_document_issuer_document_settings WHERE id=$1 AND client_id=$2 AND status='ACTIVE'
+      AND document_kind='PAYMENT_RECEIPT' AND document_prefix='HM-PR' AND version=$3 FOR SHARE`,
+  [policy.settings_id, source.clientId, policy.settings_version])).rows[0];
+  if (!settings) throw conflict('The approved Payment Receipt settings version is no longer active.');
+  const year = (await tx.query<{ year: number }>('SELECT hm_pr_calendar_year($1::timestamptz) AS year',
+    [source.issuance.issuedAt])).rows[0]?.year;
+  if (!year || year < 1 || year > 9999) throw conflict('Receipt issuance year is outside the numbering policy.');
+  const counter = (await tx.query<{ last_value: number }>(`INSERT INTO handyman_payment_receipt_number_counters
+    (client_id,calendar_year,last_value) VALUES ($1,$2,1)
+    ON CONFLICT (client_id,calendar_year) DO UPDATE SET last_value=handyman_payment_receipt_number_counters.last_value+1
+      WHERE handyman_payment_receipt_number_counters.last_value < 999999
+    RETURNING last_value`, [source.clientId, year])).rows[0];
+  if (!counter) throw conflict('The six-digit Payment Receipt sequence is exhausted for this issuer and year.');
+  source.issuance.number = `HM-PR-${String(year).padStart(4, '0')}-${String(counter.last_value).padStart(6, '0')}`;
+  source.numberingPolicy = { approvalId: policy.id, settingsId: policy.settings_id, settingsVersion: policy.settings_version,
+    language: settings.language, policyCode: PAYMENT_RECEIPT_POLICY_CODE, format: PAYMENT_RECEIPT_NUMBER_FORMAT,
+    timeZone: PAYMENT_RECEIPT_TIME_ZONE, scope: PAYMENT_RECEIPT_NUMBER_SCOPE, calendarYear: year };
+}
+
 /** One payment is the idempotency key. Replays always return the first immutable artifact. */
 export async function issueTenantPaymentReceipt(actorInput: string, raw: Scope) {
   const actor = uuid(actorInput, 'actorUserId'), input = inputScope(raw);
-  const run = () => withTransaction(async tx => {
-    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
-    await tx.query('SET LOCAL synchronous_commit = on');
-    const { scope, permissions } = await scopeAndPermissions(tx, actor, input.executionScopeId);
-    await financeAuthority(tx, actor, scope, permissions, 'handyman.finance.manage');
-    const existing = (await tx.query<Stored>('SELECT * FROM handyman_tenant_payment_receipts WHERE payment_id=$1 AND execution_scope_id=$2',
-      [input.paymentId, input.executionScopeId])).rows[0];
-    if (existing) { verifyStoredTenantPaymentReceipt(existing); return { ...metadata(existing), replayed: true }; }
-    await requireDurablePrimary(tx);
-    const source = await readSource(tx, scope, input, actor), canonical = stableJson(source), sourceHash = digest(canonical);
-    const pdf = await renderReceipt(source, sourceHash);
-    if (pdf.fileSize !== pdf.bytes.length || pdf.fileSize < 1 || pdf.fileSize > MAX_PDF_BYTES ||
-        pdf.checksum !== digest(pdf.bytes) || pdf.bytes.subarray(0, 5).toString() !== '%PDF-') {
-      throw conflict('The complete PDF exceeds the durable artifact limit or failed integrity verification.');
+  // Acquire the issuer lock on the SAME pooled connection before starting the
+  // repeatable-read snapshot. This serializes same-issuer issuance without
+  // starving the pool or taking a stale snapshot while waiting for the counter.
+  const tx = await getPool().connect();
+  let locked = false, destroy = false;
+  let lockKey = '';
+  try {
+    const preflight = await scopeAndPermissions(tx, actor, input.executionScopeId);
+    await financeAuthority(tx, actor, preflight.scope, preflight.permissions, 'handyman.finance.manage');
+    lockKey = `hm-payment-receipt-issue:${preflight.scope.client_id}`;
+    await tx.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+    locked = true;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await tx.query('BEGIN');
+        await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        await tx.query('SET LOCAL synchronous_commit = on');
+        const { scope, permissions } = await scopeAndPermissions(tx, actor, input.executionScopeId);
+        await financeAuthority(tx, actor, scope, permissions, 'handyman.finance.manage');
+        if (scope.client_id !== preflight.scope.client_id) throw conflict('Issuing Client changed during receipt issuance.');
+        const existing = (await tx.query<Stored>('SELECT * FROM handyman_tenant_payment_receipts WHERE payment_id=$1 AND execution_scope_id=$2',
+          [input.paymentId, input.executionScopeId])).rows[0];
+        if (existing) {
+          verifyStoredTenantPaymentReceipt(existing);
+          await tx.query('COMMIT');
+          return { ...metadata(existing), replayed: true };
+        }
+        await requireDurablePrimary(tx);
+        const source = await readSource(tx, scope, input, actor);
+        await allocateReceiptNumber(tx, source);
+        const canonical = stableJson(source), sourceHash = digest(canonical);
+        const pdf = await renderReceipt(source, sourceHash);
+        if (pdf.fileSize !== pdf.bytes.length || pdf.fileSize < 1 || pdf.fileSize > MAX_PDF_BYTES ||
+            pdf.checksum !== digest(pdf.bytes) || pdf.bytes.subarray(0, 5).toString() !== '%PDF-') {
+          throw conflict('The complete PDF exceeds the durable artifact limit or failed integrity verification.');
+        }
+        const row = (await tx.query<Stored>(`INSERT INTO handyman_tenant_payment_receipts
+          (id,client_id,building_id,tenant_company_id,request_id,execution_scope_id,transaction_id,payment_id,record_event_id,
+           confirmation_event_id,issuer_profile_id,issued_by_user_id,issued_at,source_as_of,source_snapshot,source_canonical,source_sha256,
+           pdf_filename,pdf_bytes,pdf_size,pdf_sha256,document_number,numbering_approval_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::text::jsonb,$15::text,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
+        [source.issuance.id, source.clientId, source.building.id, source.payer.tenantCompanyId, source.reference.requestId,
+          input.executionScopeId, source.reference.transactionId, input.paymentId, source.payment.recordEventId,
+          source.verification.confirmationEventId, source.issuer.profileId, actor, source.issuance.issuedAt, source.asOf,
+          canonical, sourceHash, pdf.filename, pdf.bytes, pdf.fileSize, pdf.checksum, source.issuance.number, source.numberingPolicy?.approvalId])).rows[0];
+        if (!row) throw integrity();
+        verifyStoredTenantPaymentReceipt(row);
+        await tx.query('COMMIT');
+        return { ...metadata(row), replayed: false };
+      } catch (error) {
+        await tx.query('ROLLBACK').catch(() => { destroy = true; });
+        const pg = error as { code?: string; constraint?: string };
+        const retryable = pg.code === '40001' || pg.code === '40P01' ||
+          (pg.code === '23505' && pg.constraint === 'hm_tenant_receipt_one_per_payment');
+        if (!destroy && retryable && attempt < 2) continue;
+        if (retryable || (pg.code === '23505' && pg.constraint === 'hm_tenant_receipt_number_per_issuer')) {
+          throw conflict('Concurrent or duplicate Payment Receipt numbering conflict; no new receipt was issued.');
+        }
+        throw error;
+      }
     }
-    const row = (await tx.query<Stored>(`INSERT INTO handyman_tenant_payment_receipts
-      (id,client_id,building_id,tenant_company_id,request_id,execution_scope_id,transaction_id,payment_id,record_event_id,
-       confirmation_event_id,issuer_profile_id,issued_by_user_id,issued_at,source_as_of,source_snapshot,source_canonical,source_sha256,
-       pdf_filename,pdf_bytes,pdf_size,pdf_sha256)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::text::jsonb,$15::text,$16,$17,$18,$19,$20) RETURNING *`,
-    [source.issuance.id, source.clientId, source.building.id, source.payer.tenantCompanyId, source.reference.requestId,
-      input.executionScopeId, source.reference.transactionId, input.paymentId, source.payment.recordEventId,
-      source.verification.confirmationEventId, source.issuer.profileId, actor, source.issuance.issuedAt, source.asOf,
-      canonical, sourceHash, pdf.filename, pdf.bytes, pdf.fileSize, pdf.checksum])).rows[0];
-    if (!row) throw integrity(); verifyStoredTenantPaymentReceipt(row);
-    return { ...metadata(row), replayed: false };
-  });
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try { return await run(); }
-    catch (error) {
-      const pg = error as { code?: string; constraint?: string };
-      if (attempt < 2 && (pg.code === '40001' || (pg.code === '23505' && pg.constraint === 'hm_tenant_receipt_one_per_payment'))) continue;
-      throw error;
+    throw conflict('Concurrent receipt issuance could not be resolved.');
+  } finally {
+    if (locked) {
+      try { await tx.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]); }
+      catch { destroy = true; }
     }
+    tx.release(destroy);
   }
-  throw conflict('Concurrent receipt issuance could not be resolved.');
 }
 async function readStored(tx: PoolClient, input: Scope, binding: { clientId: string; buildingId: string; tenantCompanyId?: string; requestId?: string; invoiceId?: string }) {
   const row = (await tx.query<Stored>(`SELECT * FROM handyman_tenant_payment_receipts

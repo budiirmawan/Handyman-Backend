@@ -1,3 +1,4 @@
+import { approveTestPaymentReceiptPolicy } from './helpers/payment-receipt-policy';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
@@ -95,6 +96,7 @@ before(async () => {
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN'); assert.ok(discipline);
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline.id, query: q });
   realm = await realmFixture('Receipt'); chain = await locationChain(realm);
+  await approveTestPaymentReceiptPolicy(realm.client.id, adminToken);
   await clientMonetaryContextService.setClientMonetaryContext({ clientId: realm.client.id,
     baseCurrencyCode: 'IDR', defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   const fixture = await scopeFixture(realm, chain); assert.ok(fixture.scope); scope = fixture.scope;
@@ -158,10 +160,10 @@ describe('CR-HM-TENANT-RECEIPT-01', () => {
     await assert.rejects(q(`INSERT INTO handyman_tenant_payment_receipts
       (id,client_id,building_id,tenant_company_id,request_id,execution_scope_id,transaction_id,payment_id,record_event_id,
        confirmation_event_id,issuer_profile_id,issued_by_user_id,issued_at,source_as_of,source_snapshot,source_canonical,source_sha256,
-       pdf_filename,pdf_bytes,pdf_size,pdf_sha256)
+       pdf_filename,pdf_bytes,pdf_size,pdf_sha256,document_number,numbering_approval_id)
       SELECT $2,client_id,building_id,tenant_company_id,request_id,execution_scope_id,transaction_id,payment_id,record_event_id,
        confirmation_event_id,issuer_profile_id,issued_by_user_id,issued_at,source_as_of,$3::text::jsonb,$3::text,$4,
-       pdf_filename,pdf_bytes,pdf_size,pdf_sha256 FROM handyman_tenant_payment_receipts WHERE id=$1`,
+       pdf_filename,pdf_bytes,pdf_size,pdf_sha256,document_number,numbering_approval_id FROM handyman_tenant_payment_receipts WHERE id=$1`,
     [dpReceipt.id, fakeId, canonical, sha(canonical)]), /matching independently verified incoming payment/);
     const text = await pdfText(row.pdf_bytes); assert.ok(text.includes('ISSUED - Tenant Payment Receipt'));
     assert.ok(text.includes('does not certify any invoice')); assert.ok(text.includes('DP, TERMIN or PELUNASAN'));

@@ -1,3 +1,4 @@
+import { approveTestPaymentReceiptPolicy } from './helpers/payment-receipt-policy';
 import assert from 'node:assert/strict';
 import { randomUUID as id } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -149,6 +150,7 @@ before(async () => {
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN'); assert.ok(discipline);
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline.id, query: q });
   realm = await realmFixture('REDUCE finance'); const chain = await locationChain(realm);
+  await approveTestPaymentReceiptPolicy(realm.client.id, adminToken);
   await clientMonetaryContextService.setClientMonetaryContext({ clientId: realm.client.id, baseCurrencyCode: 'IDR',
     defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   await updateHandymanDocumentIssuerProfile({ clientId: realm.client.id, expectedVersion: null, legalName: 'PT Issuer',

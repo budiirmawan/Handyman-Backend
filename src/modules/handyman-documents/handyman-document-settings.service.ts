@@ -185,6 +185,9 @@ export async function updateHandymanDocumentSettings(
   ensureUuid(actorUserId, 'actorUserId');
   await assertSettingsScope(actorUserId, clientId);
   const content = contentOf(input);
+  if (input.documentKind === 'PAYMENT_RECEIPT' && content.documentPrefix !== 'HM-PR') {
+    throw AppError.validation('PAYMENT_RECEIPT requires the HM-PR prefix.');
+  }
 
   try {
     return await withTransaction(async (tx) => {

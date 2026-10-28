@@ -1,3 +1,4 @@
+import { approveTestPaymentReceiptPolicy } from './helpers/payment-receipt-policy';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID as id } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
@@ -116,6 +117,7 @@ before(async () => {
   disciplineId = discipline.id;
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline.id, query: q });
   realm = await realmFixture('Payment Receipt discovery'); chain = await locationChain(realm);
+  await approveTestPaymentReceiptPolicy(realm.client.id, adminToken);
   await clientMonetaryContextService.setClientMonetaryContext({ clientId: realm.client.id, baseCurrencyCode: 'IDR',
     defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   issuer = await updateHandymanDocumentIssuerProfile({ clientId: realm.client.id, expectedVersion: null, legalName: 'PT Issuer',
@@ -286,6 +288,7 @@ async function withDuplicateReceipt(receiptId: string, check: () => Promise<void
     await tx.query('BEGIN');
     await tx.query('ALTER TABLE handyman_tenant_payment_receipts DROP CONSTRAINT hm_tenant_receipt_one_per_payment');
     await tx.query('ALTER TABLE handyman_tenant_payment_receipts DISABLE TRIGGER hm_tenant_receipt_insert');
+    await tx.query('ALTER TABLE handyman_tenant_payment_receipts DISABLE TRIGGER hm_pr_receipt_number_insert');
     await tx.query(`INSERT INTO handyman_tenant_payment_receipts
       (id,client_id,building_id,tenant_company_id,request_id,execution_scope_id,transaction_id,payment_id,record_event_id,
        confirmation_event_id,issuer_profile_id,issued_by_user_id,issued_at,source_as_of,source_snapshot,source_canonical,source_sha256,
@@ -295,6 +298,7 @@ async function withDuplicateReceipt(receiptId: string, check: () => Promise<void
        pdf_filename,pdf_bytes,pdf_size,pdf_sha256 FROM handyman_tenant_payment_receipts WHERE id=$1`,
       [receiptId,duplicateId,canonical,checksum]);
     await tx.query('ALTER TABLE handyman_tenant_payment_receipts ENABLE TRIGGER hm_tenant_receipt_insert');
+    await tx.query('ALTER TABLE handyman_tenant_payment_receipts ENABLE TRIGGER hm_pr_receipt_number_insert');
     await tx.query('COMMIT');
   } catch(error) { await tx.query('ROLLBACK'); throw error; }
   finally { tx.release(); }
@@ -370,10 +374,10 @@ describe('Care Payment Receipt discovery — focused PostgreSQL', () => {
       const dpReceipt = await issueTenantPaymentReceipt(admin,{executionScopeId:scope,paymentId:dp});
       const dpRow = (await q('SELECT * FROM handyman_tenant_payment_receipts WHERE id=$1',[dpReceipt.id])).rows[0];
       assert.equal(dpRow.source_snapshot.reference.invoice,null);
-      assert.equal(dpRow.source_snapshot.issuance.number,undefined); // V1 has an ID, not a separate official number.
+      assert.equal(dpRow.source_snapshot.issuance.number,dpReceipt.documentNumber);
       let list = data(await get()).paymentReceipts;
       assert.equal(list.length,1);
-      assert.deepEqual(list[0],{receiptId:dpReceipt.id,documentNumber:null,status:'ISSUED',paymentId:dp,requestId,
+      assert.deepEqual(list[0],{receiptId:dpReceipt.id,documentNumber:dpReceipt.documentNumber,status:'ISSUED',paymentId:dp,requestId,
         executionScopeId:scope,transactionId:dpRow.transaction_id,amount:'130.00',currency:'IDR',obligationStage:'DP',
         issuedAt:dpReceipt.issuedAt,sourceAsOf:dpReceipt.sourceAsOf,invoiceAtIssuance:null,linkedOfficialInvoice:null,
         sourceSha256:dpReceipt.sourceChecksum,pdfSha256:dpReceipt.pdfChecksum,
@@ -415,7 +419,7 @@ describe('Care Payment Receipt discovery — focused PostgreSQL', () => {
       list = data(await get()).paymentReceipts;
       assert.equal(list.length,2);
       const termItem = list.find((row: any) => row.paymentId === term);
-      assert.equal(termItem.receiptId,termReceipt.id); assert.equal(termItem.documentNumber,null);
+      assert.equal(termItem.receiptId,termReceipt.id); assert.equal(termItem.documentNumber,termReceipt.documentNumber);
       assert.equal(termItem.amount,'55.00'); assert.equal(termItem.obligationStage,'TERMIN');
       assert.deepEqual(termItem.invoiceAtIssuance,{id:invoice.id,number:invoice.number,status:'ISSUED',kind:'OFFICIAL_HANDYMAN'});
       assert.equal(termItem.linkedOfficialInvoice.id,invoice.id);
