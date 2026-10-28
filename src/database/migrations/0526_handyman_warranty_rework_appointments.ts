@@ -1,19 +1,63 @@
 import type { PoolClient } from 'pg';
 import type { Migration } from './types';
 
+/**
+ * 0526 and 0527 commit separately. Until the final guard is installed, block
+ * prospective rework release/start/session work without changing legacy rows.
+ */
+export const reworkDispatchMigrationGuardInstall = `
+  CREATE OR REPLACE FUNCTION hm_rework_migration_release_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF (TG_OP='INSERT' OR NEW.status IN ('RELEASED','IN_PROGRESS')) AND EXISTS
+      (SELECT 1 FROM handyman_warranty_rework_executions WHERE execution_scope_id=NEW.execution_scope_id) THEN
+      RAISE EXCEPTION 'Rework dispatch is paused until the guard migration completes.' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+  END; $$;
+  DROP TRIGGER IF EXISTS hm_rework_migration_release ON handyman_dispatch_releases;
+  CREATE TRIGGER hm_rework_migration_release BEFORE INSERT OR UPDATE ON handyman_dispatch_releases
+    FOR EACH ROW EXECUTE FUNCTION hm_rework_migration_release_guard();
+
+  CREATE OR REPLACE FUNCTION hm_rework_migration_session_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF (TG_OP='INSERT' OR NEW.status='IN_PROGRESS') AND EXISTS
+      (SELECT 1 FROM handyman_warranty_rework_executions WHERE execution_scope_id=NEW.execution_scope_id) THEN
+      RAISE EXCEPTION 'Rework sessions are paused until the guard migration completes.' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+  END; $$;
+  DROP TRIGGER IF EXISTS hm_rework_migration_session ON handyman_work_sessions;
+  CREATE TRIGGER hm_rework_migration_session BEFORE INSERT OR UPDATE ON handyman_work_sessions
+    FOR EACH ROW EXECUTE FUNCTION hm_rework_migration_session_guard();
+
+  CREATE OR REPLACE FUNCTION hm_rework_migration_start_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF (OLD.status='REWORK_AUTHORIZED' AND NEW.status='REWORK_IN_PROGRESS') OR
+       (OLD.status='REWORK_IN_PROGRESS' AND NEW.status='REWORK_COMPLETE') THEN
+      RAISE EXCEPTION 'Rework execution is paused until the guard migration completes.' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+  END; $$;
+  DROP TRIGGER IF EXISTS hm_rework_migration_start ON handyman_service_warranty_reworks;
+  CREATE TRIGGER hm_rework_migration_start BEFORE UPDATE ON handyman_service_warranty_reworks
+    FOR EACH ROW EXECUTE FUNCTION hm_rework_migration_start_guard();
+`;
+export const reworkDispatchMigrationGuardRemove = `
+  DROP TRIGGER IF EXISTS hm_rework_migration_release ON handyman_dispatch_releases;
+  DROP FUNCTION IF EXISTS hm_rework_migration_release_guard();
+  DROP TRIGGER IF EXISTS hm_rework_migration_session ON handyman_work_sessions;
+  DROP FUNCTION IF EXISTS hm_rework_migration_session_guard();
+  DROP TRIGGER IF EXISTS hm_rework_migration_start ON handyman_service_warranty_reworks;
+  DROP FUNCTION IF EXISTS hm_rework_migration_start_guard();
+`;
+
 /** A rework visit is an ordinary visit with a separate, immutable claim/PIC lineage. */
 export const migration0526HandymanWarrantyReworkAppointments: Migration = {
   id: '0526_handyman_warranty_rework_appointments',
   async up(tx: PoolClient): Promise<void> {
     await tx.query(`
-      -- Older request-scoped choices cannot be retroactively represented as
-      -- verified rework consent or an historically pinned crew assignment.
-      DO $$ BEGIN
-        IF EXISTS (SELECT 1 FROM handyman_visit_appointments a
-          JOIN handyman_warranty_rework_executions x ON x.execution_scope_id=a.execution_scope_id) THEN
-          RAISE EXCEPTION 'Existing rework visits require explicit reconciliation; consent cannot be backfilled.' USING ERRCODE='23514';
-        END IF;
-      END $$;
+      -- Preserve pre-existing visits untouched. They have NULL rework identity
+      -- and no new binding/consent; the dispatch guard rejects them fail-closed.
       ALTER TABLE handyman_visit_appointments
         ADD COLUMN warranty_rework_id UUID REFERENCES handyman_service_warranty_reworks(id),
         ADD COLUMN warranty_rework_key TEXT;
@@ -262,10 +306,12 @@ export const migration0526HandymanWarrantyReworkAppointments: Migration = {
         RETURN NULL;
       END; $$;
     `);
+    await tx.query(reworkDispatchMigrationGuardInstall);
   },
   async down(tx: PoolClient): Promise<void> {
-    const used=await tx.query(`SELECT 1 FROM handyman_visit_appointments WHERE warranty_rework_id IS NOT NULL LIMIT 1`);
-    if (used.rowCount) throw new Error('Rework visit and consent history cannot be discarded.');
+    const used=await tx.query(`SELECT 1 FROM handyman_warranty_rework_executions LIMIT 1`);
+    if (used.rowCount) throw new Error('Rework execution and visit history requires dispatch protection; downgrade refused.');
+    await tx.query(reworkDispatchMigrationGuardRemove);
     // Restore the exact legacy guards before dropping the added columns.
     await tx.query(`
       CREATE OR REPLACE FUNCTION handyman_visit_consent_commit_guard() RETURNS trigger LANGUAGE plpgsql AS $$

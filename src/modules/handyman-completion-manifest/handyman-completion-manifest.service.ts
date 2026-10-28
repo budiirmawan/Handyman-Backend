@@ -1,3 +1,4 @@
+import { lockReworkDispatchLineage } from '../handyman-dispatch/handyman-rework-dispatch';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient, QueryResultRow } from 'pg';
 import { withTransaction } from '../../database';
@@ -183,6 +184,7 @@ export async function recordCompletionDeclaration(scopeInput: unknown, sessionIn
   const quantity = decimal(input.actualQty, 'actualQty');
   const reference = text(input.evidenceReference, 'evidenceReference', 500), key = text(input.idempotencyKey, 'idempotencyKey');
   return withTransaction(async tx => {
+    await lockReworkDispatchLineage(tx, scopeId);
     const scope = await lockedScope(tx, scopeId);
     const lead = await currentLead(tx, scope, actor);
     const replay = await tx.query(`SELECT * FROM handyman_completion_declarations WHERE execution_scope_id=$1 AND idempotency_key=$2`, [scopeId, key]);

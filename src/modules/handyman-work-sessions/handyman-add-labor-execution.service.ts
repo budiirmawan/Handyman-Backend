@@ -1,3 +1,4 @@
+import { lockReworkDispatchLineage } from '../handyman-dispatch/handyman-rework-dispatch';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient, QueryResultRow } from 'pg';
 import { withTransaction } from '../../database';
@@ -91,6 +92,7 @@ export async function recordAddLaborExecution(input: RecordAddLaborInput, actorU
   }
 
   return withTransaction(async (tx) => {
+    await lockReworkDispatchLineage(tx, scopeId);
     const { scope, lead } = await lockedAuthority(tx, scopeId, actorId);
     if (scope.status !== 'AUTHORIZED') throw handymanWorkSessionScopeNotEligibleError();
     const sessionResult = await tx.query(`SELECT id, assignment_id, lead_worker_id, lead_user_id, status, started_work_at

@@ -30,6 +30,6 @@ the current claim and exact crew assignment. Reassignment makes an earlier
 appointment stale, requiring cancellation and rescheduling. No invoice, payment,
 quotation, claim-resolution or dispatch action is created here.
 
-Migration fails closed if a pre-existing appointment already points to a rework
-scope: its request-level consent and historical crew cannot be silently
-reinterpreted. Explicit reconciliation is required before applying it.
+Pre-existing rework visits are preserved unchanged, with no reconstructed
+consent or crew binding. They do not authorize the new guarded dispatch; a new
+appointment and explicit PIC consent are required.

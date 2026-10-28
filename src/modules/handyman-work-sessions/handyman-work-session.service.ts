@@ -3,6 +3,7 @@ import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanDispatchService } from '../handyman-dispatch';
+import { lockReworkDispatchLineage } from '../handyman-dispatch/handyman-rework-dispatch';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import {
@@ -30,6 +31,15 @@ import type {
   HandymanWorkSessionHelperPresenceRecord,
   HandymanWorkSessionRecord,
 } from './handyman-work-session.types';
+
+async function assertReworkStarted(tx:PoolClient,scopeId:string):Promise<void> {
+  const blocked=await tx.query(`SELECT 1 FROM handyman_execution_scopes s
+    WHERE s.id=$1 AND s.scope_kind='WARRANTY_REWORK' AND NOT EXISTS (
+      SELECT 1 FROM handyman_warranty_rework_executions x
+      JOIN handyman_service_warranty_reworks r ON r.id=x.rework_id AND r.status='REWORK_IN_PROGRESS'
+      WHERE x.execution_scope_id=s.id AND x.rework_id=s.warranty_rework_id)`,[scopeId]);
+  if (blocked.rowCount) throw handymanWorkSessionScopeNotEligibleError();
+}
 
 /**
  * CR-HM-08 PART 02 — CHECK_IN + START_WORK commands ONLY (FROZEN
@@ -228,6 +238,7 @@ export async function checkInHandymanWorkSession(
   const key = ensureKey(input.idempotencyKey);
 
   return withTransaction(async (tx) => {
+    await lockReworkDispatchLineage(tx, scopeUuid);
     await handymanScopeAssignmentRepository.lockScopeById(tx, scopeUuid);
     const { scope, resolution } = await commandAuthorityPreamble(
       scopeUuid,
@@ -272,6 +283,7 @@ export async function checkInHandymanWorkSession(
     }
 
     await handymanDispatchService.assertDispatchExecutionClearance(tx, scopeUuid, actorUuid, resolution.assignmentId);
+    await assertReworkStarted(tx,scopeUuid);
 
     const session = await handymanWorkSessionRepository
       .createWorkSession(tx, {
@@ -339,6 +351,7 @@ export async function startWorkHandymanWorkSession(
   const key = ensureKey(input.idempotencyKey);
 
   return withTransaction(async (tx) => {
+    await lockReworkDispatchLineage(tx, scopeUuid);
     await handymanScopeAssignmentRepository.lockScopeById(tx, scopeUuid);
     const { resolution } = await commandAuthorityPreamble(scopeUuid, actorUuid, { executor: tx });
     // Row lock first: transitions are single-threaded per session.
@@ -364,6 +377,7 @@ export async function startWorkHandymanWorkSession(
     }
 
     await handymanDispatchService.assertDispatchExecutionClearance(tx, scopeUuid, actorUuid, resolution.assignmentId);
+    await assertReworkStarted(tx,scopeUuid);
 
     const transitioned = await tx.query(
       `UPDATE handyman_work_sessions
@@ -435,6 +449,7 @@ async function workClockTransition(
   const rule = WORK_CLOCK_RULES[action];
 
   return withTransaction(async (tx) => {
+    await lockReworkDispatchLineage(tx, scopeUuid);
     await handymanScopeAssignmentRepository.lockScopeById(tx, scopeUuid);
     const { resolution } = await commandAuthorityPreamble(scopeUuid, actorUuid, { executor: tx });
     const locked = await tx.query(
@@ -457,6 +472,7 @@ async function workClockTransition(
 
     if (action === 'RESUME') {
       await handymanDispatchService.assertDispatchExecutionClearance(tx, scopeUuid, actorUuid, resolution.assignmentId);
+      await assertReworkStarted(tx,scopeUuid);
     }
     const transitioned = await tx.query(
       `UPDATE handyman_work_sessions

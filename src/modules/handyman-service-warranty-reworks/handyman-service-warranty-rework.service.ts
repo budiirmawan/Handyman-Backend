@@ -1,3 +1,5 @@
+import { lockReworkDispatchLineage } from '../handyman-dispatch/handyman-rework-dispatch';
+import { assertDispatchExecutionClearance } from '../handyman-dispatch/handyman-dispatch.service';
 import { assignmentResponseRepository, handymanAssignmentDeclinedError } from '../assignment-responses';
 import { randomUUID } from 'node:crypto';
 import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
@@ -301,6 +303,11 @@ async function applyReworkAction(
   if (!preflight) throw handymanServiceWarrantyReworkNotFoundError();
 
   return withTransaction(async (client) => {
+    if (action === 'START') {
+      const child=(await client.query<{execution_scope_id:string}>(
+        'SELECT execution_scope_id FROM handyman_warranty_rework_executions WHERE rework_id=$1',[reworkId])).rows[0];
+      if (child) await lockReworkDispatchLineage(client,child.execution_scope_id);
+    }
     await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [preflight.executionScopeId]);
     const execution = (await client.query<{execution_scope_id:string}>(
       'SELECT execution_scope_id FROM handyman_warranty_rework_executions WHERE rework_id=$1', [reworkId])).rows[0];
@@ -363,6 +370,9 @@ async function applyReworkAction(
       throw handymanServiceWarrantyReworkNotEligibleError('missing-current-verified-warranty-assessment');
     }
     if (action === 'START' && execution) {
+      const assignment=await handymanScopeAssignmentRepository.findActiveAssignmentByScope(client,execution.execution_scope_id);
+      if (!assignment) throw handymanServiceWarrantyReworkNotAuthorizedError();
+      await assertDispatchExecutionClearance(client,execution.execution_scope_id,actorUuid,assignment.id);
       const ready=(await client.query(`SELECT p.id,ua.id FROM handyman_execution_scopes s JOIN handyman_execution_scope_assignments a
           ON a.execution_scope_id=s.id AND a.status='ACTIVE'
         JOIN LATERAL (SELECT ar.* FROM handyman_arrival_verification_results ar
@@ -379,6 +389,10 @@ async function applyReworkAction(
     }
     if (action === 'COMPLETE') {
       if (!execution || !options.completionEvidenceReference) throw handymanServiceWarrantyReworkEvidenceRequiredError();
+      const dispatched=await client.query(`SELECT 1 FROM handyman_dispatch_releases d
+        WHERE d.execution_scope_id=$1 AND d.status IN ('RELEASED','IN_PROGRESS','COMPLETED')
+          AND hm_rework_dispatch_visit_current(d.execution_scope_id,d.appointment_id,d.assignment_id)`,[execution.execution_scope_id]);
+      if (!dispatched.rowCount) throw handymanServiceWarrantyReworkConflictError('confirmed-consented-rework-dispatch-required');
       const scope = await handymanScopeAssignmentRepository.findScopeById(client, execution.execution_scope_id);
       if (!scope) throw handymanExecutionScopeNotFoundError();
       const lead = await resolveHandymanAssignmentLead(scope.id, actorUuid, client);

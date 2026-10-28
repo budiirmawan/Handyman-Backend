@@ -48,13 +48,14 @@ export type HandymanDispatchReadinessCheck = {
   permitClearance: boolean;
   unitAccessClearance: boolean;
   materialReady: boolean;
-  /** True when no DP is required, or confirmed DP covers the approved terms. */
+  /** True when no DP is required, confirmed DP covers terms, or a covered noncommercial rework is exempt. */
   requiredPaymentSatisfied: boolean;
   assignmentCurrent: boolean;
 };
 
 export type HandymanDispatchReadinessReport = {
   executionScopeId: string;
+  paymentRequirement?: 'COVERED_NONCOMMERCIAL_REWORK';
   ready: boolean;
   checks: HandymanDispatchReadinessCheck;
   failures: string[];

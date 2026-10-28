@@ -1,3 +1,4 @@
+import { lockReworkDispatchLineage } from '../handyman-dispatch/handyman-rework-dispatch';
 import { handymanDispatchService } from '../handyman-dispatch';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
@@ -254,6 +255,15 @@ async function resolveEvidenceTargetContext(
   );
 }
 
+/** Staged rework uploads must lock their owner before locking the evidence row. */
+async function lockReworkEvidenceOwner(tx: PoolClient, evidenceId: string): Promise<void> {
+  const owner=(await tx.query<{execution_scope_id:string}>(`SELECT e.execution_scope_id FROM handyman_field_evidence_uploads e
+    JOIN handyman_warranty_rework_executions x ON x.execution_scope_id=e.execution_scope_id WHERE e.id=$1`,[evidenceId])).rows[0];
+  if (!owner) return;
+  await lockReworkDispatchLineage(tx,owner.execution_scope_id);
+  await tx.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE',[owner.execution_scope_id]);
+}
+
 /** Recheck write authority under the existing execution-scope lock before
  * accepting evidence mutations. Evidence may precede dispatch or follow completion/QC, but a
  * cancelled release/visit must not authorize NEW uploads by its field Lead.
@@ -262,6 +272,7 @@ async function resolveEvidenceWriteActorRole(
   tx: PoolClient, actor: string, target: EvidenceTargetContext,
 ) {
   if (target.executionScopeId) {
+    await lockReworkDispatchLineage(tx, target.executionScopeId);
     await tx.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [target.executionScopeId]);
   }
   const role = await resolveEvidenceActorRole(actor, target, false, tx);
@@ -1156,6 +1167,7 @@ export async function putStagedFieldEvidenceBytes(
   }
 
   return withTransaction(async (tx) => {
+    await lockReworkEvidenceOwner(tx, validId);
     const record = await handymanFieldEvidenceRepository.findByIdForUpdate(
       tx,
       validId,
@@ -1235,6 +1247,7 @@ export async function confirmFieldEvidenceUpload(
   const validId = assertUuid(evidenceId, 'evidenceId');
 
   return withTransaction(async (tx) => {
+    await lockReworkEvidenceOwner(tx, validId);
     const record = await handymanFieldEvidenceRepository.findByIdForUpdate(
       tx,
       validId,
