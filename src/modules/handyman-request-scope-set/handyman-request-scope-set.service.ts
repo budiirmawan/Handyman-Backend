@@ -163,9 +163,12 @@ async function completionAt(tx: PoolClient, s: Scope): Promise<ScopeCompletion> 
  * then the revision fence, and rejects phantoms. The lock is held until the
  * caller's transaction ends. This is not Request-close readiness.
  */
-export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, request: RequestRow) {
+export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, request: RequestRow, options: { close?: boolean } = {}) {
   const locked = (await tx.query<{id:string}>(`SELECT s.id FROM handyman_execution_scopes s WHERE ${candidateWhere} ORDER BY s.id FOR UPDATE`, [request.id])).rows.map(x=>x.id);
-  const head = (await tx.query<{revision:string}>('SELECT revision::text FROM handyman_request_scope_set_revisions WHERE request_id=$1 FOR SHARE', [request.id])).rows[0];
+  // Request status writers lock the Request before touching the revision.
+  // NO KEY UPDATE still permits foreign-key checks by in-flight approvals.
+  if (options.close) await tx.query('SELECT id FROM handyman_service_requests WHERE id=$1 FOR NO KEY UPDATE', [request.id]);
+  const head = (await tx.query<{revision:string}>(`SELECT revision::text FROM handyman_request_scope_set_revisions WHERE request_id=$1 ${options.close ? 'FOR UPDATE' : 'FOR SHARE'}`, [request.id])).rows[0];
   if (!head) throw new AppError({code:ERROR_CODES.CONFLICT,statusCode:409,message:'Request scope-set fence is missing.'});
   // requestAt ran before the fence. Re-read after taking it so a concurrent
   // cancellation/status change cannot produce an old request with a new pin.
@@ -263,7 +266,7 @@ export async function readHandymanRequestScopeSetInTransaction(tx: PoolClient, r
 }
 
 /** Authorized scope projection for consumers which must hold the same locks. */
-export async function readAuthorizedHandymanRequestScopeSetInTransaction(tx: PoolClient, requestInput: unknown, actorInput: string) {
+export async function readAuthorizedHandymanRequestScopeSetInTransaction(tx: PoolClient, requestInput: unknown, actorInput: string, options: { close?: boolean } = {}) {
   const requestId=uuid(requestInput), actor=uuid(actorInput);
   const request=await requestAt(tx,requestId);
   await assertBuildingScopedResourceAccess(actor,{clientId:request.client_id,buildingId:request.building_id},tx);
@@ -271,7 +274,7 @@ export async function readAuthorizedHandymanRequestScopeSetInTransaction(tx: Poo
   if (user?.status!=='ACTIVE') throw new AppError({code:ERROR_CODES.PERMISSION_DENIED,statusCode:403,message:'Active Operations authority is required.'});
   await assertHandymanQuotationPricingAuthority({clientId:request.client_id,handymanRequestId:request.id,
     tenantCompanyId:request.tenant_company_id,actorUserId:actor},tx);
-  return readHandymanRequestScopeSetInTransaction(tx,request);
+  return readHandymanRequestScopeSetInTransaction(tx,request,options);
 }
 
 /** Authenticated, exact-Building Operations read. No memberships or CLOSE are written. */

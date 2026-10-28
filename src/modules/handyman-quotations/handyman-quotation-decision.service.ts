@@ -1,3 +1,4 @@
+import { assertRequestOpenForOriginalApproval } from '../handyman-request-scope-set/handyman-request-close-guard';
 import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
 import { findQuotationDecisionOffer } from './handyman-quotation-document.service';
 import { quotationDecisionFingerprint, careQuotationDecisionFingerprint } from './handyman-quotation-decision-fingerprint';
@@ -226,7 +227,11 @@ export async function decideHandymanQuotation(
       throw handymanQuotationInvalidTransitionError();
     }
 
-    if (input.decision === 'APPROVE') await assertHandymanQuotationInspectionReady(tx, request.id);
+    if (input.decision === 'APPROVE') {
+      // Inspection takes the Request row before the shared close fence.
+      await assertHandymanQuotationInspectionReady(tx, request.id);
+      await assertRequestOpenForOriginalApproval(tx, request.id);
+    }
 
     // 4/5) Immutable decision insert + bounded lifecycle projection
     //    (ISSUED → APPROVED | REJECTED) — atomic, single transaction.

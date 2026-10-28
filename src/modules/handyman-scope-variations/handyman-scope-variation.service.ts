@@ -1,3 +1,4 @@
+import { assertOriginalScopeOpenForApproval } from '../handyman-request-scope-set/handyman-request-close-guard';
 import { hasVerifiedHandymanBastCustomerAcceptance } from '../handyman-bast';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
@@ -2018,6 +2019,8 @@ export async function recordVariationTenantDecision(
       return { replayed: true, variation, events };
     }
 
+    if (decisionOutcome === 'APPROVED') await assertOriginalScopeOpenForApproval(tx, ctx.executionScopeId);
+
     assertExpectedVersion(variation, expectedVersion);
 
     if (variation.status !== 'REVISED_QUOTATION') {
@@ -2219,6 +2222,8 @@ export async function authorizeVariationScope(
         reconciledAuthorizedScope,
       };
     }
+
+    await assertOriginalScopeOpenForApproval(tx, ctx.executionScopeId);
 
     assertExpectedVersion(variation, input.expectedVersion);
 

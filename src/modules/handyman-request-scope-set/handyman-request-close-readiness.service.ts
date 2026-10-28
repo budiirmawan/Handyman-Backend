@@ -23,12 +23,11 @@ function financeReason(error:AppError) {
   return 'PAYMENT_RECONCILIATION_UNVERIFIED';
 }
 
-/** This is a live read, not a CLOSE command or authorization to close. Scope
- * locks precede ledger and billing-source locks; money writers use the same
- * ledger anchor. A caller must perform a fresh assessment for any later act. */
-export async function getHandymanRequestCloseReadiness(requestId:unknown,actor:string) {
-  return withTransaction(async tx=>{
-    const scopeSet=await readAuthorizedHandymanRequestScopeSetInTransaction(tx,requestId,actor);
+/** The command and GET call the same live evaluator. A CLOSE holds the
+ * exclusive scope-set fence until its event commits; money uses ledger locks. */
+export async function evaluateHandymanRequestCloseReadiness(tx:PoolClient,requestId:unknown,actor:string,
+  options: { close?: boolean; scopeSet?: Awaited<ReturnType<typeof readAuthorizedHandymanRequestScopeSetInTransaction>> } = {}) {
+    const scopeSet=options.scopeSet ?? await readAuthorizedHandymanRequestScopeSetInTransaction(tx,requestId,actor,options);
     const permissions=await permissionRepository.listActivePermissionCodesForUser(actor,tx);
     if (!permissions.includes('handyman.finance.read') || !permissions.includes('handyman.customer_tax.read')) {
       throw new AppError({code:ERROR_CODES.PERMISSION_DENIED,statusCode:403,
@@ -70,11 +69,15 @@ export async function getHandymanRequestCloseReadiness(requestId:unknown,actor:s
       await checkSettlement(tx,invoice,view,add);
     }
     const observed=(await tx.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0].at;
-    return {protocol:'HANDYMAN_REQUEST_CLOSE_READINESS_V1',requestId:scopeSet.requestId,clientId:scopeSet.clientId,
+    const readiness = {protocol:'HANDYMAN_REQUEST_CLOSE_READINESS_V1',requestId:scopeSet.requestId,clientId:scopeSet.clientId,
       buildingId:scopeSet.buildingId,tenantCompanyId:scopeSet.tenantCompanyId,observedAt:observed.toISOString(),
       status:blockers.length?'BLOCKED' as const:'READY' as const,operationalReadiness:scopeSet.completionReadiness,
       scopeSetRevision:scopeSet.revision,scopeSetFingerprint:scopeSet.fingerprint,scopes,blockers};
-  });
+    return { readiness, scopeSet };
+}
+
+export async function getHandymanRequestCloseReadiness(requestId:unknown,actor:string) {
+  return withTransaction(async tx => (await evaluateHandymanRequestCloseReadiness(tx,requestId,actor)).readiness);
 }
 
 type Add = (code:string,message:string,scopeId:string|null,invoiceId?:string|null)=>void;
@@ -109,6 +112,11 @@ async function checkInvoice(tx:PoolClient,actor:string,invoice:Invoice,member:Me
     if ((await tx.query(`SELECT 1 FROM handyman_scope_variations WHERE execution_scope_id=$1 AND tenant_decision_outcome IS NULL LIMIT 1`,
       [member.executionScopeId])).rowCount) {
       add('VARIATION_UNRESOLVED','A scope variation is awaiting a customer decision.',member.executionScopeId,invoice.id);
+    }
+    if ((await tx.query(`SELECT 1 FROM handyman_scope_variations WHERE execution_scope_id=$1
+      AND tenant_decision_outcome='APPROVED' AND status NOT IN ('AUTHORIZED_SCOPE','EXECUTION','QC','FINAL_CHARGE_ELIGIBILITY') LIMIT 1`,
+      [member.executionScopeId])).rowCount) {
+      add('VARIATION_AUTHORIZATION_UNRESOLVED','A customer-approved variation is not yet reconciled into the authorized scope.',member.executionScopeId,invoice.id);
     }
     // These are the same authority heads/windows fenced by official issuance.
     await tx.query('SELECT request_id FROM handyman_customer_tax_heads WHERE request_id=$1 FOR SHARE',[invoice.request_id]);
