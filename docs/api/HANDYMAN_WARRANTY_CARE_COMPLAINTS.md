@@ -5,6 +5,42 @@ routes require `handyman.care.building` and an active assignment to the **exact*
 Building. Client, tenant and unit are derived from the selected Handyman request;
 the caller cannot choose a recording or uploading user.
 
+## Issued certificate lookup (read-only)
+
+`GET /handyman/care/buildings/{buildingId}/warranty-certificates` requires at
+least one query selector: `tenantCompanyId` and/or `requestId`. If both are
+provided they must match. A request is authorized only in the Care user's exact
+Client and Building; a tenant-only selection requires an effective active
+Building context or an existing request in that exact Building. Historical
+requests remain readable after a tenancy ends. The response is `{ items,
+nextCursor }`, ordered by issuance time and ID descending; optional `limit`
+(1–20, default 20) and `cursor` (the preceding page's `nextCursor`) paginate
+within the same selection. Unknown or cross-scope selections return 404, and
+missing Care authority is denied.
+
+`GET /handyman/care/buildings/{buildingId}/warranty-certificates/{certificateId}`
+requires the same tenant and/or request selector and returns the exact issued
+certificate and its covered item snapshots. Both endpoints are private/no-store,
+use the existing active Building Care permission and assignment, and verify the
+stored official source and PDF integrity. The response includes the real
+`certificateId`, `certificateNumber`, issuance `status`, `currentness`
+(`CURRENT` or `HISTORICAL`), `warrantyLifecycleStatus`, request/tenant/scope
+IDs, the source/PDF hashes and manifest version needed by `submit-claim`.
+Detail items contain `itemLineId`, the actual completed item, explicit agreed
+`warrantyTerms`, contractual `startsAt` and exclusive `endsAtExclusive`.
+`contractualPeriodStatus` (`NOT_STARTED`, `IN_PERIOD`, `ENDED`) is only a
+server-time comparison against that item period; it is `null` for historical
+scope. `observedAt` identifies the comparison time. Lifecycle status, including
+`EXPIRED`, is not the contractual item expiry. These fields are not a claim
+eligibility, verification or approval decision.
+
+Only immutable issued certificate items with explicit terms are returned; legacy
+or ambiguous terms, non-warranted items, and lifecycle coverage rows do not
+create a certificate or inferred coverage. A historical certificate is labelled
+and its items are solely the original issued snapshot, not current coverage.
+A reported reference remains `PENDING_VERIFICATION` until the existing claim
+process proceeds; lookup itself changes no complaint, claim, or lifecycle row.
+
 ## Care endpoints
 
 - `POST /handyman/care/buildings/{buildingId}/warranty-complaints` registers a

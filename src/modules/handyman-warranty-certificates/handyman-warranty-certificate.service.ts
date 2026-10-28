@@ -393,6 +393,89 @@ export async function requireCurrentWarrantyCertificateForClaim(
   };
 }
 
+/** Internal Care lookup. Callers must first authorize the exact Building and
+ * resolve the selected Tenant/request. Only official certificate rows are
+ * considered; lifecycle coverage rows and legacy offer text are not evidence. */
+export type WarrantyCertificateLookupScope = {
+  clientId: string; buildingId: string; tenantCompanyId: string; requestId: string | null;
+};
+const lookupFrom = `FROM handyman_warranty_certificates d
+  JOIN handyman_service_requests r ON r.id=d.request_id AND r.client_id=d.client_id
+    AND r.building_id=d.building_id AND r.tenant_company_id=d.tenant_company_id
+  JOIN handyman_execution_scopes s ON s.id=d.execution_scope_id AND s.client_id=d.client_id
+    AND s.handyman_request_id=r.id AND s.building_id=d.building_id AND s.tenant_company_id=d.tenant_company_id
+    AND s.space_id IS NOT DISTINCT FROM r.space_id
+  JOIN handyman_service_warranties w ON w.id=d.warranty_id AND w.client_id=d.client_id
+    AND w.execution_scope_id=d.execution_scope_id AND w.bast_id=d.bast_id
+  WHERE d.client_id=$1 AND d.building_id=$2 AND d.tenant_company_id=$3
+    AND ($4::uuid IS NULL OR d.request_id=$4)
+    AND d.source_snapshot#>>'{context,spaceId}' IS NOT DISTINCT FROM r.space_id::text`;
+const lookupValues = (scope: WarrantyCertificateLookupScope) =>
+  [scope.clientId, scope.buildingId, scope.tenantCompanyId, scope.requestId];
+
+type LookupStored = Stored & { lifecycle_status: string };
+type ItemPeriodStatus = 'NOT_STARTED' | 'IN_PERIOD' | 'ENDED';
+
+/** Verify the same immutable source and PDF as official download/claim intake.
+ * Historical scope is labelled explicitly and never given a current period
+ * status. Neither a period status nor an issued certificate decides a claim. */
+export async function readWarrantyCertificateForCareLookup(
+  tx: Pick<PoolClient, 'query'>, scope: WarrantyCertificateLookupScope, certificateId: string,
+) {
+  const row = (await tx.query<LookupStored>(`SELECT d.*,w.status AS lifecycle_status ${lookupFrom} AND d.id=$5`,
+    [...lookupValues(scope), certificateId])).rows[0];
+  if (!row) throw notFound();
+  verifyCertificate(row);
+  const observation = (await tx.query<{ current: boolean; as_of: string; periods: Record<string, ItemPeriodStatus> }>(`
+    SELECT hm_warranty_certificate_is_current(d.id) AS current,
+      to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS as_of,
+      (SELECT jsonb_object_agg(item->>'rootLineId', CASE
+        WHEN now() < (item->>'startsAt')::timestamptz THEN 'NOT_STARTED'
+        WHEN now() >= (item->>'endsAtExclusive')::timestamptz THEN 'ENDED'
+        ELSE 'IN_PERIOD' END)
+       FROM jsonb_array_elements(d.source_snapshot->'items') item) AS periods
+    FROM handyman_warranty_certificates d WHERE d.id=$1`, [row.id])).rows[0];
+  return {
+    certificateId: row.id, certificateNumber: row.document_number,
+    status: row.source_snapshot.status, currentness: observation.current ? 'CURRENT' as const : 'HISTORICAL' as const,
+    warrantyLifecycleStatus: row.lifecycle_status, issuedAt: row.source_snapshot.issuance.issuedAt,
+    clientId: row.client_id, buildingId: row.building_id, tenantCompanyId: row.tenant_company_id,
+    requestId: row.request_id, spaceId: row.source_snapshot.context.spaceId, executionScopeId: row.execution_scope_id,
+    warrantyId: row.warranty_id, bastId: row.bast_id,
+    certificateSourceSha256: row.source_sha256, certificatePdfSha256: row.pdf_sha256,
+    certificateManifestVersion: row.manifest_version, observedAt: observation.as_of,
+    items: row.source_snapshot.items.map(item => ({
+      itemLineId: item.rootLineId, quotationVersionId: item.quotationVersionId, variationId: item.variationId,
+      description: item.description, lineType: item.lineType, actualQty: item.actualQty, unit: item.unit,
+      warrantyTerms: item.terms, startsAt: item.startsAt, endsAtExclusive: item.endsAtExclusive,
+      contractualPeriodStatus: observation.current ? observation.periods[item.rootLineId] : null,
+    })),
+  };
+}
+
+/** A bounded cursor prevents truncation and avoids loading many PDF byte arrays
+ * simultaneously. The cursor must itself belong to the same selection. */
+export async function listWarrantyCertificatesForCareLookup(
+  tx: Pick<PoolClient, 'query'>, scope: WarrantyCertificateLookupScope, limit: number, cursor: string | null,
+) {
+  const values = lookupValues(scope);
+  if (cursor) {
+    const anchor = await tx.query(`SELECT d.id ${lookupFrom} AND d.id=$5`, [...values, cursor]);
+    if (!anchor.rowCount) throw notFound();
+  }
+  const rows = (await tx.query<{ id: string }>(`SELECT d.id ${lookupFrom}
+    AND ($5::uuid IS NULL OR (d.issued_at,d.id) <
+      (SELECT anchor.issued_at,anchor.id FROM handyman_warranty_certificates anchor WHERE anchor.id=$5))
+    ORDER BY d.issued_at DESC,d.id DESC LIMIT $6`, [...values, cursor, limit + 1])).rows;
+  const page = rows.slice(0, limit);
+  const items = [];
+  for (const entry of page) {
+    const { items: coveredItems, ...certificate } = await readWarrantyCertificateForCareLookup(tx, scope, entry.id);
+    items.push({ ...certificate, itemCount: coveredItems.length });
+  }
+  return { items, nextCursor: rows.length > limit ? page[page.length - 1].id : null };
+}
+
 export async function downloadWarrantyCertificate(actorInput:string,scopeInput:string,certificateInput:string,historical=false) {
   const actor=uuid(actorInput,'actorUserId'),scope=uuid(scopeInput,'executionScopeId'),certificate=uuid(certificateInput,'certificateId');
   return withTransaction(async tx=>{

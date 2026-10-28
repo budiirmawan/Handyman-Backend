@@ -45,6 +45,7 @@ import { publishHandymanQcChecklistVersion, configureHandymanQcChecklist, openHa
   setHandymanQcRunItemOutcome, bindHandymanQcEvidence, finishHandymanQcRun } from '../src/modules/handyman-evidence-qc';
 import { prepareHandymanBast, issueHandymanBast, acceptHandymanBast } from '../src/modules/handyman-bast';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
+import { readWarrantyCertificateForCareLookup } from '../src/modules/handyman-warranty-certificates/handyman-warranty-certificate.service';
 
 // One focused PostgreSQL scenario using genuine original completion, QC, BAST and certificate lifecycle fixtures.
 const PORT = 55992, DIR = `/tmp/hm-warranty-care-complaint-pg-${process.pid}`, STORAGE = `/tmp/hm-warranty-care-complaint-evidence-${process.pid}`;
@@ -58,7 +59,7 @@ let assessorId: string, assessorToken: string;
 let pool: Pool, admin: string, adminToken: string, leadToken: string, supervisorToken: string, customerToken: string, foreignToken: string;
 let realm: Awaited<ReturnType<typeof realmFixture>>, chain: Awaited<ReturnType<typeof locationChain>>;
 let crew: Awaited<ReturnType<typeof crewFixture>>, supervisorId: string, supervisorProfileId:string, customerId: string;
-let scope: string, requestId: string, tenantId: string, quoteId: string, uom: string;
+let scope: string, requestId: string, tenantId: string, quoteId: string, uom: string, otherBuildingId: string;
 let originalLabor: string, originalMaterial: string, notPerformedLine: string, originalNone: string, workOrder: string;
 let qrValue:string;
 let sessionId: string, addVariation: string, addLine: string, addExecutionId: string, materialDeclarationId: string;
@@ -244,6 +245,7 @@ async function setupWorld() {
   await grant(supervisor.id, ['handyman.qc.manage']); supervisorToken = await token(supervisor);
   const other = await buildingService.createBuilding({ propertyId: realm.property.id,
     code: `B_${id().slice(0, 8).toUpperCase()}`, name: 'Other building' });
+  otherBuildingId = other.id;
   const foreign = await userService.createUser({ email: `${id()}@foreign.test`, displayName: 'Other building actor' });
   await buildingAssignmentService.createAssignment(foreign.id, { buildingId: other.id });
   await grant(foreign.id, ['handyman.care.building','tenant_company.manage','handyman.commercial.manage','handyman.warranty.assess']); foreignToken = await token(foreign);
@@ -297,13 +299,14 @@ after(async () => {
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 const certificates = () => `${scopePath()}/warranty-certificates`;
 
-async function issueRealCertificate() {
+async function issueRealCertificate(beforeIssue?: () => Promise<void>) {
   await prepareAcceptanceScenario();
   officialBast=firstBast;
   await issueHandymanBast(admin,{bastId:officialBast,idempotencyKey:key()});
   const consent=await handymanCustomerConsentInput(officialBast,customerId);
   await acceptHandymanBast(customerId,{bastId:officialBast,signatureDigest:consent.signatureDigest,idempotencyKey:key()});
   warrantyId=(await startHandymanServiceWarranty({executionScopeId:scope,idempotencyKey:key()},admin)).warranty.id;
+  if (beforeIssue) await beforeIssue();
   certBody={warrantyId,bastId:officialBast,manifestId:manifestV1.id,manifestVersion:manifestV1.version,
     manifestSha256:manifestV1.sha256,idempotencyKey:key()};
   certificateId=data(await post(certificates(),adminToken,certBody),201).id;
@@ -338,12 +341,65 @@ async function commercialAndExecutionCounts() {
     (SELECT count(*)::int FROM handyman_official_invoices) AS invoices`)).rows[0];
 }
 
-describe('Warranty Care complaint intake',()=>{
-  it('records scoped reports without assumed coverage, links truthful evidence, and tracks an independent assessment',async()=>{
+describe('Warranty Care scoped certificate lookup and complaint intake',()=>{
+  it('reads only issued scoped certificates and preserves independent complaint assessment',async()=>{
     const care=await userService.createUser({email:`${id()}@care.test`,displayName:'Recording Care'});
     await grant(care.id,['handyman.care.building']);
     await buildingAssignmentService.createAssignment(care.id,{buildingId:realm.building.id});
     const careToken=await token(care);
+    const lookup=`/api/v1/handyman/care/buildings/${realm.building.id}/warranty-certificates`;
+    const listLookup=(query:Record<string,unknown>, who=careToken)=>api().get(lookup).query(query).set(auth(who));
+    const detailLookup=(cert:string,query:Record<string,unknown>,who=careToken)=>api().get(`${lookup}/${cert}`).query(query).set(auth(who));
+    rejected(await api().get(lookup).query({requestId}),401);
+    rejected(await listLookup({requestId},customerToken),403); // generic tenant permission is not Care authority
+    rejected(await listLookup({requestId},foreignToken),403); // sibling Building is not enough
+    rejected(await listLookup({}),400);
+    rejected(await listLookup({requestId:'not-a-uuid'}),400);
+    rejected(await listLookup({requestId,actorUserId:customerId}),400);
+    rejected(await listLookup({requestId,limit:'21'}),400);
+    rejected(await api().get(lookup).query({requestId}).set(auth(careToken)).send({actorUserId:customerId}),400);
+    rejected(await listLookup({requestId:id()}),404);
+    assert.deepEqual(data(await listLookup({requestId})).items,[]);
+
+    // Real alternate scopes prove that neither another tenant nor another
+    // request/building/client can be substituted for the selected certificate.
+    const anotherTenant=await tenantCompanyService.createTenantCompany({clientId:realm.client.id,
+      tenantCode:`T_${id().slice(0,8).toUpperCase()}`,tenantName:'Another tenant'},admin);
+    const anotherChain=await locationChain(realm);
+    await tenantSpaceService.assignSpaceToTenant({tenantCompanyId:anotherTenant.id,buildingId:realm.building.id,spaceId:anotherChain.space.id},admin);
+    await tenantBuildingContextService.createTenantBuildingContext({tenantCompanyId:anotherTenant.id,buildingId:realm.building.id},admin);
+    const alternateAttribution=await createChannelAttribution({tenantCompanyId:tenantId,buildingId:realm.building.id,
+      originChannel:'BM_SUPER_APP',originReference:`bm-handoff:BM_SUPER_APP:${id()}`,createdByUserId:customerId});
+    const catalog=(await pool.query('SELECT service_catalog_id FROM handyman_service_requests WHERE id=$1',[requestId])).rows[0].service_catalog_id;
+    const alternateRequest=await handymanServiceRequestService.createHandymanServiceRequest({
+      channelAttributionId:alternateAttribution.id,serviceCatalogId:catalog,description:'A separate request'},admin);
+    await buildingAssignmentService.createAssignment(admin,{buildingId:otherBuildingId});
+    await buildingAssignmentService.createAssignment(care.id,{buildingId:otherBuildingId});
+    const siblingTenant=await tenantCompanyService.createTenantCompany({clientId:realm.client.id,
+      tenantCode:`T_${id().slice(0,8).toUpperCase()}`,tenantName:'Sibling Building tenant'},admin);
+    const siblingRealm={...realm,building:{...realm.building,id:otherBuildingId}};
+    const siblingChain=await locationChain(siblingRealm);
+    await tenantSpaceService.assignSpaceToTenant({tenantCompanyId:siblingTenant.id,buildingId:otherBuildingId,spaceId:siblingChain.space.id},admin);
+    await tenantBuildingContextService.createTenantBuildingContext({tenantCompanyId:siblingTenant.id,buildingId:otherBuildingId},admin);
+    // The original tenant can legitimately occupy both buildings; that must
+    // not permit a certificate issued in one to leak into the other.
+    const sharedTenantChain=await locationChain(siblingRealm);
+    await tenantSpaceService.assignSpaceToTenant({tenantCompanyId:tenantId,buildingId:otherBuildingId,spaceId:sharedTenantChain.space.id},admin);
+    await tenantBuildingContextService.createTenantBuildingContext({tenantCompanyId:tenantId,buildingId:otherBuildingId},admin);
+    const otherRealm=await realmFixture('Different client');
+    await buildingAssignmentService.createAssignment(care.id,{buildingId:otherRealm.building.id});
+    const otherClientTenant=await tenantCompanyService.createTenantCompany({clientId:otherRealm.client.id,
+      tenantCode:`T_${id().slice(0,8).toUpperCase()}`,tenantName:'Different client tenant'},admin);
+    const otherClientChain=await locationChain(otherRealm);
+    await tenantSpaceService.assignSpaceToTenant({tenantCompanyId:otherClientTenant.id,buildingId:otherRealm.building.id,spaceId:otherClientChain.space.id},admin);
+    await tenantBuildingContextService.createTenantBuildingContext({tenantCompanyId:otherClientTenant.id,buildingId:otherRealm.building.id},admin);
+    rejected(await listLookup({tenantCompanyId:siblingTenant.id}),404);
+    rejected(await listLookup({tenantCompanyId:otherClientTenant.id}),404);
+    rejected(await listLookup({requestId,tenantCompanyId:anotherTenant.id}),404);
+    rejected(await api().get(`/api/v1/handyman/care/buildings/${otherBuildingId}/warranty-certificates`).query({requestId}).set(auth(careToken)),404);
+    rejected(await api().get(`/api/v1/handyman/care/buildings/${otherRealm.building.id}/warranty-certificates`).query({requestId}).set(auth(careToken)),404);
+    assert.deepEqual(data(await listLookup({tenantCompanyId:anotherTenant.id})).items,[]);
+
     const uploader=await userService.createUser({email:`${id()}@care.test`,displayName:'Evidence uploader'});
     await grant(uploader.id,['handyman.care.building']);
     await buildingAssignmentService.createAssignment(uploader.id,{buildingId:realm.building.id});
@@ -396,10 +452,94 @@ describe('Warranty Care complaint intake',()=>{
     assert.equal(detailConfirmed.reporter.confirmedUserId,customerId);
     assert.equal(detailConfirmed.status,'PENDING_VERIFICATION');
 
-    // Real original completion, independent QC, accepted BAST and issued certificate.
-    await issueRealCertificate();
+    // A started lifecycle warranty and its generic coverage rows are NOT an
+    // issued certificate; no legacy or ambiguous terms are inferred from them.
+    await issueRealCertificate(async()=>{
+      assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_service_warranty_coverages WHERE warranty_id=$1',[warrantyId])).rows[0].n,2);
+      assert.deepEqual(data(await listLookup({requestId})).items,[]);
+      assert.deepEqual(data(await listLookup({tenantCompanyId:tenantId})).items,[]);
+    });
     const stableCounts=await commercialAndExecutionCounts();
-    const submitBody={...certificatePin(),idempotencyKey:key()};
+    const beforeLookup=(await pool.query(`SELECT w.status,w.expired_at,d.source_sha256,d.pdf_sha256,
+      (SELECT count(*)::int FROM handyman_service_warranty_claims) AS claims,
+      (SELECT count(*)::int FROM handyman_warranty_complaints) AS complaints
+      FROM handyman_service_warranties w JOIN handyman_warranty_certificates d ON d.warranty_id=w.id WHERE w.id=$1`,[warrantyId])).rows[0];
+    const response=await listLookup({requestId,limit:1});
+    assert.equal(response.headers['cache-control'],'private, no-store');
+    const byRequest=data(response); assert.equal(byRequest.items.length,1); assert.equal(byRequest.nextCursor,null);
+    assert.equal(byRequest.items[0].certificateId,certificateId); assert.equal(byRequest.items[0].certificateNumber,artifact.document_number);
+    assert.equal(byRequest.items[0].status,'ISSUED'); assert.equal(byRequest.items[0].currentness,'CURRENT');
+    assert.equal(byRequest.items[0].warrantyLifecycleStatus,'ACTIVE'); assert.equal(byRequest.items[0].itemCount,3);
+    assert.equal(data(await listLookup({tenantCompanyId:tenantId})).items[0].certificateId,certificateId);
+    assert.equal(data(await listLookup({tenantCompanyId:tenantId,requestId})).items[0].certificateId,certificateId);
+    assert.deepEqual(data(await listLookup({requestId,cursor:certificateId})).items,[]);
+    rejected(await listLookup({requestId,cursor:id()}),404);
+    rejected(await listLookup({requestId:alternateRequest.id,cursor:certificateId}),404);
+    rejected(await detailLookup(certificateId,{tenantCompanyId:anotherTenant.id}),404);
+    rejected(await detailLookup(certificateId,{requestId:alternateRequest.id}),404);
+    const siblingLookup=`/api/v1/handyman/care/buildings/${otherBuildingId}/warranty-certificates`;
+    assert.deepEqual(data(await api().get(siblingLookup).query({tenantCompanyId:tenantId}).set(auth(careToken))).items,[]);
+    rejected(await api().get(`${siblingLookup}/${certificateId}`).query({tenantCompanyId:tenantId}).set(auth(careToken)),404);
+    const otherClientLookup=`/api/v1/handyman/care/buildings/${otherRealm.building.id}/warranty-certificates`;
+    rejected(await api().get(`${otherClientLookup}/${certificateId}`).query({tenantCompanyId:otherClientTenant.id}).set(auth(careToken)),404);
+    rejected(await detailLookup(id(),{requestId}),404);
+    rejected(await detailLookup(certificateId,{requestId},customerToken),403);
+    rejected(await detailLookup(certificateId,{requestId},foreignToken),403);
+    const lookupDetailResponse=await detailLookup(certificateId,{tenantCompanyId:tenantId,requestId});
+    assert.equal(lookupDetailResponse.headers['cache-control'],'private, no-store');
+    const found=data(lookupDetailResponse);
+    assert.equal(found.certificateId,certificateId); assert.equal(found.certificateNumber,artifact.document_number);
+    assert.equal(found.clientId,realm.client.id); assert.equal(found.buildingId,realm.building.id);
+    assert.equal(found.tenantCompanyId,tenantId); assert.equal(found.requestId,requestId); assert.equal(found.spaceId,chain.space.id);
+    assert.equal(found.executionScopeId,scope); assert.equal(found.warrantyId,warrantyId); assert.equal(found.bastId,officialBast);
+    assert.equal(found.certificateSourceSha256,artifact.source_sha256); assert.equal(found.certificatePdfSha256,artifact.pdf_sha256);
+    assert.equal(found.certificateManifestVersion,artifact.manifest_version); assert.equal(found.issuedAt,artifact.source_snapshot.issuance.issuedAt);
+    assert.match(found.observedAt,/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+    assert.deepEqual(new Set(found.items.map((item:any)=>item.itemLineId)),new Set([originalLabor,originalMaterial,addLine]));
+    assert.ok(!found.items.some((item:any)=>item.itemLineId===originalNone || item.itemLineId===notPerformedLine));
+    for (const item of found.items) {
+      const issued=artifact.source_snapshot.items.find((source:any)=>source.rootLineId===item.itemLineId);
+      assert.deepEqual(item.warrantyTerms,issued.terms); assert.equal(item.startsAt,issued.startsAt);
+      assert.equal(item.endsAtExclusive,issued.endsAtExclusive); assert.equal(item.contractualPeriodStatus,'IN_PERIOD');
+      assert.equal(item.description,issued.description); assert.equal(item.actualQty,issued.actualQty); assert.equal(item.unit,issued.unit);
+    }
+    assert.equal(found.items.find((item:any)=>item.itemLineId===originalLabor).warrantyTerms.coverage,'LABOR');
+    assert.equal(found.items.find((item:any)=>item.itemLineId===originalMaterial).warrantyTerms.coverage,'PARTS');
+    assert.equal(found.items.find((item:any)=>item.itemLineId===addLine).warrantyTerms.coverage,'BOTH');
+    // Even a self-consistent, re-hashed legacy/ambiguous snapshot is rejected.
+    // Temporarily bypass the immutable trigger ONLY inside a rolled-back test
+    // transaction; the issued row and its database protections remain intact.
+    const tamper=await pool.connect();
+    try {
+      await tamper.query('BEGIN');
+      await tamper.query('ALTER TABLE handyman_warranty_certificates DISABLE TRIGGER hm_warranty_certificate_no_write');
+      const ambiguous=structuredClone(artifact.source_snapshot);
+      delete ambiguous.items[0].terms.endRule;
+      const canonical=stableJson(ambiguous);
+      await tamper.query(`UPDATE handyman_warranty_certificates SET source_snapshot=$2::text::jsonb,
+        source_canonical=$2::text,source_sha256=$3 WHERE id=$1`,[certificateId,canonical,sha(canonical)]);
+      await assert.rejects(readWarrantyCertificateForCareLookup(tamper,{clientId:realm.client.id,buildingId:realm.building.id,
+        tenantCompanyId:tenantId,requestId},certificateId),(error:any)=>error.code==='HANDYMAN_WARRANTY_CERTIFICATE_INTEGRITY_ERROR');
+    } finally { await tamper.query('ROLLBACK'); tamper.release(); }
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_service_warranty_claims')).rows[0].n,0);
+    assert.deepEqual((await pool.query(`SELECT w.status,w.expired_at,d.source_sha256,d.pdf_sha256,
+      (SELECT count(*)::int FROM handyman_service_warranty_claims) AS claims,
+      (SELECT count(*)::int FROM handyman_warranty_complaints) AS complaints
+      FROM handyman_service_warranties w JOIN handyman_warranty_certificates d ON d.warranty_id=w.id WHERE w.id=$1`,[warrantyId])).rows[0],beforeLookup);
+    assert.equal(data(await api().get(`${path}/status`).set(auth(careToken))).status,'PENDING_VERIFICATION');
+    const temporaryCare=await userService.createUser({email:`${id()}@care.test`,displayName:'Revocable Care'});
+    await grant(temporaryCare.id,['handyman.care.building']);
+    await buildingAssignmentService.createAssignment(temporaryCare.id,{buildingId:realm.building.id});
+    const temporaryToken=await token(temporaryCare);
+    assert.equal(data(await listLookup({requestId},temporaryToken)).items[0].certificateId,certificateId);
+    await buildingAssignmentService.deactivateAssignment(temporaryCare.id,realm.building.id,admin);
+    rejected(await listLookup({requestId},temporaryToken),403);
+    rejected(await detailLookup(certificateId,{requestId},temporaryToken),403);
+    // Pins come from the actual lookup; the existing claim endpoint still makes
+    // its independent, evidence-bound filing decision.
+    const submitBody={certificateId:found.certificateId,certificateSourceSha256:found.certificateSourceSha256,
+      certificatePdfSha256:found.certificatePdfSha256,certificateManifestVersion:found.certificateManifestVersion,
+      itemLineId:originalLabor,coverageKind:'LABOR',idempotencyKey:key()};
     rejected(await post(`${path}/submit-claim`,submitterToken,submitBody),409); // no evidence
     assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_service_warranty_claims')).rows[0].n,0);
 
@@ -508,5 +648,24 @@ describe('Warranty Care complaint intake',()=>{
     const known=data(await post(base,careToken,knownBody),201);
     assert.notEqual(known.complaintNumber,created.complaintNumber); assert.equal(known.status,'PENDING_VERIFICATION');
     rejected(await post(base,careToken,{...knownBody,channelReference:`message-${id()}`,idempotencyKey:key(),reportedItemLineId:id()}),400);
+    const afterDecision=data(await detailLookup(certificateId,{requestId}));
+    const lifecycle=(await pool.query('SELECT status FROM handyman_service_warranties WHERE id=$1',[warrantyId])).rows[0].status;
+    assert.equal(afterDecision.warrantyLifecycleStatus,lifecycle);
+    assert.equal(afterDecision.currentness,'CURRENT');
+    assert.equal(data(await api().get(`${base}/${known.complaintId}/status`).set(auth(careToken))).status,'PENDING_VERIFICATION');
+
+    // A genuine Lead correction makes the official scope historical. The
+    // immutable issued terms remain identifiable but are not presented as a
+    // currently valid period or as a verified complaint reference.
+    data(await post(`${scopePath()}/completion-declarations/${materialDeclarationId}/revoke`,leadToken,
+      {reason:'Correct the earlier declaration',idempotencyKey:key()}));
+    assert.equal((await pool.query('SELECT hm_warranty_certificate_is_current($1) AS current',[certificateId])).rows[0].current,false);
+    const archived=data(await detailLookup(certificateId,{requestId}));
+    assert.equal(archived.status,'ISSUED'); assert.equal(archived.currentness,'HISTORICAL');
+    assert.deepEqual(archived.items.map((item:any)=>item.itemLineId),found.items.map((item:any)=>item.itemLineId));
+    assert.ok(archived.items.every((item:any)=>item.contractualPeriodStatus===null));
+    assert.equal(data(await listLookup({requestId})).items[0].currentness,'HISTORICAL');
+    rejected(await api().get(`${certificates()}/${certificateId}.pdf`).set(auth(careToken)),409);
+    assert.equal(data(await api().get(`${base}/${known.complaintId}/status`).set(auth(careToken))).status,'PENDING_VERIFICATION');
   });
 });

@@ -1,10 +1,11 @@
-import { Router, type Response } from 'express';
+import { Router, type RequestHandler, type Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import { HANDYMAN_CARE_BUILDING_PERMISSION } from '../handyman-care-authority';
 import { runSingleFileUpload } from '../handyman-api/handyman-api.controller';
+import { getCareWarrantyCertificate, listCareWarrantyCertificates } from './handyman-warranty-care-certificate.service';
 import {
   authorizeComplaintUpload, confirmComplaintReporter, createComplaint, getAssessorComplaint,
   getComplaintDetail, getComplaintStatus, listComplaints, readAssessorComplaintEvidence,
@@ -12,6 +13,7 @@ import {
 } from './handyman-warranty-care.service';
 
 const param = (v: string | string[]) => Array.isArray(v) ? v[0] : v;
+const noStore: RequestHandler = (_req,res,next) => { res.set('Cache-Control','private, no-store'); next(); };
 function sendFile(res: Response, file: {buffer:Buffer;mimeType:string;fileName:string}) {
   res.set('Cache-Control','private, no-store');
   res.set('X-Content-Type-Options','nosniff');
@@ -23,6 +25,15 @@ function sendFile(res: Response, file: {buffer:Buffer;mimeType:string;fileName:s
 /** Dedicated local Care routes; no new assessment or commercial permissions. */
 export function createHandymanWarrantyCareRouter(): Router {
   const router=Router(), auth=authenticationMiddleware, care=requirePermission(HANDYMAN_CARE_BUILDING_PERMISSION);
+  const certificates='/handyman/care/buildings/:buildingId/warranty-certificates';
+  router.get(certificates,noStore,auth,care,async(req,res,next)=>{
+    try { sendSuccess(res,await listCareWarrantyCertificates(req.auth.userId,param(req.params.buildingId),
+      req.query as Record<string,unknown>,req.body)); } catch(e){next(e);}
+  });
+  router.get(`${certificates}/:certificateId`,noStore,auth,care,async(req,res,next)=>{
+    try { sendSuccess(res,await getCareWarrantyCertificate(req.auth.userId,param(req.params.buildingId),
+      param(req.params.certificateId),req.query as Record<string,unknown>,req.body)); } catch(e){next(e);}
+  });
   const base='/handyman/care/buildings/:buildingId/warranty-complaints', detail=`${base}/:complaintId`;
   router.post(base,auth,care,async(req,res,next)=>{
     try { const result=await createComplaint(req.auth,param(req.params.buildingId),req.body);
