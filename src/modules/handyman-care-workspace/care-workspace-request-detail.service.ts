@@ -29,5 +29,10 @@ export async function getCareWorkspaceRequestDetail(token: string, requestInput:
     code: ERROR_CODES.HANDYMAN_FINAL_RECEIPT_INTEGRITY_ERROR, statusCode: 409,
     message: 'Final Receipt discovery has ambiguous or conflicting invoice/request lineage.',
   });
-  return { ...toCustomerCarePublic(result.item), items: result.item.items ?? [], finalReceipt: result.finalReceipt };
+  if (result.paymentReceiptConflict) throw new AppError({
+    code: ERROR_CODES.HANDYMAN_TENANT_RECEIPT_INTEGRITY_ERROR, statusCode: 409,
+    message: 'Payment Receipt discovery has ambiguous or conflicting payment/request lineage.',
+  });
+  return { ...toCustomerCarePublic(result.item), items: result.item.items ?? [],
+    finalReceipt: result.finalReceipt, paymentReceipts: result.paymentReceipts };
 }

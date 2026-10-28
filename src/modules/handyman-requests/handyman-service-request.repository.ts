@@ -331,6 +331,18 @@ export type CareFinalReceiptDiscovery = {
   pdfSha256: string | null;
 };
 
+/** Issued Payment Receipt metadata. Receipt amounts and invoice references
+ * are historical document facts, not an assertion of invoice settlement. */
+export type CarePaymentReceiptDiscovery = {
+  receiptId: string; documentNumber: null; status: 'ISSUED';
+  paymentId: string; requestId: string; executionScopeId: string; transactionId: string;
+  amount: string; currency: string; obligationStage: 'DP' | 'TERMIN' | 'PELUNASAN';
+  issuedAt: string; sourceAsOf: string;
+  invoiceAtIssuance: { id: string; number: string; status: string; kind: 'OFFICIAL_HANDYMAN' | 'TENANT_INVOICE' } | null;
+  linkedOfficialInvoice: { id: string; number: string; status: 'ISSUED'; linkedAt: string } | null;
+  sourceSha256: string; pdfSha256: string; downloadPath: string;
+};
+
 /** Workspace read adapter, NOT the local User/PIC/admin read wall. Reuse the
  * exact existing request projection and current occupancy authority. Every row
  * must match the selected tenant/building AND its applicable current occupancy,
@@ -380,6 +392,7 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
   const result = await getPool().query<{
     authenticated: boolean; item: Omit<JsonWorkspaceRequestRow, 'cursorCreatedAt'> | null;
     finalReceipt: CareFinalReceiptDiscovery | null; receiptConflict: boolean;
+    paymentReceipts: CarePaymentReceiptDiscovery[]; paymentReceiptConflict: boolean;
   }>(`
     ${WORKSPACE_OCCUPANCY_CTES}, matched AS (
       SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
@@ -459,6 +472,138 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
         OR f.invoice_id IN (SELECT id FROM candidate_invoices)
         OR f.execution_scope_id IN (SELECT id FROM handyman_execution_scopes WHERE handyman_request_id = m.id)
       LEFT JOIN candidate_invoices i ON i.id = f.invoice_id
+    ), payment_receipt_candidates AS (
+      -- Include inconsistent edges as candidates too: filtering them out would
+      -- falsely turn conflicting lineage into a successful empty list. The
+      -- only public output comes after the request's matched authority above.
+      SELECT pr.id, pr.payment_id, pr.request_id, pr.execution_scope_id, pr.transaction_id,
+        pr.issued_at, pr.source_as_of, pr.source_sha256, pr.pdf_sha256,
+        p.amount, p.currency, p.obligation_stage,
+        pr.source_snapshot#>'{reference,invoice}' AS invoice_at_issuance,
+        CASE WHEN legacy_invoice.id IS NOT NULL THEN 'TENANT_INVOICE'
+          WHEN snapshot_invoice.id IS NOT NULL THEN 'OFFICIAL_HANDYMAN' END AS invoice_kind,
+        linked_invoice.id AS linked_invoice_id, linked_invoice.document_number AS linked_invoice_number,
+        invoice_link.linked_at,
+        (pr.request_id = m.id AND pr.client_id = m."clientId"
+          AND pr.building_id = m."buildingId" AND pr.tenant_company_id = m."tenantCompanyId"
+          AND s.id = pr.execution_scope_id AND s.handyman_request_id = m.id
+          AND s.client_id = m."clientId" AND s.building_id = m."buildingId"
+          AND s.tenant_company_id = m."tenantCompanyId" AND s.space_id IS NOT DISTINCT FROM m."spaceId"
+          AND s.tenant_pic_id IS NOT DISTINCT FROM m."tenantPicId"
+          AND s.channel_attribution_id = m."channelAttributionId" AND s.scope_kind = 'ORIGINAL'
+          AND t.id = pr.transaction_id AND t.execution_scope_id = s.id AND t.client_id = m."clientId"
+          AND t.quotation_version_id = s.approved_quotation_version_id
+          AND p.id = pr.payment_id AND p.transaction_id = t.id AND p.client_id = m."clientId"
+          AND p.currency = t.currency AND p.status = 'CONFIRMED'
+          AND p.decided_at IS NOT NULL AND p.decided_by_user_id IS NOT NULL
+          AND rec.payment_id = p.id AND rec.transaction_id = t.id AND rec.client_id = m."clientId"
+          AND rec.event_type = 'RECORD_PAYMENT' AND rec.actor_user_id = p.recorded_by_user_id
+          AND conf.payment_id = p.id AND conf.transaction_id = t.id AND conf.client_id = m."clientId"
+          AND conf.event_type = 'CONFIRM_PAYMENT' AND conf.actor_user_id = p.decided_by_user_id
+          AND (SELECT count(*) FROM handyman_customer_payment_events e
+               WHERE e.payment_id = p.id AND e.event_type = 'RECORD_PAYMENT') = 1
+          AND (SELECT count(*) FROM handyman_customer_payment_events e
+               WHERE e.payment_id = p.id AND e.event_type = 'CONFIRM_PAYMENT') = 1
+          AND pr.source_snapshot->>'schema' = 'HANDYMAN_TENANT_PAYMENT_RECEIPT_V1'
+          AND pr.source_snapshot->>'status' = 'ISSUED'
+          AND pr.source_snapshot->>'clientId' = pr.client_id::text
+          AND pr.source_snapshot#>>'{building,id}' = pr.building_id::text
+          AND pr.source_snapshot#>>'{payer,tenantCompanyId}' = pr.tenant_company_id::text
+          AND pr.source_snapshot#>>'{payer,basis}' = 'EXECUTION_SCOPE_CUSTOMER'
+          AND pr.source_snapshot#>>'{payer,remitterIdentity}' = 'NOT_VERIFIED'
+          AND pr.source_snapshot#>>'{reference,requestId}' = pr.request_id::text
+          AND pr.source_snapshot#>>'{reference,executionScopeId}' = s.id::text
+          AND pr.source_snapshot#>>'{reference,transactionId}' = t.id::text
+          AND pr.source_snapshot#>>'{reference,quotationVersionId}' = t.quotation_version_id::text
+          AND pr.source_snapshot#>>'{reference,spaceId}' IS NOT DISTINCT FROM s.space_id::text
+          AND pr.source_snapshot#>>'{issuance,id}' = pr.id::text
+          AND pr.source_snapshot#>>'{issuance,issuedByUserId}' = pr.issued_by_user_id::text
+          AND pr.source_snapshot#>>'{issuer,profileId}' = pr.issuer_profile_id::text
+          AND pr.source_snapshot#>>'{issuance,issuedAt}' = to_char(pr.issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          AND pr.source_snapshot->>'asOf' = to_char(pr.source_as_of AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          AND pr.source_snapshot#>>'{payment,id}' = p.id::text
+          AND pr.source_snapshot#>>'{payment,amount}' = p.amount::text
+          AND pr.source_snapshot#>>'{payment,currency}' = p.currency
+          AND pr.source_snapshot#>>'{payment,obligationStage}' = p.obligation_stage
+          AND pr.source_snapshot#>>'{payment,channel}' = p.channel
+          AND pr.source_snapshot#>>'{payment,recordedByUserId}' = p.recorded_by_user_id::text
+          AND pr.source_snapshot#>>'{payment,recordEventId}' = rec.id::text
+          AND pr.source_snapshot#>>'{payment,recordedAt}' = to_char(p.received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+          AND pr.source_snapshot#>>'{payment,recordEventOccurredAt}' = to_char(rec.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+          AND pr.source_snapshot#>>'{verification,confirmationEventId}' = conf.id::text
+          AND pr.source_snapshot#>>'{verification,confirmedByUserId}' = p.decided_by_user_id::text
+          AND pr.source_snapshot#>>'{verification,confirmedAt}' = to_char(p.decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+          AND pr.source_snapshot#>>'{verification,confirmationEventOccurredAt}' = to_char(conf.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+          AND CASE jsonb_typeof(pr.source_snapshot#>'{verification,reconciliation}')
+            WHEN 'null' THEN TRUE
+            WHEN 'object' THEN reconciliation.id::text = pr.source_snapshot#>>'{verification,reconciliation,id}'
+              AND reconciliation.client_id = m."clientId"
+              AND reconciliation.verified_by_user_id::text = pr.source_snapshot#>>'{verification,reconciliation,verifiedByUserId}'
+              AND reconciliation.bank_reference = pr.source_snapshot#>>'{verification,reconciliation,bankReference}'
+              AND to_char(reconciliation.actual_received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') = pr.source_snapshot#>>'{verification,reconciliation,actualReceivedAt}'
+              AND to_char(reconciliation.verified_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') = pr.source_snapshot#>>'{verification,reconciliation,verifiedAt}'
+            ELSE FALSE END
+          AND ((pr.source_snapshot#>>'{verification,basis}' = 'INDEPENDENT_CONFIRMATION'
+                AND p.decided_by_user_id <> p.recorded_by_user_id)
+            OR (pr.source_snapshot#>>'{verification,basis}' = 'INDEPENDENT_RECONCILIATION'
+                AND p.decided_by_user_id = p.recorded_by_user_id
+                AND reconciliation.id::text = pr.source_snapshot#>>'{verification,reconciliation,id}'
+                AND reconciliation.client_id = m."clientId" AND reconciliation.verified_by_user_id <> p.recorded_by_user_id))
+          -- Issuance snapshots may precede later allocations; validate every
+          -- pinned allocation, but never demand today's set equal the as-of set.
+          AND jsonb_typeof(pr.source_snapshot->'allocations') = 'array'
+          AND jsonb_typeof(pr.source_snapshot->'corrections') = 'array'
+          AND (SELECT count(*) = count(DISTINCT a->>'id') FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(pr.source_snapshot->'allocations') = 'array'
+              THEN pr.source_snapshot->'allocations' ELSE '[]'::jsonb END) a)
+          AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(pr.source_snapshot->'allocations') = 'array'
+              THEN pr.source_snapshot->'allocations' ELSE '[]'::jsonb END) a
+            WHERE NOT EXISTS (SELECT 1 FROM handyman_payment_allocations pa
+              JOIN handyman_charge_lines cl ON cl.id = pa.charge_line_id AND cl.transaction_id = pa.transaction_id
+              WHERE pa.id::text = a->>'id' AND pa.payment_id = p.id AND pa.transaction_id = t.id
+                AND pa.client_id = m."clientId" AND cl.client_id = m."clientId"
+                AND pa.charge_line_id::text = a->>'chargeLineId' AND pa.line_kind = a->>'lineKind'
+                AND pa.line_kind = cl.line_kind AND pa.currency = a->>'currency' AND pa.currency = p.currency
+                AND pa.amount::text = a->>'amount' AND pa.allocated_by_user_id::text = a->>'allocatedByUserId'
+                AND to_char(pa.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') = a->>'occurredAt'))
+          -- An explicit official link may be created after a pre-invoice
+          -- receipt. It is distinct from what was printed at issuance.
+          AND (invoice_link.payment_id IS NULL OR (linked_invoice.valid
+            AND linked_invoice.transaction_id = t.id AND linked_invoice.execution_scope_id = s.id
+            AND linked_invoice.currency = p.currency))
+          AND CASE jsonb_typeof(pr.source_snapshot#>'{reference,invoice}')
+            WHEN 'null' THEN TRUE
+            WHEN 'object' THEN (
+              (legacy_invoice.id IS NOT NULL AND snapshot_invoice.id IS NULL AND invoice_link.payment_id IS NULL
+                AND legacy_invoice.client_id = m."clientId" AND legacy_invoice.building_id = m."buildingId"
+                AND legacy_invoice.tenant_company_id = m."tenantCompanyId" AND legacy_invoice.handyman_execution_scope_id = s.id
+                AND legacy_invoice.space_id IS NOT DISTINCT FROM m."spaceId" AND legacy_invoice.currency_code = p.currency
+                AND legacy_invoice.invoice_number = pr.source_snapshot#>>'{reference,invoice,number}'
+                AND pr.source_snapshot#>>'{reference,invoice,status}' IN ('DRAFT', 'FINALIZED', 'CANCELLED'))
+              OR (legacy_invoice.id IS NULL AND snapshot_invoice.valid AND invoice_link.invoice_id = snapshot_invoice.id
+                AND snapshot_invoice.transaction_id = t.id AND snapshot_invoice.execution_scope_id = s.id
+                AND snapshot_invoice.document_number = pr.source_snapshot#>>'{reference,invoice,number}'
+                AND pr.source_snapshot#>>'{reference,invoice,status}' = 'ISSUED'))
+            ELSE FALSE END) IS TRUE AS valid
+      FROM matched m
+      JOIN handyman_tenant_payment_receipts pr ON pr.request_id = m.id
+        OR pr.execution_scope_id IN (SELECT id FROM handyman_execution_scopes WHERE handyman_request_id = m.id)
+        OR pr.transaction_id IN (SELECT t.id FROM handyman_customer_transactions t
+          JOIN handyman_execution_scopes s ON s.id = t.execution_scope_id WHERE s.handyman_request_id = m.id)
+        OR pr.payment_id IN (SELECT p.id FROM handyman_customer_payments p
+          JOIN handyman_customer_transactions t ON t.id = p.transaction_id
+          JOIN handyman_execution_scopes s ON s.id = t.execution_scope_id WHERE s.handyman_request_id = m.id)
+      LEFT JOIN handyman_execution_scopes s ON s.id = pr.execution_scope_id
+      LEFT JOIN handyman_customer_transactions t ON t.id = pr.transaction_id
+      LEFT JOIN handyman_customer_payments p ON p.id = pr.payment_id
+      LEFT JOIN handyman_customer_payment_events rec ON rec.id = pr.record_event_id
+      LEFT JOIN handyman_customer_payment_events conf ON conf.id = pr.confirmation_event_id
+      LEFT JOIN handyman_payment_reconciliations reconciliation ON reconciliation.payment_id = pr.payment_id
+      LEFT JOIN handyman_official_invoice_payment_links invoice_link ON invoice_link.payment_id = pr.payment_id
+      LEFT JOIN candidate_invoices linked_invoice ON linked_invoice.id = invoice_link.invoice_id
+      LEFT JOIN candidate_invoices snapshot_invoice ON snapshot_invoice.id::text = pr.source_snapshot#>>'{reference,invoice,id}'
+      LEFT JOIN tenant_invoices legacy_invoice ON legacy_invoice.id::text = pr.source_snapshot#>>'{reference,invoice,id}'
     ), discovery_state AS (
       SELECT (EXISTS (SELECT 1 FROM candidate_invoices WHERE NOT valid)
         OR EXISTS (SELECT 1 FROM candidate_receipts WHERE NOT valid)
@@ -499,11 +644,28 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
           'invoiceNumber', CASE WHEN d.invoice_count = 1 THEN (SELECT document_number FROM candidate_invoices) ELSE NULL END,
           'issuedAt', NULL, 'settledAt', NULL, 'currency', NULL, 'grossAmount', NULL,
           'settledAmount', NULL, 'sourceSha256', NULL, 'pdfSha256', NULL)
-        END FROM matched m CROSS JOIN discovery_state d) AS "finalReceipt"`,
+        END FROM matched m CROSS JOIN discovery_state d) AS "finalReceipt",
+      (EXISTS (SELECT 1 FROM payment_receipt_candidates WHERE NOT valid)
+        OR EXISTS (SELECT 1 FROM payment_receipt_candidates GROUP BY payment_id HAVING count(*) > 1)) AS "paymentReceiptConflict",
+      COALESCE((SELECT jsonb_agg(jsonb_build_object(
+        'receiptId', pr.id, 'documentNumber', NULL, 'status', 'ISSUED',
+        'paymentId', pr.payment_id, 'requestId', pr.request_id, 'executionScopeId', pr.execution_scope_id,
+        'transactionId', pr.transaction_id, 'amount', pr.amount::text, 'currency', pr.currency,
+        'obligationStage', pr.obligation_stage,
+        'issuedAt', to_char(pr.issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'sourceAsOf', to_char(pr.source_as_of AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'invoiceAtIssuance', CASE WHEN jsonb_typeof(pr.invoice_at_issuance) = 'object'
+          THEN pr.invoice_at_issuance || jsonb_build_object('kind', pr.invoice_kind) ELSE NULL END,
+        'linkedOfficialInvoice', CASE WHEN pr.linked_invoice_id IS NOT NULL THEN jsonb_build_object(
+          'id', pr.linked_invoice_id, 'number', pr.linked_invoice_number, 'status', 'ISSUED',
+          'linkedAt', to_char(pr.linked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')) ELSE NULL END,
+        'sourceSha256', pr.source_sha256, 'pdfSha256', pr.pdf_sha256,
+        'downloadPath', '/api/v1/handyman/care/requests/' || pr.request_id::text || '/payments/' || pr.payment_id::text || '/receipt.pdf'
+        ) ORDER BY pr.issued_at, pr.id) FROM payment_receipt_candidates pr WHERE pr.valid), '[]'::jsonb) AS "paymentReceipts"`,
     [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
       requestId, 1, selection.tenantCompanyId, selection.buildingId, selection.spaceId]);
-  const { authenticated, item, finalReceipt, receiptConflict } = result.rows[0];
-  return { authenticated, receiptConflict, finalReceipt, item: item ? { ...item,
+  const { authenticated, item, finalReceipt, receiptConflict, paymentReceipts, paymentReceiptConflict } = result.rows[0];
+  return { authenticated, receiptConflict, finalReceipt, paymentReceipts, paymentReceiptConflict, item: item ? { ...item,
     createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
     attributionCreatedAt: new Date(item.attributionCreatedAt),
   } : null };
