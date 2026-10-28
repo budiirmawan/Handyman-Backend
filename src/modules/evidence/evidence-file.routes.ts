@@ -81,7 +81,7 @@ async function loadEvidence(evidenceId: string, userId: string) {
   const row = result.rows[0];
   // Payment proof is visible only through the selected Care workspace scope;
   // the generic User evidence surface has no tenant-signatory authority.
-  if (row.execution_type === 'HANDYMAN_CUSTOMER_PAYMENT') {
+  if (['HANDYMAN_CUSTOMER_PAYMENT', 'HANDYMAN_WARRANTY_COMPLAINT'].includes(String(row.execution_type))) {
     throw AppError.notFound('Evidence not found.');
   }
   const clientIds = await contextAccessService.getAccessibleClientIds(userId);

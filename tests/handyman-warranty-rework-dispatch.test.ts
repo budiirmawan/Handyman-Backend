@@ -429,7 +429,10 @@ describe('Warranty 01C-B2B — guarded noncommercial dispatch',()=>{
     const originalBefore=(await pool.query(`SELECT ${legacyCols} FROM handyman_visit_appointments WHERE execution_scope_id=$1 ORDER BY id`,[scope])).rows;
     // 0526 commits before 0527, so prove the intermediate schema is fail-closed too.
     const registry=migrations as Migration[];
-    const last=registry.pop(); assert.equal(last?.id,'0527_handyman_warranty_rework_dispatch');
+    // Keep 0527 and every later migration pending during the interim-guard
+    // check, even when newer prospective features are registered.
+    const pending=registry.splice(registry.findIndex(m=>m.id==='0527_handyman_warranty_rework_dispatch'));
+    assert.equal(pending[0]?.id,'0527_handyman_warranty_rework_dispatch');
     try {
       await migrateUp(pool);
       await assert.rejects(pool.query(`INSERT INTO handyman_dispatch_releases(id,client_id,execution_scope_id,assignment_id,released_by_user_id)
@@ -437,7 +440,7 @@ describe('Warranty 01C-B2B — guarded noncommercial dispatch',()=>{
       await assert.rejects(pool.query("UPDATE handyman_service_warranty_reworks SET status='REWORK_IN_PROGRESS' WHERE id=$1",[reworkId]),/execution is paused/i);
       await assert.rejects(pool.query(`INSERT INTO handyman_work_sessions(id,client_id,execution_scope_id,assignment_id,lead_worker_id,lead_user_id,status,checked_in_at)
         VALUES($1,$2,$3,$4,$5,$6,'CHECKED_IN',now())`,[id(),realm.client.id,child,assigned.id,workCrew.workerContext.id,workCrew.leadUser.id]),/sessions are paused/i);
-    } finally { registry.push(last!); }
+    } finally { registry.push(...pending); }
     await migrateUp(pool);
     assert.deepEqual((await pool.query(`SELECT ${legacyCols} FROM handyman_visit_appointments WHERE id=$1`,[legacyId])).rows[0],legacyBefore);
     assert.deepEqual((await pool.query(`SELECT ${legacyCols} FROM handyman_visit_appointments WHERE execution_scope_id=$1 ORDER BY id`,[scope])).rows,originalBefore);

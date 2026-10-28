@@ -188,6 +188,8 @@ async function lockWarrantyForClaim(
 export async function openHandymanServiceWarrantyClaim(
   actorUserId: string,
   input: OpenHandymanServiceWarrantyClaimInput,
+  /** Optional owner transaction for the scoped Care complaint adapter. */
+  transaction?: PoolClient,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const warrantyUuid = ensureUuid(input.warrantyId, 'warrantyId');
@@ -200,21 +202,21 @@ export async function openHandymanServiceWarrantyClaim(
   );
 
   const preflight = await handymanServiceWarrantyRepository.findWarrantyById(
-    getPool(),
+    transaction ?? getPool(),
     warrantyUuid,
   );
   if (!preflight) throw handymanServiceWarrantyNotFoundError();
   await assertClaimAuthority(actorUuid, preflight.executionScopeId);
   if (evidenceRecordId) {
     await assertEvidenceBelongs(
-      getPool(),
+      transaction ?? getPool(),
       evidenceRecordId,
       preflight.clientId,
       preflight.executionScopeId,
     );
   }
 
-  return withTransaction(async (client) => {
+  const run = async (client: PoolClient): Promise<HandymanServiceWarrantyClaimCommandResult> => {
     await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [preflight.executionScopeId]);
     const warranty = await lockWarrantyForClaim(client, warrantyUuid, actorUuid);
     const replay = await handymanServiceWarrantyClaimRepository
@@ -270,7 +272,8 @@ export async function openHandymanServiceWarrantyClaim(
       warrantyStatus: warranty.status,
       replayed: false,
     };
-  });
+  };
+  return transaction ? run(transaction) : withTransaction(run);
 }
 
 type ClaimAction = 'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW';
@@ -289,6 +292,7 @@ async function applyClaimAction(
     decisionNote?: string | null;
     assessmentId?: string | null;
   },
+  transaction?: PoolClient,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const claimId = ensureUuid(claimIdRaw, 'claimId');
@@ -304,13 +308,13 @@ async function applyClaimAction(
       : null;
 
   const existing = await handymanServiceWarrantyClaimRepository.findClaimById(
-    getPool(),
+    transaction ?? getPool(),
     claimId,
   );
   if (!existing) throw handymanServiceWarrantyClaimNotFoundError();
   await assertClaimAuthority(actorUuid, existing.executionScopeId);
 
-  return withTransaction(async (client) => {
+  const run = async (client: PoolClient): Promise<HandymanServiceWarrantyClaimCommandResult> => {
     await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [existing.executionScopeId]);
     const warranty = await lockWarrantyForClaim(
       client,
@@ -405,16 +409,18 @@ async function applyClaimAction(
       warrantyStatus: nextHeadStatus,
       replayed: false,
     };
-  });
+  };
+  return transaction ? run(transaction) : withTransaction(run);
 }
 
 /** SUBMIT: CLAIM_DRAFT -> CLAIM_SUBMITTED (head ACTIVE -> CLAIM_OPEN). */
 export async function submitHandymanServiceWarrantyClaim(
   actorUserId: string,
   input: SubmitHandymanServiceWarrantyClaimInput,
+  transaction?: PoolClient,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   return applyClaimAction(actorUserId, input.claimId, input.idempotencyKey,
-    'SUBMIT', { evidenceRecordId: input.evidenceRecordId });
+    'SUBMIT', { evidenceRecordId: input.evidenceRecordId }, transaction);
 }
 
 /** APPROVE: CLAIM_SUBMITTED -> CLAIM_APPROVED (head -> CLAIM_APPROVED). */

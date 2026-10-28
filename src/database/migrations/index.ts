@@ -1,3 +1,4 @@
+import { migration0528HandymanWarrantyCareComplaints } from './0528_handyman_warranty_care_complaints';
 import { migration0525HandymanWarrantyReworkExecution } from './0525_handyman_warranty_rework_execution';
 import { migration0526HandymanWarrantyReworkAppointments } from './0526_handyman_warranty_rework_appointments';
 import { migration0527HandymanWarrantyReworkDispatch } from './0527_handyman_warranty_rework_dispatch';
@@ -1102,4 +1103,5 @@ export const migrations: readonly Migration[] = [
   migration0525HandymanWarrantyReworkExecution,
   migration0526HandymanWarrantyReworkAppointments,
   migration0527HandymanWarrantyReworkDispatch,
+  migration0528HandymanWarrantyCareComplaints,
 ];

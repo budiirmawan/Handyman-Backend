@@ -1,3 +1,4 @@
+import { createHandymanWarrantyCareRouter } from '../modules/handyman-warranty-care/handyman-warranty-care.routes';
 import { createHandymanWarrantyCertificateRouter } from '../modules/handyman-warranty-certificates/handyman-warranty-certificate.routes';
 import { createHandymanOfficialInvoiceRouter } from '../modules/handyman-official-invoices/handyman-official-invoice.routes';
 import { createOfficialBastDocumentRouter } from '../modules/handyman-bast/handyman-bast-document.routes';
@@ -947,6 +948,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanHelperAttendanceRouter()); // CR-HM-FIELD-EXPENSE-HELPER-01 PART 02 — Helper Attendance Confirmation & Operations Personnel Changes
   router.use(createHandymanCareAuthorityRouter()); // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A: identity + exact Building reach only)
   router.use(createHandymanCareStandaloneDiscoveryRouter()); // CR-HM-BM-CARE-DISCOVERY-01 — Backend-session-only read discovery + safe progress
+  router.use(createHandymanWarrantyCareRouter()); // Warranty complaint intake; assessment remains independent.
   router.use(createHandymanCareCommunicationsRouter()); // CR-HM-BM-CARE-EVIDENCE-01 — request-scoped non-executable communication intake
   router.use(createHandymanInternalNotesRouter()); // CR-HM-CARE-INTERNAL-NOTES-01 — dedicated internal operational notes for Care & Operations
   router.use(createHandymanUnlistedIntakeRouter()); // CR-HM-CARE-UNLISTED-INTAKE — PART 01: unlisted service intake cases & Operations triage queue

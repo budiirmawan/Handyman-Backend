@@ -150,6 +150,19 @@ async function assertAssessor(tx: PoolClient, claim: HandymanServiceWarrantyClai
   const pic = await tx.query(`SELECT 1 FROM tenant_pics WHERE tenant_company_id=$1 AND user_id=$2 AND status='ACTIVE'`,
     [context.tenant_company_id, actor]);
   if (pic.rowCount) throw forbidden();
+  // A complaint recorder, named/self-confirmed reporter, uploader or importer
+  // cannot independently review or decide that same complaint's claim.
+  // Earlier staged migrations have no complaint table/function and therefore
+  // no complaint participants; a partial installation must fail closed.
+  const complaintFeature=(await tx.query<{fn:boolean;tbl:boolean}>(`SELECT
+    to_regprocedure('hm_warranty_complaint_assessor_independent(uuid,uuid)') IS NOT NULL AS fn,
+    to_regclass('handyman_warranty_complaint_claim_links') IS NOT NULL AS tbl`)).rows[0];
+  if (complaintFeature.tbl && !complaintFeature.fn) throw forbidden();
+  if (complaintFeature.fn) {
+    const complaintIndependent = (await tx.query<{independent:boolean}>(
+      'SELECT hm_warranty_complaint_assessor_independent($1,$2) AS independent', [claim.id,actor])).rows[0]?.independent;
+    if (!complaintIndependent) throw forbidden();
+  }
   // Serialize the decision with revocation/deactivation of the effective grant,
   // actor, and exact-Building assignment through commit.
   const held = await tx.query(`SELECT u.id FROM users u
