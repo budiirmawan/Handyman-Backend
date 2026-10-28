@@ -1,3 +1,4 @@
+import { createFinalReceiptDeliveryRouter } from '../modules/handyman-final-receipts/handyman-final-receipt-delivery.routes';
 import { createHandymanFinalReceiptRouter } from '../modules/handyman-final-receipts/handyman-final-receipt.routes';
 import { createHandymanWarrantyCareRouter } from '../modules/handyman-warranty-care/handyman-warranty-care.routes';
 import { createHandymanWarrantyCertificateRouter } from '../modules/handyman-warranty-certificates/handyman-warranty-certificate.routes';
@@ -925,6 +926,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanOfficialInvoiceRouter()); // Immutable inclusive tenant invoice
   router.use(createHandymanTenantReceiptRouter()); // Independently verified tenant payment receipts
   router.use(createHandymanFinalReceiptRouter()); // On-demand settled invoice receipt
+  router.use(createFinalReceiptDeliveryRouter()); // Care journal and exact-recipient acknowledgment
   router.use(createHandymanInspectionWorkLinkRouter());
   router.use(createHandymanDocumentIssuerProfileRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01A — Handyman document issuer company profile (handyman.commercial.manage + provider-Client scope)
   router.use(createHandymanDocumentBankAccountRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01B — issuer company receiving bank accounts (handyman.commercial.manage + provider-Client scope; verification act gates a payment destination)

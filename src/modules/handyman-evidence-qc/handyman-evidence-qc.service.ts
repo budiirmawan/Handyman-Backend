@@ -413,7 +413,7 @@ export async function addHandymanEvidenceFile(
     // Complaint-owned bytes can enter claim evidence only through the
     // complaint adapter, which preserves the uploader and exact claim bridge.
     const complaintOwned = await tx.query(`SELECT 1 FROM evidence_submissions
-      WHERE execution_type='HANDYMAN_WARRANTY_COMPLAINT' AND file_reference=$1`, [storageKey]);
+      WHERE execution_type IN ('HANDYMAN_WARRANTY_COMPLAINT','HANDYMAN_FINAL_RECEIPT_DELIVERY') AND file_reference=$1`, [storageKey]);
     if (complaintOwned.rowCount) throw handymanEvidenceStorageKeyConflictError();
 
     // Storage-key uniqueness beyond this record is a bounded 409

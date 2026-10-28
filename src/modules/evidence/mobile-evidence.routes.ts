@@ -681,7 +681,7 @@ async function loadEvidenceRow(evidenceId: string, userId: string): Promise<Reco
     });
   }
   // Complaint evidence is available only through its Care/assessor scoped routes.
-  if (row.execution_type === 'HANDYMAN_WARRANTY_COMPLAINT') {
+  if (row.execution_type === 'HANDYMAN_WARRANTY_COMPLAINT' || row.execution_type === 'HANDYMAN_FINAL_RECEIPT_DELIVERY') {
     throw AppError.notFound('Evidence not found.');
   }
   const clientIds = await contextAccessService.getAccessibleClientIds(userId);

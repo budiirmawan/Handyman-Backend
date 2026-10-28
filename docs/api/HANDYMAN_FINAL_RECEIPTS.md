@@ -27,3 +27,63 @@ workspace also supports `GET /api/v1/handyman/care/requests/{requestId}/invoices
 with its existing property, Building, tenant and space selection. Downloads are
 private/no-store, verify source/PDF checksums and do not mark a document sent or
 delivered.
+
+## PART 02 — Care delivery journal
+
+A Final Receipt is issued once per official invoice. Its immutable document
+version is **1** (`HANDYMAN_FINAL_RECEIPT_V1`), identified by receipt ID,
+source SHA-256 and PDF SHA-256. Every journal entry is also bound to the exact
+request, tenant, Client and Building. The PDF and Finance facts are unchanged.
+
+The local Care base is
+`/api/v1/handyman/care/buildings/{buildingId}/requests/{requestId}/final-receipts/{receiptId}/versions/1`.
+The Care workspace base omits `buildings/{buildingId}`. Both require their
+existing authenticated exact-Building/represented-occupancy Care authority;
+workspace requests use their Bearer workspace session. All responses are
+private/no-store.
+
+* `GET {base}/delivery-events` returns the issued document pin and append-only
+  history, including the real actor, event time and separate event types.
+* `POST {base}/delivery-evidence` uploads one PDF, PNG, JPEG or WebP as
+  multipart `file` plus `idempotencyKey` (maximum 10 MB). `GET
+  {base}/delivery-evidence/{evidenceId}` returns the protected, byte-verified
+  file. Evidence is receipt-owned, not request-intake or completion evidence;
+  generic evidence routes cannot access it. The SHA verifies bytes, **not**
+  that a recipient or provider authored them. Existing retention policies
+  still apply; purged/unavailable evidence cannot support a new SENT event.
+* `POST {base}/delivery-events` accepts only `SENT`, for example:
+
+  ```json
+  {"type":"SENT","sourceSha256":"<source SHA-256>","pdfSha256":"<PDF SHA-256>",
+   "channel":"WHATSAPP","recipientName":"Recipient", "recipientContact":"+62...",
+   "recipientPicId":"<optional exact tenant PIC UUID>","evidenceId":"<uploaded evidence UUID>",
+   "occurredAt":"2026-10-28T03:00:00.000Z","idempotencyKey":"<unique key>"}
+  ```
+
+  Allowed channels are `WHATSAPP`, `EMAIL`, `DIRECT`; contact is required for
+  the first two. `occurredAt` is a Care-reported UTC timestamp, at or after
+  issue and not in the future. Recipient and sending are **reported**, not
+  verified delivery. The optional PIC must be active in the receipt's tenant;
+  omitting it permits recording a manual send but prevents PIC confirmation.
+  Client-supplied actor identities, DOWNLOADED and Care-written DELIVERED are
+  rejected. Actor-scoped idempotency keys replay the same command and conflict
+  on changed content or scope.
+* `GET /api/v1/handyman/final-receipts/{receiptId}/versions/1/delivery-events/{sentEventId}/acknowledgement`
+  lets only the exact, active recipient PIC inspect that SENT and its pin.
+  `POST` to the same path, with that PIC's own authenticated user session,
+  accepts `{"sourceSha256":"...","pdfSha256":"...","acknowledged":true,
+  "idempotencyKey":"..."}`. It appends a `DELIVERED` event bound to that
+  exact SENT and records the PIC user and server timestamp. A different PIC,
+  Care actor, mismatched checksum, inactive session/Building assignment or
+  absent PIC cannot confirm. A Care assertion, uploaded screenshot, or an
+  unverified provider receipt is never sufficient. There is no automated
+  messaging/provider integration.
+
+`DOWNLOADED` is appended only by an authorized, integrity-verified PDF GET,
+when the server completes its response; a rejected download, HEAD or aborted
+response is not recorded. It means the server served the bytes, **not** that a
+tenant received or read them. The response and database cannot be committed as
+one network transaction: a database failure after a completed response is
+logged, and the journal may briefly lag a just-completed response. Every GET is
+a separate download, not an idempotent manual action. No event closes a job or
+changes an Invoice, payment, settlement, Payment Receipt or Final Receipt.

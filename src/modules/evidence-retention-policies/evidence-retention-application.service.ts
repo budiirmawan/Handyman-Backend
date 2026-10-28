@@ -42,6 +42,7 @@ const PARENT_BUILDING_SQL: Record<string, string> = {
      JOIN findings f ON f.id = r.target_id
     WHERE r.id = $1 AND r.target_type = 'FINDING'`,
   HANDYMAN_WARRANTY_COMPLAINT: 'SELECT building_id FROM handyman_warranty_complaints WHERE id = $1',
+  HANDYMAN_FINAL_RECEIPT_DELIVERY: 'SELECT building_id FROM handyman_final_receipts WHERE id = $1',
   HANDYMAN_CUSTOMER_PAYMENT: `SELECT es.building_id
      FROM handyman_customer_payments p
      JOIN handyman_customer_transactions tx ON tx.id = p.transaction_id

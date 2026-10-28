@@ -1,3 +1,5 @@
+import { logger } from '../../shared/logger';
+import { recordLocalFinalReceiptDownload } from './handyman-final-receipt-delivery.service';
 import { Router, type Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
@@ -7,10 +9,20 @@ import { downloadFinalReceipt, issueFinalReceipt } from './handyman-final-receip
 const base='/handyman/execution-scopes/:executionScopeId/invoices/:invoiceId/final-receipt';
 export function sendFinalReceiptPdf(res:Response,receipt:Awaited<ReturnType<typeof downloadFinalReceipt>>) {
   res.setHeader('Content-Type','application/pdf');
+  res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Content-Disposition',`attachment; filename="${receipt.filename}"`);
   res.setHeader('Content-Length',String(receipt.fileSize));
   res.setHeader('X-Document-Source-SHA256',receipt.sourceChecksum); res.setHeader('X-Content-SHA256',receipt.pdfChecksum);
   res.setHeader('X-Final-Receipt-Number',receipt.number); res.send(receipt.bytes);
+}
+/** Finish means the server completed the PDF response, not that a tenant read it. */
+export function serveFinalReceiptPdf(res:Response,receipt:Awaited<ReturnType<typeof downloadFinalReceipt>>):Promise<void> {
+  return new Promise((resolve,reject)=>{
+    const finish=()=>{res.removeListener('close',close);resolve();};
+    const close=()=>{res.removeListener('finish',finish);reject(new Error('Final Receipt response closed before completion.'));};
+    res.once('finish',finish); res.once('close',close);
+    try { sendFinalReceiptPdf(res,receipt); } catch(error) {res.removeListener('finish',finish);res.removeListener('close',close);reject(error);}
+  });
 }
 export function createHandymanFinalReceiptRouter():Router {
   const router=Router();
@@ -28,8 +40,16 @@ export function createHandymanFinalReceiptRouter():Router {
     try {
       res.setHeader('Cache-Control','private, no-store');
       if (Object.keys(req.query).length || (req.body && Object.keys(req.body).length)) throw AppError.validation('No query or body fields are accepted.');
-      sendFinalReceiptPdf(res,await downloadFinalReceipt(req.auth,req.params.executionScopeId as string,req.params.invoiceId as string));
-    } catch(error) {next(error);}
+      if (req.method!=='GET') { res.status(405).end(); return; }
+      const receipt=await downloadFinalReceipt(req.auth,req.params.executionScopeId as string,req.params.invoiceId as string);
+      if (req.aborted || res.destroyed) return;
+      await recordLocalFinalReceiptDownload(req.auth,receipt,()=>serveFinalReceiptPdf(res,receipt));
+    } catch(error) {
+      if (res.headersSent || res.destroyed) {
+        if (res.writableFinished) logger.error('Final Receipt download journal commit failed after response.',
+          {errorMessage:error instanceof Error?error.message:String(error)});
+      } else next(error);
+    }
   });
   return router;
 }

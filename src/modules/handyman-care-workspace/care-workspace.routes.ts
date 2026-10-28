@@ -1,7 +1,9 @@
+import { logger } from '../../shared/logger';
+import { recordWorkspaceFinalReceiptDownload } from '../handyman-final-receipts/handyman-final-receipt-delivery.service';
 import { downloadWarrantyCertificateForCare } from '../handyman-warranty-certificates/handyman-warranty-certificate.service';
 import { sendWarrantyCertificatePdf } from '../handyman-warranty-certificates/handyman-warranty-certificate.routes';
 import { downloadFinalReceiptForCare } from '../handyman-final-receipts/handyman-final-receipt.service';
-import { sendFinalReceiptPdf } from '../handyman-final-receipts/handyman-final-receipt.routes';
+import { serveFinalReceiptPdf } from '../handyman-final-receipts/handyman-final-receipt.routes';
 import { downloadOfficialHandymanInvoiceForCare } from '../handyman-official-invoices/handyman-official-invoice.service';
 import { sendOfficialInvoicePdf } from '../handyman-official-invoices/handyman-official-invoice.routes';
 import { downloadOfficialBastDocumentForCare } from '../handyman-bast/handyman-bast-document.service';
@@ -167,8 +169,17 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       if (req.body && (typeof req.body!=='object' || Array.isArray(req.body) || Object.keys(req.body).length))
         throw AppError.validation('Final Receipt download does not accept a body.');
-      sendFinalReceiptPdf(res,await downloadFinalReceiptForCare(match[1],req.params.requestId,req.params.invoiceId,req.query));
-    } catch(error) {next(error);}
+      if (req.method!=='GET') { res.status(405).end(); return; }
+      const receipt=await downloadFinalReceiptForCare(match[1],req.params.requestId,req.params.invoiceId,req.query);
+      if (req.aborted || res.destroyed) return;
+      await recordWorkspaceFinalReceiptDownload(await resolveCareWorkspacePrincipal(match[1]),req.params.requestId as string,receipt,
+        ()=>serveFinalReceiptPdf(res,receipt));
+    } catch(error) {
+      if (res.headersSent || res.destroyed) {
+        if (res.writableFinished) logger.error('Final Receipt download journal commit failed after response.',
+          {errorMessage:error instanceof Error?error.message:String(error)});
+      } else next(error);
+    }
   });
   router.get('/handyman/care/requests/:requestId/invoices/:invoiceId/document.pdf', async (req, res, next) => {
     res.setHeader('Cache-Control', 'private, no-store');

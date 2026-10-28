@@ -32,7 +32,7 @@ type Source={schema:'HANDYMAN_FINAL_RECEIPT_V1';status:'ISSUED';
     variations:Array<{variationId:string;number:string;version:number;sourceSha256:string;pdfSha256:string}>};
   settlement:{currency:string;invoiceTotal:string;totalSettled:string;remaining:string;settledAt:string};
   payments:Payment[];corrections:Correction[]};
-type Stored={id:string;document_number:string;invoice_id:string;transaction_id:string;execution_scope_id:string;
+export type FinalReceiptStored={id:string;document_number:string;invoice_id:string;transaction_id:string;execution_scope_id:string;
   client_id:string;building_id:string;request_id:string;tenant_company_id:string;issued_by_user_id:string;issued_session_id:string;
   issued_at:Date;settled_at:Date;currency:string;invoice_total:string;settled_total:string;remaining_amount:string;
   source_snapshot:Source;source_canonical:string;source_sha256:string;pdf_filename:string;pdf_bytes:Buffer;pdf_size:number;pdf_sha256:string};
@@ -46,14 +46,14 @@ function uuid(v:unknown,field:string) {
   if (typeof v!=='string' || !isValidUuid(v)) throw AppError.validation(`Invalid ${field}.`);
   return v.toLowerCase();
 }
-function metadata(row:Stored) {
-  return {id:row.id,number:row.document_number,status:'ISSUED' as const,invoiceId:row.invoice_id,
+function metadata(row:FinalReceiptStored) {
+  return {id:row.id,number:row.document_number,version:1 as const,status:'ISSUED' as const,invoiceId:row.invoice_id,
     executionScopeId:row.execution_scope_id,issuedByUserId:row.issued_by_user_id,issuedAt:row.issued_at.toISOString(),
     settledAt:row.settled_at.toISOString(),invoiceTotal:row.invoice_total,totalSettled:row.settled_total,
     remaining:row.remaining_amount,currency:row.currency,sourceChecksum:row.source_sha256,pdfChecksum:row.pdf_sha256,
     filename:row.pdf_filename,fileSize:row.pdf_size};
 }
-function verifyStored(row:Stored) {
+export function verifyStoredFinalReceipt(row:FinalReceiptStored) {
   try {
     const s=row.source_snapshot;
     if (!Buffer.isBuffer(row.pdf_bytes) || row.pdf_size!==row.pdf_bytes.length || row.pdf_size<1 || row.pdf_size>10485760 ||
@@ -243,8 +243,8 @@ export async function issueFinalReceipt(actor:Actor,scopeInput:string,invoiceInp
     if (!invoice) throw AppError.notFound('Official Handyman invoice not found.');
     const actorName=await authority(tx,actor,invoice,true);
     await tx.query('SELECT id FROM handyman_customer_transactions WHERE id=$1 FOR UPDATE',[invoice.transaction_id]);
-    const existing=(await tx.query<Stored>('SELECT * FROM handyman_final_receipts WHERE invoice_id=$1',[invoice.id])).rows[0];
-    if (existing) {const result=verifyStored(existing); const {bytes,...data}=result; return {...data,replayed:true};}
+    const existing=(await tx.query<FinalReceiptStored>('SELECT * FROM handyman_final_receipts WHERE invoice_id=$1',[invoice.id])).rows[0];
+    if (existing) {const result=verifyStoredFinalReceipt(existing); const {bytes,...data}=result; return {...data,replayed:true};}
     const durable=(await tx.query<{fsync:string;full_page_writes:string;sync_commit:string;replica:boolean}>(`SELECT
       current_setting('fsync') AS fsync,current_setting('full_page_writes') AS full_page_writes,
       current_setting('synchronous_commit') AS sync_commit,pg_is_in_recovery() AS replica`)).rows[0];
@@ -267,7 +267,7 @@ export async function issueFinalReceipt(actor:Actor,scopeInput:string,invoiceInp
     const canonical=stableJson(source),sourceHash=sha(canonical),pdf=await render(source,sourceHash);
     if (pdf.fileSize!==pdf.bytes.length || pdf.fileSize<1 || pdf.fileSize>10485760 || pdf.checksum!==sha(pdf.bytes) ||
         pdf.bytes.subarray(0,5).toString()!=='%PDF-') throw integrity();
-    const row=(await tx.query<Stored>(`INSERT INTO handyman_final_receipts
+    const row=(await tx.query<FinalReceiptStored>(`INSERT INTO handyman_final_receipts
       (id,document_number,invoice_id,transaction_id,execution_scope_id,client_id,building_id,request_id,tenant_company_id,
        issued_by_user_id,issued_session_id,issued_at,settled_at,currency,invoice_total,settled_total,remaining_amount,
        source_snapshot,source_canonical,source_sha256,pdf_filename,pdf_bytes,pdf_size,pdf_sha256)
@@ -275,7 +275,7 @@ export async function issueFinalReceipt(actor:Actor,scopeInput:string,invoiceInp
     [source.issuance.id,number,invoice.id,invoice.transaction_id,scope,invoice.client_id,invoice.building_id,invoice.request_id,
       invoice.tenant_company_id,actor.userId,actor.sessionId,source.issuance.issuedAt,source.settlement.settledAt,invoice.currency,
       invoice.total_amount,canonical,sourceHash,pdf.filename,pdf.bytes,pdf.fileSize,pdf.checksum])).rows[0];
-    if (!row) throw integrity(); const {bytes,...result}=verifyStored(row); return {...result,replayed:false};
+    if (!row) throw integrity(); const {bytes,...result}=verifyStoredFinalReceipt(row); return {...result,replayed:false};
   }); } catch(error) {
     if (!(error instanceof AppError) && ['23505','23514'].includes((error as {code?:string}).code ?? ''))
       throw conflict('Invoice sources changed or are not fully reconciled; no Final Receipt was issued.');
@@ -288,17 +288,17 @@ export async function downloadFinalReceipt(actor:Actor,scopeInput:string,invoice
     const inv=(await tx.query<OfficialInvoiceStored>('SELECT * FROM handyman_official_invoices WHERE id=$1 AND execution_scope_id=$2',[invoice,scope])).rows[0];
     if (!inv) throw AppError.notFound('Official Handyman invoice not found.');
     await authority(tx,actor,inv,false);
-    const row=(await tx.query<Stored>(`SELECT * FROM handyman_final_receipts WHERE invoice_id=$1 AND execution_scope_id=$2
+    const row=(await tx.query<FinalReceiptStored>(`SELECT * FROM handyman_final_receipts WHERE invoice_id=$1 AND execution_scope_id=$2
       AND client_id=$3 AND building_id=$4`,[invoice,scope,inv.client_id,inv.building_id])).rows[0];
     if (!row) throw AppError.notFound('Issued Final Receipt not found.');
-    return verifyStored(row);
+    return verifyStoredFinalReceipt(row);
   });
 }
 /** The workspace uses the same occupancy/grant check as official invoices. */
 export async function downloadFinalReceiptForCare(token:string,requestInput:unknown,invoiceInput:unknown,query:unknown) {
   const principal=await resolveCareWorkspacePrincipal(token),selection=parseCareHandymanPaymentProofSelection(query);
   const request=uuid(requestInput,'requestId'),invoice=uuid(invoiceInput,'invoiceId');
-  const result=await getPool().query<Stored & {authenticated:boolean}>(`${WORKSPACE_OCCUPANCY_CTES}
+  const result=await getPool().query<FinalReceiptStored & {authenticated:boolean}>(`${WORKSPACE_OCCUPANCY_CTES}
     SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,d.* FROM (SELECT 1) singleton LEFT JOIN LATERAL (
       SELECT f.* FROM handyman_service_requests r JOIN records c ON c."clientId"=r.client_id AND c."tenantCompanyId"=r.tenant_company_id
         AND c."buildingId"=r.building_id AND c."spaceId" IS NOT DISTINCT FROM r.space_id
@@ -315,5 +315,5 @@ export async function downloadFinalReceiptForCare(token:string,requestInput:unkn
   const row=result.rows[0];
   if (!row?.authenticated) throw workspaceUnauthorized();
   if (!row.id) throw new AppError({code:ERROR_CODES.HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND,statusCode:404,message:'Care workspace resource not found.'});
-  return verifyStored(row);
+  return verifyStoredFinalReceipt(row);
 }
