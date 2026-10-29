@@ -84722,6 +84722,54 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/execution-scopes/{executionScopeId}/evidence:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listHandymanScopeFieldEvidence
+      summary: List confirmed field evidence for an execution scope (read-only)
+      description: >-
+        CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — bounded discovery of
+        CONFIRMED (VERIFIED) field evidence for the exact execution scope.
+        Authentication only; field authority is service-enforced: the
+        existing read roles (Crew Lead, assigned Inspector, Operations with
+        tenant_company.read) or the appointed QC Supervisor — explicit
+        ACTIVE Building assignment plus `handyman.qc.manage` plus an
+        effective BE-03F reporting line to this scope's CURRENT Crew Lead.
+        The permission alone never grants access and no
+        tenant_company.read is implied. Incomplete upload intents are
+        excluded; historical unbound evidence is preserved with a null
+        workSessionId. The projection never embeds photo bytes, storage
+        keys or download paths. Paginated through the shared
+        `page`/`pageSize` contract (1..200, default 50); the response
+        `meta` carries { page, pageSize, total, totalPages }.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: Confirmed evidence for the scope, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanScopeFieldEvidenceListResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /handyman/field/requests/{handymanRequestId}/evidence/upload:
     parameters:
       - $ref: "#/components/parameters/HandymanRequestIdPath"
@@ -84901,8 +84949,12 @@ paths:
         Authentication only; field access to the evidence's scope or
         request is enforced server-side (403
         HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN or the bounded 404
-        HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND otherwise). Metadata only — the
-        bytes are served by the content route.
+        HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND otherwise). CR-HM-MOBILE-EVIDENCE-E2E-01
+        PART 01B-BE: a VERIFIED scope-bound record is additionally readable
+        by the scope's appointed QC Supervisor (handyman.qc.manage + exact
+        Building + effective BE-03F reporting line to the current Crew
+        Lead); incomplete intents stay unreadable to QC. Metadata only —
+        the bytes are served by the content route.
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
       responses:
@@ -84931,7 +84983,10 @@ paths:
       operationId: getHandymanFieldEvidenceContent
       summary: Stream the verified bytes of a field evidence record
       description: >-
-        Authentication only with service-enforced field access. Streams
+        Authentication only with service-enforced field access — the same
+        authority as GET /handyman/field/evidence/{evidenceId}, including
+        the appointed QC Supervisor read path (VERIFIED scope-bound
+        evidence only). Streams
         the stored bytes with the recorded Content-Type, Content-Length,
         an inline Content-Disposition and the X-Content-SHA256 header when
         a checksum exists. This route intentionally does NOT use the JSON
@@ -137310,6 +137365,35 @@ components:
         evidence: { $ref: "#/components/schemas/HandymanFieldEvidenceUpload" }
         uploadUrl: { type: string }
         confirmUrl: { type: string }
+    HandymanScopeEvidenceListItem:
+      type: object
+      description: >-
+        CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — discovery projection of
+        one CONFIRMED field evidence upload (Source:
+        HandymanScopeEvidenceItem). No storage path, download link or raw
+        bytes are ever embedded.
+      additionalProperties: false
+      required: [evidenceId, workSessionId, purpose, mimeType, sha256Checksum, uploadedByUserId, uploadedByRole, uploadStatus, createdAt]
+      properties:
+        evidenceId: { type: string, format: uuid }
+        workSessionId:
+          { type: string, format: uuid, nullable: true, description: "Authoritative Work Session binding; null for historical unbound evidence." }
+        purpose: { type: string, enum: [VARIATION_FINDING, MATERIAL_RECEIPT, INSPECTION_EVIDENCE, BEFORE_AFTER_WORK, QC_EVIDENCE] }
+        mimeType: { type: string, enum: [image/jpeg, image/png, image/webp, application/pdf] }
+        sha256Checksum: { type: string }
+        uploadedByUserId: { type: string, format: uuid }
+        uploadedByRole: { type: string, enum: [PIC_PEKERJAAN, INSPECTOR, OPERATIONS_MANAGER] }
+        uploadStatus: { type: string, enum: [VERIFIED] }
+        createdAt: { type: string, format: date-time }
+    HandymanScopeFieldEvidenceListResult:
+      type: object
+      additionalProperties: false
+      required: [evidence]
+      properties:
+        evidence:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/HandymanScopeEvidenceListItem" }
     HandymanFieldEvidenceMultipartRequest:
       type: object
       description: >-

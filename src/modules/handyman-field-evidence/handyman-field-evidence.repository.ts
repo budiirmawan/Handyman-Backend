@@ -5,6 +5,7 @@ import type {
   HandymanFieldEvidencePurpose,
   HandymanFieldEvidenceUploadRecord,
   HandymanFieldEvidenceUploadStatus,
+  HandymanScopeEvidenceItem,
 } from './handyman-field-evidence.types';
 
 type DbExecutor = Pick<PoolClient, 'query'>;
@@ -260,6 +261,66 @@ export const handymanFieldEvidenceRepository = {
       [executionScopeId],
     );
     return res.rows.map(mapEvidenceRow);
+  },
+
+  /**
+   * CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — bounded discovery of
+   * CONFIRMED (VERIFIED) evidence for one execution scope. Pending/staged
+   * upload intents are never discoverable; storage keys and bytes never
+   * leave the repository.
+   */
+  async listVerifiedByExecutionScope(
+    executionScopeId: string,
+    page: { limit: number; offset: number },
+    tx?: DbExecutor,
+  ): Promise<HandymanScopeEvidenceItem[]> {
+    const db = tx ?? getPool();
+    const res = await db.query<{
+      id: string;
+      work_session_id: string | null;
+      purpose: HandymanFieldEvidencePurpose;
+      mime_type: HandymanFieldEvidenceMimeType;
+      sha256_checksum: string;
+      uploaded_by_user_id: string;
+      uploaded_by_role: 'PIC_PEKERJAAN' | 'INSPECTOR' | 'OPERATIONS_MANAGER';
+      upload_status: HandymanFieldEvidenceUploadStatus;
+      created_at: Date | string;
+    }>(
+      `SELECT id, work_session_id, purpose, mime_type, sha256_checksum,
+              uploaded_by_user_id, uploaded_by_role, upload_status, created_at
+         FROM handyman_field_evidence_uploads
+        WHERE execution_scope_id = $1
+          AND upload_status = 'VERIFIED'
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2 OFFSET $3`,
+      [executionScopeId, page.limit, page.offset],
+    );
+    return res.rows.map((row) => ({
+      evidenceId: row.id,
+      workSessionId: row.work_session_id,
+      purpose: row.purpose,
+      mimeType: row.mime_type,
+      sha256Checksum: row.sha256_checksum,
+      uploadedByUserId: row.uploaded_by_user_id,
+      uploadedByRole: row.uploaded_by_role,
+      uploadStatus: row.upload_status,
+      createdAt: toIso(row.created_at)!,
+    }));
+  },
+
+  async countVerifiedByExecutionScope(
+    executionScopeId: string,
+    tx?: DbExecutor,
+  ): Promise<number> {
+    const db = tx ?? getPool();
+    const res = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM handyman_field_evidence_uploads
+        WHERE execution_scope_id = $1
+          AND upload_status = 'VERIFIED'`,
+      [executionScopeId],
+    );
+    return res.rows[0]?.n ?? 0;
   },
 
   async listByRequest(

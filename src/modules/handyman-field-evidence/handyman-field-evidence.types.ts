@@ -60,3 +60,20 @@ export interface HandymanFieldEvidenceUploadRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — discovery projection for the
+ * scoped evidence listing. Confirmed (VERIFIED) evidence only; deliberately
+ * excludes storage paths, download links and raw bytes.
+ */
+export type HandymanScopeEvidenceItem = {
+  evidenceId: string;
+  workSessionId: string | null;
+  purpose: HandymanFieldEvidencePurpose;
+  mimeType: HandymanFieldEvidenceMimeType;
+  sha256Checksum: string;
+  uploadedByUserId: string;
+  uploadedByRole: 'PIC_PEKERJAAN' | 'INSPECTOR' | 'OPERATIONS_MANAGER';
+  uploadStatus: HandymanFieldEvidenceUploadStatus;
+  createdAt: string;
+};

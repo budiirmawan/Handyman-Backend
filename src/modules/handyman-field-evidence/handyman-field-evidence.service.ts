@@ -16,6 +16,11 @@ import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/han
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { handymanFieldEvidenceRepository } from './handyman-field-evidence.repository';
 import {
+  buildPaginationMeta,
+  parsePagination,
+  type PaginationMeta,
+} from '../../shared/pagination';
+import {
   handymanWorkSessionNotAuthorizedError,
   handymanWorkSessionNotFoundError,
 } from '../handyman-work-sessions';
@@ -26,6 +31,8 @@ import {
   type HandymanFieldEvidenceMimeType,
   type HandymanFieldEvidencePurpose,
   type HandymanFieldEvidenceUploadRecord,
+  type HandymanFieldEvidenceUploadStatus,
+  type HandymanScopeEvidenceItem,
 } from './handyman-field-evidence.types';
 
 const UUID_RE =
@@ -379,6 +386,80 @@ async function resolveEvidenceActorRole(
     message:
       'Actor is not authorized to upload or access evidence for this Work Order / Request.',
   });
+}
+
+/**
+ * CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — READ authority for field
+ * evidence metadata/content/listing.
+ *
+ * The pre-existing field-role resolution runs FIRST and unchanged
+ * (Crew Leader, assigned Inspector, Operations — preserving every existing
+ * access path). Only when it denies with 403 does the appointed QC
+ * Supervisor fallback apply, and only under ALL of:
+ *   - the target is bound to an exact execution scope,
+ *   - (when a concrete record is being read) the record is VERIFIED —
+ *     incomplete upload intents stay undiscoverable/unreadable to QC,
+ *   - `assertHandymanQcSupervisor` establishes the full BE-03F authority:
+ *     explicit ACTIVE Building assignment, `handyman.qc.manage`, an active
+ *     scope assignment of the same Client, and an effective reporting line
+ *     to the scope's CURRENT Crew Lead (the permission alone is never
+ *     sufficient — no tenant_company.read is granted or implied).
+ *
+ * A failed QC resolution rethrows the ORIGINAL field-read denial (bounded
+ * 403 surface); non-403 infrastructure failures propagate unchanged.
+ */
+async function authorizeEvidenceRead(
+  actorUserId: string,
+  target: EvidenceTargetContext,
+  record?: {
+    purpose: HandymanFieldEvidencePurpose;
+    uploadStatus: HandymanFieldEvidenceUploadStatus;
+  },
+): Promise<void> {
+  try {
+    await resolveEvidenceActorRole(
+      actorUserId,
+      target,
+      true,
+      undefined,
+      record?.purpose,
+    );
+    return;
+  } catch (error) {
+    if (
+      !(error instanceof AppError) ||
+      error.statusCode !== 403 ||
+      !target.executionScopeId ||
+      (record && record.uploadStatus !== 'VERIFIED')
+    ) {
+      throw error;
+    }
+    const scopeId = target.executionScopeId;
+    try {
+      await withTransaction(async (tx) => {
+        // Lazy load: the QC authority module transitively imports the
+        // quotation surface, which imports this service (function-level
+        // cycle only — resolved at call time, never at module init).
+        const { assertHandymanQcSupervisor, lockHandymanQcScope } =
+          await import('../handyman-evidence-qc/handyman-qc-authority');
+        await lockHandymanQcScope(tx, scopeId);
+        await assertHandymanQcSupervisor(
+          {
+            id: scopeId,
+            clientId: target.clientId,
+            buildingId: target.buildingId,
+          },
+          actorUserId,
+          tx,
+        );
+      });
+    } catch (qcError) {
+      if (qcError instanceof AppError && qcError.statusCode === 403) {
+        throw error;
+      }
+      throw qcError;
+    }
+  }
 }
 
 async function assertDomainObjectOwnership(
@@ -1540,7 +1621,7 @@ export async function getFieldEvidenceMetadata(
     });
   }
 
-  await resolveEvidenceActorRole(
+  await authorizeEvidenceRead(
     actorUserId,
     {
       clientId: record.clientId,
@@ -1549,12 +1630,55 @@ export async function getFieldEvidenceMetadata(
       handymanRequestId: record.handymanRequestId,
       executionScopeId: record.executionScopeId,
     },
-    true,
-    undefined,
-    record.purpose,
+    record,
   );
 
   return record;
+}
+
+/**
+ * CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — read-only, bounded discovery
+ * of CONFIRMED field evidence for one exact execution scope.
+ *
+ * Authorization: the existing field-read roles first (Operations /
+ * Crew Leader / Inspector, unchanged), then the appointed QC Supervisor
+ * authority (see authorizeEvidenceRead). Only VERIFIED rows are returned
+ * (incomplete upload intents are never discoverable); historical unbound
+ * evidence stays discoverable with workSessionId null. The projection
+ * never embeds photo bytes, storage keys or download paths.
+ */
+export async function listScopeFieldEvidence(
+  actorUserId: string,
+  executionScopeId: unknown,
+  query: Record<string, unknown>,
+): Promise<{
+  evidence: HandymanScopeEvidenceItem[];
+  pagination: PaginationMeta;
+}> {
+  const scopeId = assertUuid(executionScopeId, 'executionScopeId');
+  const target = await resolveEvidenceTargetContext({
+    executionScopeId: scopeId,
+  });
+  const pagination = parsePagination(query);
+  await authorizeEvidenceRead(actorUserId, target);
+
+  const evidence = await handymanFieldEvidenceRepository
+    .listVerifiedByExecutionScope(scopeId, {
+      limit: pagination.limit,
+      offset: pagination.offset,
+    });
+  const total =
+    await handymanFieldEvidenceRepository.countVerifiedByExecutionScope(
+      scopeId,
+    );
+  return {
+    evidence,
+    pagination: buildPaginationMeta(
+      pagination.page,
+      pagination.pageSize,
+      total,
+    ),
+  };
 }
 
 /**
