@@ -126,8 +126,8 @@ export function toCustomerCarePublic(
   };
 }
 
-function assertUuid(value: string | undefined, field: string): void {
-  if (value === undefined || !isValidUuid(value)) {
+function assertUuid(value: string | null | undefined, field: string): void {
+  if (value === undefined || value === null || !isValidUuid(value)) {
     throw AppError.validation('Request intake validation failed.', [
       { field, message: `${field} must be a valid UUID.` },
     ]);
@@ -145,42 +145,50 @@ async function createFromAuthorizedAttribution(
   attribution: AttributionSnapshot,
   client?: PoolClient,
 ): Promise<PublicHandymanServiceRequest> {
-  assertUuid(input.serviceCatalogId, 'serviceCatalogId');
-  if (input.serviceVariantId !== undefined) {
-    assertUuid(input.serviceVariantId, 'serviceVariantId');
-  }
-  // 2) Selected service: must exist, be ACTIVE (reference-master idiom),
-  //    and belong to the attribution's Client — cross-client services are
-  //    rejected.
-  const service = await serviceCatalogRepository.findById(
-    client,
-    input.serviceCatalogId,
-  );
-  if (!service) throw serviceCatalogNotFoundError();
-  if (service.status !== 'ACTIVE') throw serviceCatalogNotActiveError();
-  if (service.clientId !== attribution.clientId) {
-    throw handymanServiceRequestScopeMismatchError();
-  }
-
-  // 3) Optional variant: must belong to the selected service and the same
-  //    Client, and must be ACTIVE.
+  let serviceId: string | null = null;
   let variantId: string | null = null;
-  if (input.serviceVariantId !== undefined) {
-    const variant = await handymanServiceVariantRepository.findById(
+  if (input.serviceCatalogId !== null) {
+    assertUuid(input.serviceCatalogId, 'serviceCatalogId');
+    if (input.serviceVariantId !== undefined) {
+      assertUuid(input.serviceVariantId, 'serviceVariantId');
+    }
+    // 2) Selected catalogue service: unchanged ACTIVE + same-Client law.
+    const service = await serviceCatalogRepository.findById(
       client,
-      input.serviceVariantId,
+      input.serviceCatalogId,
     );
-    if (!variant) throw handymanServiceVariantNotFoundError();
-    if (
-      variant.serviceCatalogId !== service.id ||
-      variant.clientId !== attribution.clientId
-    ) {
+    if (!service) throw serviceCatalogNotFoundError();
+    if (service.status !== 'ACTIVE') throw serviceCatalogNotActiveError();
+    if (service.clientId !== attribution.clientId) {
       throw handymanServiceRequestScopeMismatchError();
     }
-    if (variant.status !== 'ACTIVE') {
-      throw handymanServiceVariantNotActiveError();
+    serviceId = service.id;
+
+    // 3) Optional variant: must belong to the selected service and Client.
+    if (input.serviceVariantId !== undefined) {
+      const variant = await handymanServiceVariantRepository.findById(
+        client,
+        input.serviceVariantId,
+      );
+      if (!variant) throw handymanServiceVariantNotFoundError();
+      if (
+        variant.serviceCatalogId !== service.id ||
+        variant.clientId !== attribution.clientId
+      ) {
+        throw handymanServiceRequestScopeMismatchError();
+      }
+      if (variant.status !== 'ACTIVE') {
+        throw handymanServiceVariantNotActiveError();
+      }
+      variantId = variant.id;
     }
-    variantId = variant.id;
+  } else if (input.serviceVariantId !== undefined) {
+    throw AppError.validation('Request intake validation failed.', [
+      {
+        field: 'serviceVariantId',
+        message: 'serviceVariantId is not accepted for a non-catalog request.',
+      },
+    ]);
   }
 
   // 4) One request per immutable attribution.
@@ -204,6 +212,14 @@ async function createFromAuthorizedAttribution(
     }
     description = trimmed;
   }
+  if (input.serviceCatalogId === null && description === null) {
+    throw AppError.validation('Request intake validation failed.', [
+      {
+        field: 'description',
+        message: 'description is required for a non-catalog request (1-1000 characters).',
+      },
+    ]);
+  }
 
   // 6) Immutable attribution-derived context snapshot (never mutated).
   try {
@@ -216,7 +232,7 @@ async function createFromAuthorizedAttribution(
         tenantPicId: attribution.tenantPicId,
         buildingId: attribution.buildingId,
         spaceId: attribution.spaceId,
-        serviceCatalogId: service.id,
+        serviceCatalogId: serviceId,
         serviceVariantId: variantId,
         originChannel: attribution.originChannel,
         originReference: attribution.originReference,
@@ -292,7 +308,9 @@ export async function createHandymanServiceRequestForAttribution(
   client: PoolClient,
 ): Promise<PublicHandymanServiceRequest> {
   assertUuid(input.channelAttributionId, 'channelAttributionId');
-  assertUuid(input.serviceCatalogId, 'serviceCatalogId');
+  if (input.serviceCatalogId !== null) {
+    assertUuid(input.serviceCatalogId, 'serviceCatalogId');
+  }
   if (input.serviceVariantId !== undefined) {
     assertUuid(input.serviceVariantId, 'serviceVariantId');
   }
@@ -321,6 +339,9 @@ export async function createCareHandymanServiceRequest(
   if (typeof input?.exchangeToken !== 'string' || input.exchangeToken.length === 0) {
     throw handoffExchangeInvalidError();
   }
+  // The BM exchange contract remains catalogue-only. Non-catalog intake is
+  // exclusive to the separate authenticated Building Care gateway.
+  assertUuid(input.serviceCatalogId, 'serviceCatalogId');
   return withTransaction(async (client) => {
     const { attribution, exchange } = await bindCareHandoffExchangeInTransaction(
       input.exchangeToken, client,

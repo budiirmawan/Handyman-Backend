@@ -6,6 +6,7 @@
 export { handymanSchedulingReadinessRepository } from './handyman-scheduling.repository';
 export {
   createHandymanSchedulingReadiness,
+  createHandymanSchedulingReadinessForIntake,
   supersedeHandymanSchedulingReadiness,
   getHandymanSchedulingReadiness,
   listHandymanSchedulingReadinessHistory,

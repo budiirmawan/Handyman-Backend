@@ -43,6 +43,11 @@ export type OperationsQueueRequestRow = {
   spaceId: string | null;
   channelAttributionId: string;
   status: string;
+  serviceCatalogId: string | null;
+  description: string | null;
+  preferredWindowStart: Date | null;
+  preferredWindowEnd: Date | null;
+  preferredTimezone: string | null;
   createdAt: Date;
   updatedAt: Date;
   executionScopeId: string | null;
@@ -114,6 +119,11 @@ async function listOperationsQueueRequests(
             r.space_id AS "spaceId",
             r.channel_attribution_id AS "channelAttributionId",
             r.status,
+            r.service_catalog_id AS "serviceCatalogId",
+            r.description,
+            sr.preferred_window_start AS "preferredWindowStart",
+            sr.preferred_window_end AS "preferredWindowEnd",
+            sr.timezone AS "preferredTimezone",
             r.created_at AS "createdAt",
             r.updated_at AS "updatedAt",
             (
@@ -124,6 +134,10 @@ async function listOperationsQueueRequests(
                LIMIT 1
             ) AS "executionScopeId"
        FROM handyman_service_requests r
+       LEFT JOIN handyman_scheduling_readiness sr
+         ON sr.handyman_request_id = r.id
+        AND sr.client_id = r.client_id
+        AND sr.status = 'ACTIVE'
       WHERE ${conditions.join(' AND ')}
       ORDER BY r.created_at ASC, r.id ASC
       LIMIT $${limitParameter} OFFSET $${offsetParameter}`,

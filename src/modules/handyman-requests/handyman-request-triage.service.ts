@@ -132,6 +132,21 @@ export async function recordHandymanRequestTriage(
         buildingId: request.buildingId,
       });
 
+      // A non-catalog need has no catalogue prequalification. Preserve the
+      // inspection-first gate before any diagnosis/quotation can be reached;
+      // catalogue requests keep the frozen triage vocabulary unchanged.
+      if (
+        request.serviceCatalogId === null &&
+        input.triageDisposition !== 'INSPECTION_REQUIRED'
+      ) {
+        throw AppError.validation('Request validation failed.', [
+          {
+            field: 'triageDisposition',
+            message: 'Non-catalog requests require INSPECTION_REQUIRED triage first.',
+          },
+        ]);
+      }
+
       // 4) F2 pre-check inside the transaction (the UNIQUE constrains
       //    races); duplicates resolve to the SAME 409 contract.
       const existing = await handymanRequestTriageRepository.findByRequest(

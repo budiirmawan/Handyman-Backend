@@ -15,7 +15,9 @@ import { computeRequestFingerprint } from '../request-idempotency';
 import { hasCurrentUnitPartyRole } from '../apartment-master';
 import { handymanRequestPartyService } from '../handyman-request-parties';
 import { handymanServiceVariantService } from '../handyman-catalog';
+import { createHandymanSchedulingReadinessForIntake } from '../handyman-scheduling';
 import { serviceCatalogService } from '../service-catalog';
+import { handymanCareInternalNoteRepository } from './handyman-care-internal-note.repository';
 import { tenantBuildingContextRepository } from '../tenant-building-contexts';
 import { tenantCompanyRepository } from '../tenant-companies';
 import { tenantVerificationRequiredError } from '../tenant-companies/tenant-company.errors';
@@ -85,7 +87,7 @@ type ProjectableRequest = {
   id: string;
   buildingId: string;
   spaceId: string | null;
-  serviceCatalogId: string;
+  serviceCatalogId: string | null;
   serviceVariantId: string | null;
   description: string | null;
   status: string;
@@ -278,16 +280,34 @@ export async function createBuildingCareRequest(input: {
       }),
   });
 
+  const preferredWindow = input.body.preferredWindowStart !== undefined &&
+      input.body.preferredWindowEnd !== undefined
+    ? {
+        start: input.body.preferredWindowStart,
+        end: input.body.preferredWindowEnd,
+      }
+    : null;
   const normalized = {
     buildingId: authority.scope.buildingId,
     tenantCompanyId: input.body.tenantCompanyId,
     tenantPicId: input.body.tenantPicId ?? null,
     spaceId: input.body.spaceId ?? null,
-    serviceCatalogId: input.body.serviceCatalogId,
+    serviceCatalogId: input.body.serviceCatalogId ?? null,
     serviceVariantId: input.body.serviceVariantId ?? null,
     description: input.body.description ?? null,
     approvalTenantCompanyId: parties.approvalTenantCompanyId,
     costResponsibleTenantCompanyId: parties.costResponsibleTenantCompanyId,
+    // Keep the legacy catalogue fingerprint byte-stable when the new
+    // optional fields were not supplied; replay of pre-0481 keys still works.
+    ...(input.body.internalNote === undefined
+      ? {}
+      : { internalNote: input.body.internalNote }),
+    ...(preferredWindow === null
+      ? {}
+      : {
+          preferredWindowStart: preferredWindow.start,
+          preferredWindowEnd: preferredWindow.end,
+        }),
   };
   const requestFingerprint = computeRequestFingerprint(normalized);
 
@@ -347,6 +367,33 @@ export async function createBuildingCareRequest(input: {
         },
         client,
       );
+
+      // Reuse the existing scheduling-readiness PREFERENCE authority. This
+      // writes no appointment and joins the same transaction/idempotency
+      // claim as attribution + request + parties.
+      if (preferredWindow !== null) {
+        await createHandymanSchedulingReadinessForIntake(
+          request,
+          {
+            preferredWindowStart: preferredWindow.start,
+            preferredWindowEnd: preferredWindow.end,
+          },
+          input.actorUserId,
+          client,
+        );
+      }
+
+      // Dedicated Care-only INTERNAL fact. It never enters the canonical
+      // request projection used by tenant-facing readers.
+      if (normalized.internalNote !== undefined) {
+        await handymanCareInternalNoteRepository.insertForIntake(client, {
+          clientId: attribution.clientId,
+          buildingId: attribution.buildingId,
+          handymanRequestId: request.id,
+          note: normalized.internalNote,
+          createdByUserId: input.actorUserId,
+        });
+      }
 
       return {
         responseStatus: 201,

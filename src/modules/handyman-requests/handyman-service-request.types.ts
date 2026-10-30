@@ -62,7 +62,8 @@ export type HandymanServiceRequestRecord = {
   buildingId: string;
   /** Preserved exactly from the attribution when present. */
   spaceId: string | null;
-  serviceCatalogId: string;
+  /** NULL is the authoritative non-catalog intake marker. */
+  serviceCatalogId: string | null;
   serviceVariantId: string | null;
   /** Attribution provenance snapshot (origin channel + durable reference). */
   originChannel: string;
@@ -152,7 +153,9 @@ export type HandymanServiceRequestPageOptions = {
  */
 export type CreateHandymanServiceRequestInput = {
   channelAttributionId: string;
-  serviceCatalogId: string;
+  /** Null is accepted only by the Building Care non-catalog gateway;
+   * legacy local/BM transport validators still require a catalogue UUID. */
+  serviceCatalogId: string | null;
   serviceVariantId?: string;
   description?: string;
 };
@@ -165,7 +168,7 @@ export type NewHandymanServiceRequest = {
   tenantPicId: string | null;
   buildingId: string;
   spaceId: string | null;
-  serviceCatalogId: string;
+  serviceCatalogId: string | null;
   serviceVariantId: string | null;
   originChannel: string;
   originReference: string | null;
