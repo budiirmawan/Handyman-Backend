@@ -19,15 +19,6 @@ export type HandymanOperationsQueueItem = {
   buildingId: string;
   tenantCompanyId: string;
   createdAt: string;
-  /** Null + NON_CATALOG is authoritative; no dummy catalogue id is used. */
-  serviceCatalogId: string | null;
-  intakeType: 'CATALOG' | 'NON_CATALOG';
-  description: string | null;
-  preferredWindow: {
-    preferredWindowStart: string;
-    preferredWindowEnd: string;
-    timezone: string;
-  } | null;
   executionScopeId: string | null;
   lifecycle: {
     requestStatus: string;
@@ -59,11 +50,6 @@ export type HandymanOperationsQueueRequestRef = {
   buildingId: string;
   tenantCompanyId: string;
   createdAt: string;
-  serviceCatalogId: string | null;
-  description: string | null;
-  preferredWindowStart: Date | null;
-  preferredWindowEnd: Date | null;
-  preferredTimezone: string | null;
 };
 
 /**
@@ -91,19 +77,6 @@ export function toHandymanOperationsQueueItem(
     buildingId: request.buildingId,
     tenantCompanyId: request.tenantCompanyId,
     createdAt: request.createdAt,
-    serviceCatalogId: request.serviceCatalogId,
-    intakeType: request.serviceCatalogId === null ? 'NON_CATALOG' : 'CATALOG',
-    description: request.description,
-    preferredWindow:
-      request.preferredWindowStart !== null &&
-      request.preferredWindowEnd !== null &&
-      request.preferredTimezone !== null
-        ? {
-            preferredWindowStart: request.preferredWindowStart.toISOString(),
-            preferredWindowEnd: request.preferredWindowEnd.toISOString(),
-            timezone: request.preferredTimezone,
-          }
-        : null,
     executionScopeId: visibility.executionScopeId,
     lifecycle: {
       requestStatus: visibility.stages.request.status,
@@ -177,11 +150,6 @@ export async function listHandymanOperationsQueue(
           buildingId: request.buildingId,
           tenantCompanyId: request.tenantCompanyId,
           createdAt: request.createdAt.toISOString(),
-          serviceCatalogId: request.serviceCatalogId,
-          description: request.description,
-          preferredWindowStart: request.preferredWindowStart,
-          preferredWindowEnd: request.preferredWindowEnd,
-          preferredTimezone: request.preferredTimezone,
         },
         visibility,
       );

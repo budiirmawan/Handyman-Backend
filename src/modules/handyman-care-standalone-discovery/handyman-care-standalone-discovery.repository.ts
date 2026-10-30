@@ -15,7 +15,7 @@ export type StandaloneCareRequestRecord = {
   id: string;
   buildingId: string;
   spaceId: string | null;
-  serviceCatalogId: string | null;
+  serviceCatalogId: string;
   serviceVariantId: string | null;
   description: string | null;
   status: HandymanServiceRequestStatus;
@@ -154,7 +154,7 @@ function mapRequest(row: {
   id: string;
   buildingId: string;
   spaceId: string | null;
-  serviceCatalogId: string | null;
+  serviceCatalogId: string;
   serviceVariantId: string | null;
   description: string | null;
   status: HandymanServiceRequestStatus;

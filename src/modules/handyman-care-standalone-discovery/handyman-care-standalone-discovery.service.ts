@@ -16,9 +16,7 @@ import {
   handymanServiceRequestDiagnosisService,
 } from '../handyman-requests';
 import { getHandymanQuotation } from '../handyman-quotations';
-import { handymanSchedulingReadinessRepository } from '../handyman-scheduling';
 import { listBuildingCareScopeVariationStatuses } from '../handyman-scope-variations';
-import { handymanCareInternalNoteRepository } from './handyman-care-internal-note.repository';
 import { getHandymanWorkSessionsCustomerCareView } from '../handyman-work-sessions';
 import { listHandymanCustomerPayments } from '../handyman-customer-payments';
 import { readExecutionScopeServiceWarrantyView } from '../handyman-service-warranty-api';
@@ -287,41 +285,12 @@ export async function getStandaloneCareRequestDetail(input: {
     );
   if (!record) throw handymanServiceRequestNotFoundError();
 
-  const [readiness, internalNote, progress] = await Promise.all([
-    handymanSchedulingReadinessRepository.findActiveByRequest(
-      undefined,
-      record.id,
-    ),
-    handymanCareInternalNoteRepository.findForRequest(undefined, {
-      clientId: authority.scope.clientId,
-      buildingId: authority.scope.buildingId,
-      handymanRequestId: record.id,
-    }),
-    readOperationalProgress({
+  return {
+    request: projectRequest(record),
+    progress: await readOperationalProgress({
       actorUserId: input.actorUserId,
       request: record,
     }),
-  ]);
-
-  return {
-    request: projectRequest(record),
-    preferredWindow: readiness
-      ? {
-          preferredWindowStart: readiness.preferredWindowStart.toISOString(),
-          preferredWindowEnd: readiness.preferredWindowEnd.toISOString(),
-          timezone: readiness.timezone,
-        }
-      : null,
-    internalNote: internalNote
-      ? {
-          id: internalNote.id,
-          handymanRequestId: internalNote.handymanRequestId,
-          note: internalNote.note,
-          visibility: internalNote.visibility,
-          createdAt: internalNote.createdAt.toISOString(),
-        }
-      : null,
-    progress,
   };
 }
 

@@ -4790,14 +4790,7 @@ paths:
         non-enumerating 403 `HANDYMAN_CARE_AUTHORITY_DENIED`; unknown
         Unit/PIC identifiers fail 400 attribution validation and unknown
         service identifiers fail 404 `SERVICE_CATALOG_NOT_FOUND`.
-        CR-HM-BE-CARE-NONCATALOG-E2E-01 adds genuine non-catalog intake on
-        this SAME operation: omitted/null serviceCatalogId requires description,
-        forbids serviceVariantId, and never manufactures a catalogue row.
-        Optional preferredWindowStart/End reuse scheduling readiness (tenant
-        preference only); optional internalNote is persisted separately and is
-        visible only on the exact-Building Care detail readback, never to a
-        tenant. Non-catalog Operations triage must select INSPECTION_REQUIRED
-        before diagnosis or quotation. Cache-Control is no-store.
+        Cache-Control is no-store.
       tags: [Customer Care Discovery]
       security:
         - bearerAuth: []
@@ -4810,32 +4803,12 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/HandymanCareRequestCreateBody'
-            examples:
-              nonCatalog:
-                summary: Exact Frontend non-catalog create request
-                value:
-                  tenantCompanyId: 11111111-1111-4111-8111-111111111111
-                  tenantPicId: 22222222-2222-4222-8222-222222222222
-                  spaceId: 33333333-3333-4333-8333-333333333333
-                  description: Custom antique cabinet hinge repair; replacement part is not in the catalogue.
-                  internalNote: Caller asked not to promise a visit time; Operations must inspect first.
-                  preferredWindowStart: '2026-11-03T02:00:00.000Z'
-                  preferredWindowEnd: '2026-11-03T05:00:00.000Z'
-              catalogue:
-                summary: Existing catalogue create remains supported
-                value:
-                  tenantCompanyId: 11111111-1111-4111-8111-111111111111
-                  tenantPicId: 22222222-2222-4222-8222-222222222222
-                  spaceId: 33333333-3333-4333-8333-333333333333
-                  serviceCatalogId: 44444444-4444-4444-8444-444444444444
-                  description: Leaking tap in the unit bathroom.
       responses:
         '201':
           description: >-
             The canonical Handyman Request in its initial INTAKE state, or
             the idempotent replay of the original result for the same
-            actor/operation/key/fingerprint. Use the detail readback below for
-            the Care-only internal note and preferred-window projection.
+            actor/operation/key/fingerprint.
           headers:
             Cache-Control:
               schema: { type: string, enum: [no-store] }
@@ -4848,22 +4821,6 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/HandymanCareStandaloneRequest'
-              examples:
-                nonCatalog:
-                  summary: Exact Frontend non-catalog create response (also returned on idempotent replay)
-                  value:
-                    success: true
-                    data:
-                      id: 55555555-5555-4555-8555-555555555555
-                      buildingId: 66666666-6666-4666-8666-666666666666
-                      spaceId: 33333333-3333-4333-8333-333333333333
-                      serviceCatalogId: null
-                      serviceVariantId: null
-                      description: Custom antique cabinet hinge repair; replacement part is not in the catalogue.
-                      status: INTAKE
-                      createdAt: '2026-10-30T03:00:00.000Z'
-                      updatedAt: '2026-10-30T03:00:00.000Z'
-                    meta: {}
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -4905,11 +4862,8 @@ paths:
         server-derived Client is reported as
         HANDYMAN_SERVICE_REQUEST_NOT_FOUND; existence is never enumerated.
         The request is an allow-list projection and the progress block is a
-        bounded projection of existing read services. The additive
-        preferredWindow is the tenant's scheduling preference (never an
-        appointment); internalNote is a dedicated INTERNAL Care fact present
-        only on this internal Care contract and never on tenant request reads.
-        Cache-Control is no-store.
+        bounded projection of existing read services. Cache-Control is
+        no-store.
       security:
         - bearerAuth: []
       parameters:
@@ -4933,39 +4887,6 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: '#/components/schemas/HandymanCareStandaloneRequestDetail' }
-              examples:
-                nonCatalog:
-                  summary: Exact Frontend authoritative Care readback after create
-                  value:
-                    success: true
-                    data:
-                      request:
-                        id: 55555555-5555-4555-8555-555555555555
-                        buildingId: 66666666-6666-4666-8666-666666666666
-                        spaceId: 33333333-3333-4333-8333-333333333333
-                        serviceCatalogId: null
-                        serviceVariantId: null
-                        description: Custom antique cabinet hinge repair; replacement part is not in the catalogue.
-                        status: INTAKE
-                        createdAt: '2026-10-30T03:00:00.000Z'
-                        updatedAt: '2026-10-30T03:00:00.000Z'
-                      preferredWindow:
-                        preferredWindowStart: '2026-11-03T02:00:00.000Z'
-                        preferredWindowEnd: '2026-11-03T05:00:00.000Z'
-                        timezone: Asia/Jakarta
-                      internalNote:
-                        id: 77777777-7777-4777-8777-777777777777
-                        handymanRequestId: 55555555-5555-4555-8555-555555555555
-                        note: Caller asked not to promise a visit time; Operations must inspect first.
-                        visibility: INTERNAL
-                        createdAt: '2026-10-30T03:00:00.000Z'
-                      progress:
-                        triage: null
-                        inspection: null
-                        diagnosis: null
-                        quotation: null
-                        execution: null
-                    meta: {}
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -6979,12 +6900,8 @@ paths:
         under the supplied `clientId` (same-Client sibling Buildings are
         denied), and a Client unreachable through any assignment is denied.
         The queue returns exactly one row per request even when a request owns
-        several execution scopes. Additive serviceCatalogId/intakeType,
-        description and preferredWindow fields let Operations identify and read
-        back an unlisted intake before calling the existing request triage
-        operation; intakeType=NON_CATALOG is derived from a null catalogue id
-        and no Care INTERNAL note is exposed. This endpoint intentionally does
-        not return a Work Order id: `handyman_service_requests` /
+        several execution scopes. This endpoint intentionally does not return
+        a Work Order id: `handyman_service_requests` /
         `handyman_execution_scopes` have no authoritative relation to
         `work_orders`.
       tags: [Handyman Requests]
@@ -7049,10 +6966,6 @@ paths:
                                 - buildingId
                                 - tenantCompanyId
                                 - createdAt
-                                - serviceCatalogId
-                                - intakeType
-                                - description
-                                - preferredWindow
                                 - executionScopeId
                                 - lifecycle
                                 - assignment
@@ -7064,23 +6977,6 @@ paths:
                                 buildingId: { type: string, format: uuid }
                                 tenantCompanyId: { type: string, format: uuid }
                                 createdAt: { type: string, format: date-time }
-                                serviceCatalogId:
-                                  type: string
-                                  format: uuid
-                                  nullable: true
-                                  description: Null for an unlisted/non-catalog intake.
-                                intakeType:
-                                  type: string
-                                  enum: [CATALOG, NON_CATALOG]
-                                  description: Server-derived from serviceCatalogId; never caller-declared.
-                                description:
-                                  type: string
-                                  nullable: true
-                                  description: Tenant need available for Operations unlisted triage; never the Care INTERNAL note.
-                                preferredWindow:
-                                  allOf:
-                                    - $ref: '#/components/schemas/HandymanCarePreferredWindow'
-                                  nullable: true
                                 executionScopeId: { type: string, format: uuid, nullable: true }
                                 lifecycle:
                                   type: object
@@ -7671,9 +7567,6 @@ paths:
         authority — smuggled actor/client/building/space/channel keys are
         structurally ignored. No diagnosis, inspection, classification,
         referral, provider, quotation, work-order or FM surface exists here.
-        For an authoritative non-catalog request (serviceCatalogId=null), the
-        only accepted first disposition is INSPECTION_REQUIRED; catalogue
-        triage behavior is unchanged.
       tags: [Handyman Lifecycle]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -96057,11 +95950,11 @@ components:
         tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
         buildingId: { $ref: "#/components/schemas/Uuid" }
         spaceId: { $ref: "#/components/schemas/Uuid", nullable: true }
-        serviceCatalogId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
         originChannel:
           type: string
-          enum: [BM_SUPER_APP, CUSTOMER_CARE_BACKEND]
+          enum: [BM_SUPER_APP]
         originReference: { type: string, nullable: true }
         description: { type: string, nullable: true }
         status: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
@@ -96082,7 +95975,7 @@ components:
         id: { $ref: "#/components/schemas/Uuid" }
         originChannel:
           type: string
-          enum: [BM_SUPER_APP, CUSTOMER_CARE_BACKEND]
+          enum: [BM_SUPER_APP]
         originReference: { type: string, nullable: true }
         createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
         actorType:
@@ -96115,11 +96008,11 @@ components:
         tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
         buildingId: { $ref: "#/components/schemas/Uuid" }
         spaceId: { $ref: "#/components/schemas/Uuid", nullable: true }
-        serviceCatalogId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
         originChannel:
           type: string
-          enum: [BM_SUPER_APP, CUSTOMER_CARE_BACKEND]
+          enum: [BM_SUPER_APP]
         originReference: { type: string, nullable: true }
         description: { type: string, nullable: true }
         status: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
@@ -132538,30 +132431,18 @@ components:
         id: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
         spaceId: { type: string, format: uuid, nullable: true }
-        serviceCatalogId:
-          type: string
-          format: uuid
-          nullable: true
-          description: Null exactly for a genuine non-catalog request; never a dummy catalogue id.
+        serviceCatalogId: { type: string, format: uuid }
         serviceVariantId: { type: string, format: uuid, nullable: true }
-        description: { type: string, nullable: true }
+        description: { type: string }
         status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     HandymanCareRequestCreateBody:
       type: object
       description: >-
-        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 plus
-        CR-HM-BE-CARE-NONCATALOG-E2E-01 — staff-assisted create body.
-        Catalogue intake is unchanged. For non-catalog intake, omit
-        `serviceCatalogId` (or send null), omit `serviceVariantId`, and send a
-        mandatory 1-1000 character tenant need in `description`; the Backend
-        persists `serviceCatalogId=null`, never a dummy catalogue entry.
-        Optional `internalNote` is a dedicated Care-only INTERNAL fact and is
-        never present in tenant request projections. Optional preferred-window
-        fields must be supplied together with start strictly before end; they
-        create the existing scheduling-readiness PREFERENCE, never a confirmed
-        appointment. Any other context key (clientId,
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted create body.
+        Only the authorized Tenant/Unit/service selection and the problem
+        description are accepted. Any other context key (clientId,
         buildingId, originChannel, createdByUserId, status, ...) and any
         recording-identity spelling other than the represented `tenantPicId`
         selection (recordedByUserId, actorUserId, careActorId, tenantId,
@@ -132571,7 +132452,7 @@ components:
         as an ACTIVE PIC of `tenantCompanyId`, so it can never become the
         acting identity.
       additionalProperties: false
-      required: [tenantCompanyId]
+      required: [tenantCompanyId, serviceCatalogId]
       properties:
         tenantCompanyId:
           type: string
@@ -132590,39 +132471,16 @@ components:
         serviceCatalogId:
           type: string
           format: uuid
-          nullable: true
-          description: >-
-            ACTIVE service entry of the server-derived Client. Omit or send
-            null for non-catalog intake; do not invent a placeholder service.
+          description: ACTIVE service entry of the server-derived Client.
         serviceVariantId:
           type: string
           format: uuid
-          description: >-
-            Optional ACTIVE variant of the selected catalogue service. Rejected
-            when serviceCatalogId is absent/null.
+          description: Optional ACTIVE variant of the selected service.
         description:
           type: string
           minLength: 1
           maxLength: 1000
-          description: >-
-            Tenant problem/need recorded trimmed. Optional for catalogue intake;
-            mandatory for non-catalog intake.
-        internalNote:
-          type: string
-          minLength: 1
-          maxLength: 4000
-          description: >-
-            Optional dedicated Customer Care INTERNAL note. Separate from the
-            tenant need description, complaints and tenant communications; only
-            the exact-Building Care detail readback exposes it.
-        preferredWindowStart:
-          type: string
-          format: date-time
-          description: Tenant preference start; requires preferredWindowEnd and must be earlier.
-        preferredWindowEnd:
-          type: string
-          format: date-time
-          description: Tenant preference end; this is not a confirmed appointment.
+          description: Problem description recorded verbatim (trimmed).
     HandymanCareTenantPicSelection:
       type: object
       additionalProperties: false
@@ -132832,46 +132690,12 @@ components:
           allOf:
             - $ref: '#/components/schemas/HandymanCareStandaloneExecution'
           nullable: true
-    HandymanCarePreferredWindow:
-      type: object
-      additionalProperties: false
-      required: [preferredWindowStart, preferredWindowEnd, timezone]
-      description: >-
-        Current tenant scheduling PREFERENCE from the existing
-        handyman_scheduling_readiness authority. It is not an appointment,
-        confirmation, dispatch or reserved slot.
-      properties:
-        preferredWindowStart: { type: string, format: date-time }
-        preferredWindowEnd: { type: string, format: date-time }
-        timezone: { type: string, description: Server-derived from the authoritative Building. }
-    HandymanCareInternalNote:
-      type: object
-      additionalProperties: false
-      required: [id, handymanRequestId, note, visibility, createdAt]
-      description: >-
-        Dedicated INTERNAL Customer Care note. This schema is used only by the
-        exact-Building Care detail endpoint and is never part of tenant-safe
-        HandymanServiceRequest or HandymanCustomerCareServiceRequest payloads.
-      properties:
-        id: { type: string, format: uuid }
-        handymanRequestId: { type: string, format: uuid }
-        note: { type: string, minLength: 1, maxLength: 4000 }
-        visibility: { type: string, enum: [INTERNAL] }
-        createdAt: { type: string, format: date-time }
     HandymanCareStandaloneRequestDetail:
       type: object
       additionalProperties: false
-      required: [request, preferredWindow, internalNote, progress]
+      required: [request, progress]
       properties:
         request: { $ref: '#/components/schemas/HandymanCareStandaloneRequest' }
-        preferredWindow:
-          allOf:
-            - $ref: '#/components/schemas/HandymanCarePreferredWindow'
-          nullable: true
-        internalNote:
-          allOf:
-            - $ref: '#/components/schemas/HandymanCareInternalNote'
-          nullable: true
         progress: { $ref: '#/components/schemas/HandymanCareStandaloneProgressBlock' }
     HandymanCareStandaloneProgress:
       type: object

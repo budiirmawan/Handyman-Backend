@@ -30,10 +30,6 @@ const ALLOWED_BODY_KEYS = [
   'serviceCatalogId',
   'serviceVariantId',
   'description',
-  // CR-HM-BE-CARE-NONCATALOG-E2E-01 — optional Care-only intake facts.
-  'internalNote',
-  'preferredWindowStart',
-  'preferredWindowEnd',
   // CR-HM-MASTER-IND-01 — approval / cost-responsibility parties. Both are
   // PARTY selections (individual or legal entity from the party master),
   // never actor identities: they are re-validated server-side against the
@@ -46,13 +42,9 @@ export type CreateBuildingCareRequestBody = {
   tenantCompanyId: string;
   tenantPicId?: string;
   spaceId?: string;
-  /** Omitted/null = genuine non-catalog intake; description is then required. */
-  serviceCatalogId?: string;
+  serviceCatalogId: string;
   serviceVariantId?: string;
   description?: string;
-  internalNote?: string;
-  preferredWindowStart?: string;
-  preferredWindowEnd?: string;
   approvalTenantCompanyId?: string;
   costResponsibleTenantCompanyId?: string;
 };
@@ -138,7 +130,7 @@ export function parseCreateBuildingCareRequestBody(
     'tenantCompanyId',
     details,
   );
-  const serviceCatalogId = readOptionalUuid(
+  const serviceCatalogId = readRequiredUuid(
     body.serviceCatalogId,
     'serviceCatalogId',
     details,
@@ -183,79 +175,16 @@ export function parseCreateBuildingCareRequestBody(
     }
   }
 
-  let internalNote: string | undefined;
-  if (body.internalNote !== undefined && body.internalNote !== null) {
-    if (typeof body.internalNote !== 'string') {
-      details.push({ field: 'internalNote', message: 'internalNote must be a string.' });
-    } else {
-      const trimmed = body.internalNote.trim();
-      if (trimmed.length < 1 || trimmed.length > 4000) {
-        details.push({
-          field: 'internalNote',
-          message: 'internalNote must be 1-4000 characters when provided.',
-        });
-      } else {
-        internalNote = trimmed;
-      }
-    }
-  }
-
-  const readWindow = (value: unknown, field: string): string | undefined => {
-    if (value === undefined || value === null) return undefined;
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      details.push({ field, message: `${field} must be an ISO-8601 date-time.` });
-      return undefined;
-    }
-    const parsed = new Date(value.trim());
-    if (Number.isNaN(parsed.getTime())) {
-      details.push({ field, message: `${field} must be an ISO-8601 date-time.` });
-      return undefined;
-    }
-    return parsed.toISOString();
-  };
-  const preferredWindowStart = readWindow(body.preferredWindowStart, 'preferredWindowStart');
-  const preferredWindowEnd = readWindow(body.preferredWindowEnd, 'preferredWindowEnd');
-  if ((preferredWindowStart === undefined) !== (preferredWindowEnd === undefined)) {
-    details.push({
-      field: 'preferredWindow',
-      message: 'preferredWindowStart and preferredWindowEnd must be supplied together.',
-    });
-  } else if (preferredWindowStart !== undefined && preferredWindowEnd !== undefined &&
-             Date.parse(preferredWindowStart) >= Date.parse(preferredWindowEnd)) {
-    details.push({
-      field: 'preferredWindow',
-      message: 'preferredWindowStart must be strictly before preferredWindowEnd.',
-    });
-  }
-
-  if (serviceCatalogId === undefined) {
-    if (description === undefined) {
-      details.push({
-        field: 'description',
-        message: 'description is required for a non-catalog request (1-1000 characters).',
-      });
-    }
-    if (serviceVariantId !== undefined) {
-      details.push({
-        field: 'serviceVariantId',
-        message: 'serviceVariantId is not accepted for a non-catalog request.',
-      });
-    }
-  }
-
-  if (!tenantCompanyId || details.length) {
+  if (!tenantCompanyId || !serviceCatalogId || details.length) {
     fail(details);
   }
   return {
     tenantCompanyId,
     ...(tenantPicId === undefined ? {} : { tenantPicId }),
     ...(spaceId === undefined ? {} : { spaceId }),
-    ...(serviceCatalogId === undefined ? {} : { serviceCatalogId }),
+    serviceCatalogId,
     ...(serviceVariantId === undefined ? {} : { serviceVariantId }),
     ...(description === undefined ? {} : { description }),
-    ...(internalNote === undefined ? {} : { internalNote }),
-    ...(preferredWindowStart === undefined ? {} : { preferredWindowStart }),
-    ...(preferredWindowEnd === undefined ? {} : { preferredWindowEnd }),
     ...(approvalTenantCompanyId === undefined
       ? {}
       : { approvalTenantCompanyId }),

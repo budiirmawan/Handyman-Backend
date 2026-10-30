@@ -1,4 +1,3 @@
-import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
@@ -8,7 +7,6 @@ import {
   handymanServiceRequestNotFoundError,
   handymanServiceRequestRepository,
 } from '../handyman-requests';
-import type { HandymanServiceRequestRecord } from '../handyman-requests';
 import { handymanSchedulingReadinessRepository } from './handyman-scheduling.repository';
 import {
   handymanSchedulingReadinessAlreadyExistsError,
@@ -111,104 +109,6 @@ function isActiveUniqueViolation(error: unknown): boolean {
   );
 }
 
-type AuthorizedSchedulingRequest = Pick<
-  HandymanServiceRequestRecord,
-  'id' | 'clientId' | 'buildingId'
->;
-
-/** Shared insert law for both the established readiness endpoint and the
- * Building Care intake transaction. The caller has already authorized the
- * request; this helper owns the one-ACTIVE-row, journal and notification
- * rules on the caller's transaction so intake remains atomic/idempotent. */
-async function insertAuthorizedSchedulingReadiness(input: {
-  request: AuthorizedSchedulingRequest;
-  start: Date;
-  end: Date;
-  timezone: string;
-  changeReason?: string;
-  actorUserId: string;
-}, tx: PoolClient): Promise<PublicHandymanSchedulingReadiness> {
-  const { request, actorUserId } = input;
-  const existing = await handymanSchedulingReadinessRepository
-    .findActiveByRequest(tx, request.id);
-  if (existing) throw handymanSchedulingReadinessAlreadyExistsError();
-
-  const row = await handymanSchedulingReadinessRepository.insert(tx, {
-    clientId: request.clientId,
-    handymanRequestId: request.id,
-    timezone: input.timezone,
-    preferredWindowStart: input.start,
-    preferredWindowEnd: input.end,
-    supersedesReadinessId: null,
-    changeReason: ensureReason(input.changeReason),
-    createdByUserId: actorUserId,
-  });
-  await recordOperationalEvent(
-    {
-      clientId: request.clientId,
-      actorUserId,
-      eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
-      entityType: 'HANDYMAN_SCHEDULING_READINESS',
-      entityId: row.id,
-      summary: 'Handyman scheduling readiness created (ACTIVE).',
-      metadata: {
-        readinessId: row.id,
-        handymanRequestId: request.id,
-        buildingId: request.buildingId,
-        timezone: row.timezone,
-        preferredWindowStart: row.preferredWindowStart.toISOString(),
-        preferredWindowEnd: row.preferredWindowEnd.toISOString(),
-      },
-    },
-    tx,
-  );
-  await emitHandymanDomainNotificationIntent(
-    {
-      eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
-      clientId: request.clientId,
-      entityId: row.id,
-      buildingId: request.buildingId,
-      variables: {
-        handymanRequestId: request.id,
-        readinessId: row.id,
-        timezone: row.timezone,
-        preferredWindowStart: row.preferredWindowStart.toISOString(),
-        preferredWindowEnd: row.preferredWindowEnd.toISOString(),
-        buildingId: request.buildingId,
-      },
-    },
-    { executor: tx },
-  );
-  return toPublic(row);
-}
-
-/** Record the tenant's preferred window while its Care request is created.
- * This is the existing readiness PREFERENCE fact, never an appointment. */
-export async function createHandymanSchedulingReadinessForIntake(
-  request: AuthorizedSchedulingRequest,
-  input: Pick<CreateHandymanSchedulingReadinessInput,
-    'preferredWindowStart' | 'preferredWindowEnd' | 'changeReason'>,
-  actorUserId: string,
-  tx: PoolClient,
-): Promise<PublicHandymanSchedulingReadiness> {
-  const { start, end } = parseWindow(
-    input.preferredWindowStart,
-    input.preferredWindowEnd,
-  );
-  const timezone = await deriveTimezone(request.buildingId);
-  try {
-    return await insertAuthorizedSchedulingReadiness({
-      request, start, end, timezone, actorUserId,
-      ...(input.changeReason === undefined ? {} : { changeReason: input.changeReason }),
-    }, tx);
-  } catch (error) {
-    if (isActiveUniqueViolation(error)) {
-      throw handymanSchedulingReadinessAlreadyExistsError();
-    }
-    throw error;
-  }
-}
-
 /**
  * Create the ACTIVE readiness fact for a request (one per request).
  * Atomic: row + CREATED journal event in ONE transaction; a concurrent
@@ -230,18 +130,74 @@ export async function createHandymanSchedulingReadiness(
     input.handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
+  // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the
+  // authoritative parent request chain (migration 0378: the request's
+  // building_id is server-derived and NOT NULL), replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not open the write.
   await assertBuildingScopedResourceAccess(actorUserId, {
     clientId: request.clientId,
     buildingId: request.buildingId,
   });
   const timezone = await deriveTimezone(request.buildingId);
 
+  const journalBase = { clientId: request.clientId, actorUserId };
   try {
-    return await withTransaction(async (tx) =>
-      insertAuthorizedSchedulingReadiness({
-        request, start, end, timezone, actorUserId,
-        ...(input.changeReason === undefined ? {} : { changeReason: input.changeReason }),
-      }, tx));
+    return await withTransaction(async (tx) => {
+      const existing = await handymanSchedulingReadinessRepository
+        .findActiveByRequest(tx, request.id);
+      if (existing) throw handymanSchedulingReadinessAlreadyExistsError();
+
+      const row = await handymanSchedulingReadinessRepository.insert(tx, {
+        clientId: request.clientId,
+        handymanRequestId: request.id,
+        timezone,
+        preferredWindowStart: start,
+        preferredWindowEnd: end,
+        supersedesReadinessId: null,
+        changeReason: ensureReason(input.changeReason),
+        createdByUserId: actorUserId,
+      });
+      await recordOperationalEvent(
+        {
+          ...journalBase,
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+          entityType: 'HANDYMAN_SCHEDULING_READINESS',
+          entityId: row.id,
+          summary: 'Handyman scheduling readiness created (ACTIVE).',
+          metadata: {
+            readinessId: row.id,
+            handymanRequestId: request.id,
+            buildingId: request.buildingId,
+            timezone: row.timezone,
+            preferredWindowStart: row.preferredWindowStart.toISOString(),
+            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+          },
+        },
+        tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred scheduling readiness, on the SAME
+      // transaction. The notification entity is the readiness OCCURRENCE.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+          clientId: request.clientId,
+          entityId: row.id,
+          buildingId: request.buildingId,
+          variables: {
+            handymanRequestId: request.id,
+            readinessId: row.id,
+            timezone: row.timezone,
+            preferredWindowStart: row.preferredWindowStart.toISOString(),
+            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+            buildingId: request.buildingId,
+          },
+        },
+        { executor: tx },
+      );
+      return toPublic(row);
+    });
   } catch (error) {
     if (isActiveUniqueViolation(error)) {
       throw handymanSchedulingReadinessAlreadyExistsError();
@@ -441,7 +397,6 @@ export async function listHandymanSchedulingReadinessHistory(
 
 export const handymanSchedulingReadinessService = {
   createHandymanSchedulingReadiness,
-  createHandymanSchedulingReadinessForIntake,
   supersedeHandymanSchedulingReadiness,
   getHandymanSchedulingReadiness,
   listHandymanSchedulingReadinessHistory,

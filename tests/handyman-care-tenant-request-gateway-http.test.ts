@@ -138,9 +138,8 @@ async function createCareStaff(buildingId: string) {
   };
 }
 
-/** Operations staff assigned to the Building; triage mode adds manage while
- * retaining the exact production read/manage permission pair. */
-async function createOperationsStaff(buildingId: string, withTriage = false) {
+/** Operations staff: `tenant_company.read` only, assigned to the Building. */
+async function createOperationsStaff(buildingId: string) {
   const tag = suffix().toLowerCase();
   const email = `ops-${tag}@example.test`;
   const password = `Ops-${tag}!Password1`;
@@ -156,21 +155,14 @@ async function createOperationsStaff(buildingId: string, withTriage = false) {
     code: `OPS_QUEUE_${tag.toUpperCase()}`,
     name: 'Handyman Operations Queue',
   });
-  for (const code of [
-    'tenant_company.read',
-    ...(withTriage ? ['tenant_company.manage'] : []),
-  ]) {
-    let permission = await permissionRepository.findByCode(code);
-    if (!permission) {
-      permission = await permissionService.createPermission({
-        code,
-        name: code === 'tenant_company.read'
-          ? 'Read Tenant Companies'
-          : 'Manage Tenant Companies',
-      });
-    }
-    await permissionService.assignPermissionToRole(role.id, permission.id);
+  let permission = await permissionRepository.findByCode('tenant_company.read');
+  if (!permission) {
+    permission = await permissionService.createPermission({
+      code: 'tenant_company.read',
+      name: 'Read Tenant Companies',
+    });
   }
+  await permissionService.assignPermissionToRole(role.id, permission.id);
   await roleService.assignRoleToUser(user.id, role.id);
   await buildingAssignmentService.createAssignment(user.id, { buildingId });
   const login = await api().post(`${V1}/auth/login`).send({ email, password });
@@ -199,7 +191,6 @@ async function createRealm(name: string): Promise<Realm> {
     propertyId: property.id,
     code: `GB_${tag}`,
     name: `${name} Building`,
-    timezone: 'Asia/Jakarta',
   });
   await buildingAssignmentService.createAssignment(adminUserId, {
     buildingId: building.id,
@@ -279,38 +270,6 @@ async function createRealm(name: string): Promise<Realm> {
   };
 }
 
-/** Tenant PIC session with only the customer read permission, used to prove
- * the Care INTERNAL note cannot leak through the ordinary tenant request API. */
-async function createTenantRealmReader(realm: Realm): Promise<string> {
-  const result = await pool.query<{ email: string }>(
-    'SELECT email FROM users WHERE id = $1',
-    [realm.picUserId],
-  );
-  const email = result.rows[0].email;
-  const password = `Tenant-${suffix()}!Password1`;
-  await credentialService.createInitialCredential({
-    userId: realm.picUserId,
-    password,
-  });
-  const tag = suffix().toLowerCase();
-  const role = await roleService.createRole({
-    code: `TENANT_READER_${tag.toUpperCase()}`,
-    name: 'Tenant request reader',
-  });
-  let permission = await permissionRepository.findByCode('tenant_company.read');
-  if (!permission) {
-    permission = await permissionService.createPermission({
-      code: 'tenant_company.read',
-      name: 'Read Tenant Companies',
-    });
-  }
-  await permissionService.assignPermissionToRole(role.id, permission.id);
-  await roleService.assignRoleToUser(realm.picUserId, role.id);
-  const login = await api().post(`${V1}/auth/login`).send({ email, password });
-  assert.equal(login.status, 200, JSON.stringify(login.body));
-  return login.body.data.sessionToken as string;
-}
-
 function createBody(realm: Realm, description: string) {
   return {
     tenantCompanyId: realm.company.id,
@@ -319,11 +278,6 @@ function createBody(realm: Realm, description: string) {
     serviceCatalogId: realm.service.id,
     description,
   };
-}
-
-function createNonCatalogBody(realm: Realm, description: string) {
-  const { serviceCatalogId: _catalogue, ...body } = createBody(realm, description);
-  return body;
 }
 
 const postGateway = (
@@ -880,229 +834,6 @@ describe('CR-HM-CC-TENANT-REQUEST-GATEWAY-01 staff-assisted creation gateway', (
       )
     ).rows[0];
     assert.equal(untouched.status, 'INTAKE');
-  });
-
-  it('10: non-catalog create is authoritative, replay-safe, readable, confidential and accepts existing intake evidence', async () => {
-    const realm = await createRealm('Gateway non-catalog');
-    const care = await createCareStaff(realm.building.id);
-    const key = randomUUID();
-    const secret = 'INTERNAL ONLY: do not promise a visit before inspection.';
-    const body = {
-      ...createNonCatalogBody(
-        realm,
-        'Custom antique cabinet hinge repair; the part is not catalogued.',
-      ),
-      internalNote: secret,
-      preferredWindowStart: '2031-01-10T02:00:00.000Z',
-      preferredWindowEnd: '2031-01-10T05:00:00.000Z',
-    };
-
-    const first = await postGateway(care.token, realm.building.id, body, key);
-    assert.equal(first.status, 201, JSON.stringify(first.body));
-    const requestId = first.body.data.id as string;
-    assert.equal(first.body.data.serviceCatalogId, null);
-    assert.equal(first.body.data.serviceVariantId, null);
-    assert.equal(first.body.data.status, 'INTAKE');
-    assert.equal(Object.hasOwn(first.body.data, 'internalNote'), false);
-
-    const replay = await postGateway(care.token, realm.building.id, body, key);
-    assert.equal(replay.status, 201, JSON.stringify(replay.body));
-    assert.equal(replay.body.data.id, requestId);
-    const counts = await pool.query(
-      `SELECT
-         (SELECT count(*)::int FROM handyman_service_requests WHERE id = $1) AS requests,
-         (SELECT count(*)::int FROM handyman_care_internal_notes WHERE handyman_request_id = $1) AS notes,
-         (SELECT count(*)::int FROM handyman_scheduling_readiness WHERE handyman_request_id = $1 AND status = 'ACTIVE') AS windows,
-         (SELECT count(*)::int FROM handyman_visit_appointments WHERE handyman_request_id = $1) AS appointments`,
-      [requestId],
-    );
-    assert.deepEqual(counts.rows[0], { requests: 1, notes: 1, windows: 1, appointments: 0 });
-
-    const conflict = await postGateway(
-      care.token,
-      realm.building.id,
-      { ...body, internalNote: 'A different internal note.' },
-      key,
-    );
-    assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
-    assert.equal(conflict.body.error.code, 'IDEMPOTENCY_CONFLICT');
-
-    const detail = await api()
-      .get(`${V1}/handyman/care/buildings/${realm.building.id}/requests/${requestId}`)
-      .set(auth(care.token));
-    assert.equal(detail.status, 200, JSON.stringify(detail.body));
-    assert.equal(detail.body.data.request.serviceCatalogId, null);
-    assert.equal(detail.body.data.request.description, body.description);
-    assert.deepEqual(detail.body.data.preferredWindow, {
-      preferredWindowStart: body.preferredWindowStart,
-      preferredWindowEnd: body.preferredWindowEnd,
-      timezone: 'Asia/Jakarta',
-    });
-    assert.equal(detail.body.data.internalNote.handymanRequestId, requestId);
-    assert.equal(detail.body.data.internalNote.note, secret);
-    assert.equal(detail.body.data.internalNote.visibility, 'INTERNAL');
-    assert.equal(Object.hasOwn(detail.body.data.internalNote, 'createdByUserId'), false);
-
-    const upload = await api()
-      .post(`${V1}/handyman/care/buildings/${realm.building.id}/requests/${requestId}/intake-evidence`)
-      .set(auth(care.token))
-      .field('evidenceKind', 'PHOTO')
-      .attach('file', Buffer.from('non-catalog-intake-photo'), {
-        filename: 'non-catalog.jpg',
-        contentType: 'image/jpeg',
-      });
-    assert.equal(upload.status, 201, JSON.stringify(upload.body));
-    assert.equal(upload.body.data.handymanRequestId, requestId);
-
-    // The represented Tenant can read its own canonical request, but neither
-    // the dedicated note field nor its secret value can cross that boundary.
-    const tenantToken = await createTenantRealmReader(realm);
-    const tenantRead = await api()
-      .get(`${V1}/handyman/requests/${requestId}`)
-      .set(auth(tenantToken));
-    assert.equal(tenantRead.status, 200, JSON.stringify(tenantRead.body));
-    assert.equal(tenantRead.body.data.serviceCatalogId, null);
-    assert.equal(Object.hasOwn(tenantRead.body.data, 'internalNote'), false);
-    assert.equal(JSON.stringify(tenantRead.body).includes(secret), false);
-  });
-
-  it('11: non-catalog validation, RBAC and exact Building/Tenant isolation fail closed', async () => {
-    const realm = await createRealm('Gateway non-catalog security');
-    const foreign = await createRealm('Gateway non-catalog foreign');
-    const care = await createCareStaff(realm.building.id);
-
-    const missingNeed = await postGateway(
-      care.token,
-      realm.building.id,
-      createNonCatalogBody(realm, '   '),
-      randomUUID(),
-    );
-    assert.equal(missingNeed.status, 400, JSON.stringify(missingNeed.body));
-    assert.equal(missingNeed.body.error.code, 'VALIDATION_ERROR');
-
-    const variantWithoutCatalog = await postGateway(
-      care.token,
-      realm.building.id,
-      {
-        ...createNonCatalogBody(realm, 'Unlisted work with an invalid variant.'),
-        serviceVariantId: randomUUID(),
-      },
-      randomUUID(),
-    );
-    assert.equal(variantWithoutCatalog.status, 400);
-    assert.equal(variantWithoutCatalog.body.error.code, 'VALIDATION_ERROR');
-
-    const noPermission = await createSessionWithoutPermissions();
-    const denied = await postGateway(
-      noPermission,
-      realm.building.id,
-      createNonCatalogBody(realm, 'Unauthorized unlisted work.'),
-      randomUUID(),
-    );
-    assert.equal(denied.status, 403);
-    assert.equal(denied.body.error.code, 'PERMISSION_DENIED');
-
-    const wrongTenant = await postGateway(
-      care.token,
-      realm.building.id,
-      createNonCatalogBody(foreign, 'Foreign tenant unlisted work.'),
-      randomUUID(),
-    );
-    assert.equal(wrongTenant.status, 403);
-    assert.equal(wrongTenant.body.error.code, 'HANDYMAN_CARE_AUTHORITY_DENIED');
-
-    const created = await postGateway(
-      care.token,
-      realm.building.id,
-      {
-        ...createNonCatalogBody(realm, 'Unlisted work with a private Care note.'),
-        internalNote: 'Cross-Building readers must never see this.',
-      },
-      randomUUID(),
-    );
-    assert.equal(created.status, 201, JSON.stringify(created.body));
-    const stranger = await createCareStaff(foreign.building.id);
-    const crossBuilding = await api()
-      .get(`${V1}/handyman/care/buildings/${realm.building.id}/requests/${created.body.data.id}`)
-      .set(auth(stranger.token));
-    assert.equal(crossBuilding.status, 403, JSON.stringify(crossBuilding.body));
-    assert.equal(crossBuilding.body.error.code, 'HANDYMAN_CARE_AUTHORITY_DENIED');
-
-    const persisted = await pool.query(
-      `SELECT
-         (SELECT count(*)::int FROM handyman_service_requests WHERE created_by_user_id = $1) AS requests,
-         (SELECT count(*)::int FROM handyman_care_internal_notes WHERE created_by_user_id = $1) AS notes`,
-      [care.userId],
-    );
-    assert.deepEqual(persisted.rows[0], { requests: 1, notes: 1 });
-  });
-
-  it('12: Operations reads the same unlisted intake and must triage inspection-first on the existing request contract', async () => {
-    const realm = await createRealm('Gateway non-catalog operations');
-    const care = await createCareStaff(realm.building.id);
-    const operations = await createOperationsStaff(realm.building.id, true);
-    const body = {
-      ...createNonCatalogBody(realm, 'Unlisted specialist repair requiring inspection.'),
-      preferredWindowStart: '2031-02-10T02:00:00.000Z',
-      preferredWindowEnd: '2031-02-10T05:00:00.000Z',
-    };
-    const created = await postGateway(
-      care.token,
-      realm.building.id,
-      body,
-      randomUUID(),
-    );
-    assert.equal(created.status, 201, JSON.stringify(created.body));
-    const requestId = created.body.data.id as string;
-
-    const queue = await api()
-      .get(`${V1}/handyman/operations/queue`)
-      .query({ clientId: realm.client.id, buildingId: realm.building.id })
-      .set(auth(operations.token));
-    assert.equal(queue.status, 200, JSON.stringify(queue.body));
-    const item = queue.body.data.items.find(
-      (entry: { handymanRequestId: string }) => entry.handymanRequestId === requestId,
-    );
-    assert.ok(item, 'Operations queue must discover the same non-catalog request');
-    assert.equal(item.serviceCatalogId, null);
-    assert.equal(item.intakeType, 'NON_CATALOG');
-    assert.equal(item.description, body.description);
-    assert.deepEqual(item.preferredWindow, {
-      preferredWindowStart: body.preferredWindowStart,
-      preferredWindowEnd: body.preferredWindowEnd,
-      timezone: 'Asia/Jakarta',
-    });
-    assert.equal(Object.hasOwn(item, 'internalNote'), false);
-
-    const directDiagnosis = await api()
-      .post(`${V1}/handyman/requests/${requestId}/triage`)
-      .set(auth(operations.token))
-      .send({ disposition: 'DIAGNOSIS', note: 'Skip inspection.' });
-    assert.equal(directDiagnosis.status, 400, JSON.stringify(directDiagnosis.body));
-    assert.equal(directDiagnosis.body.error.code, 'VALIDATION_ERROR');
-
-    const triaged = await api()
-      .post(`${V1}/handyman/requests/${requestId}/triage`)
-      .set(auth(operations.token))
-      .send({
-        disposition: 'INSPECTION_REQUIRED',
-        note: 'Unlisted work needs an on-site assessment.',
-      });
-    assert.equal(triaged.status, 201, JSON.stringify(triaged.body));
-    assert.equal(triaged.body.data.handymanRequestId, requestId);
-    assert.equal(triaged.body.data.triageDisposition, 'INSPECTION_REQUIRED');
-
-    const readback = await api()
-      .get(`${V1}/handyman/requests/${requestId}/triage`)
-      .set(auth(operations.token));
-    assert.equal(readback.status, 200, JSON.stringify(readback.body));
-    assert.equal(readback.body.data.handymanRequestId, requestId);
-    assert.equal(readback.body.data.triageDisposition, 'INSPECTION_REQUIRED');
-    const status = await pool.query(
-      'SELECT status FROM handyman_service_requests WHERE id = $1',
-      [requestId],
-    );
-    assert.equal(status.rows[0].status, 'INSPECTION_REQUIRED');
   });
 });
 
