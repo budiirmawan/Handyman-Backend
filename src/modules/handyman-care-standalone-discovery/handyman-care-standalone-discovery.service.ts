@@ -26,6 +26,7 @@ import {
   type StandaloneCareRequestPage,
   type StandaloneCareRequestRecord,
 } from './handyman-care-standalone-discovery.repository';
+import { handymanParameterizedCatalogRepository } from '../handyman-parameterized-catalog/handyman-parameterized-catalog.repository';
 
 export type BuildingCareRequestFilters = StandaloneCareRequestFilters;
 export type BuildingCareRequestPage = StandaloneCareRequestPage;
@@ -285,8 +286,35 @@ export async function getStandaloneCareRequestDetail(input: {
     );
   if (!record) throw handymanServiceRequestNotFoundError();
 
+  // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — authoritative structured-item
+  // readback for the authorized Building: the PERSISTED ACTIVE items of
+  // this request (quantity, reported UOM, per-item note, effective
+  // attributes and the inherited provenance), read through the same
+  // Building/Client authority that resolved the parent request. REMOVED
+  // items stay invisible here, exactly as in the quotation scope.
+  const items = await handymanParameterizedCatalogRepository.listRequestItems(
+    undefined,
+    authority.scope.clientId,
+    record.id,
+    'ACTIVE',
+  );
+
   return {
     request: projectRequest(record),
+    items: items.map((item) => ({
+      id: item.id,
+      serviceCatalogId: item.serviceCatalogId,
+      serviceVariantId: item.serviceVariantId,
+      quantity: item.quantity,
+      uomId: item.uomId,
+      itemDescription: item.itemDescription,
+      attributeValues: item.attributeValues,
+      inheritedAttributeValues: item.inheritedAttributeValues,
+      accessCondition: item.accessCondition,
+      status: item.status,
+      createdAt: iso(item.createdAt),
+      updatedAt: iso(item.updatedAt),
+    })),
     progress: await readOperationalProgress({
       actorUserId: input.actorUserId,
       request: record,

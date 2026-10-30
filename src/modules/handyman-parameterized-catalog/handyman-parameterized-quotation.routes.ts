@@ -8,6 +8,7 @@ import { isValidUuid } from '../clients';
 import {
   addHandymanServiceRequestItem,
   listHandymanServiceRequestItems,
+  normalizeHandymanServiceRequestItemQuantity,
   removeHandymanServiceRequestItem,
   updateHandymanServiceRequestItem,
 } from './handyman-request-items.service';
@@ -111,6 +112,8 @@ export function createHandymanParameterizedQuotationRouter(): Router {
           'serviceCatalogId',
           'serviceVariantId',
           'quantity',
+          'uomId',
+          'itemDescription',
           'attributeValues',
           'accessCondition',
         ]);
@@ -121,11 +124,16 @@ export function createHandymanParameterizedQuotationRouter(): Router {
             message: 'serviceCatalogId is required.',
           });
         }
-        const quantity = Number(body.quantity);
-        if (!Number.isFinite(quantity) || quantity <= 0) {
+        // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the ONE quantity grammar of
+        // the engine (positive, <= 4 decimal places, NUMERIC(18,4) bounds).
+        let quantity: number | undefined;
+        try {
+          quantity = normalizeHandymanServiceRequestItemQuantity(body.quantity);
+        } catch {
           details.push({
             field: 'quantity',
-            message: 'quantity must be a positive number.',
+            message:
+              'quantity must be a positive number with at most 4 decimal places, smaller than 100000000000000.',
           });
         }
         if (
@@ -149,7 +157,29 @@ export function createHandymanParameterizedQuotationRouter(): Router {
             message: 'attributeValues must be an object of code to value.',
           });
         }
-        if (details.length) fail(details);
+        // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — optional reported UOM and
+        // per-item note (client-master and length rules stay in the engine).
+        if (
+          body.uomId !== undefined &&
+          (typeof body.uomId !== 'string' || !isValidUuid(body.uomId))
+        ) {
+          details.push({
+            field: 'uomId',
+            message: 'uomId must be a valid UUID.',
+          });
+        }
+        if (
+          body.itemDescription !== undefined &&
+          (typeof body.itemDescription !== 'string' ||
+            body.itemDescription.trim().length === 0 ||
+            body.itemDescription.trim().length > 1000)
+        ) {
+          details.push({
+            field: 'itemDescription',
+            message: 'itemDescription must be 1-1000 characters.',
+          });
+        }
+        if (details.length || quantity === undefined) fail(details);
         sendSuccess(
           res,
           await addHandymanServiceRequestItem(
@@ -160,6 +190,12 @@ export function createHandymanParameterizedQuotationRouter(): Router {
                 ? {}
                 : { serviceVariantId: body.serviceVariantId as never }),
               quantity,
+              ...(body.uomId === undefined
+                ? {}
+                : { uomId: String(body.uomId) }),
+              ...(body.itemDescription === undefined
+                ? {}
+                : { itemDescription: String(body.itemDescription).trim() }),
               ...(body.attributeValues === undefined
                 ? {}
                 : { attributeValues: body.attributeValues as never }),
@@ -230,16 +266,22 @@ export function createHandymanParameterizedQuotationRouter(): Router {
         rejectUnknownKeys(body, [
           'serviceVariantId',
           'quantity',
+          'uomId',
+          'itemDescription',
           'attributeValues',
           'accessCondition',
         ]);
         const details: { field: string; message: string }[] = [];
         if (body.quantity !== undefined) {
-          const quantity = Number(body.quantity);
-          if (!Number.isFinite(quantity) || quantity <= 0) {
+          // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the ONE quantity grammar
+          // of the engine (same as the intake lane).
+          try {
+            normalizeHandymanServiceRequestItemQuantity(body.quantity);
+          } catch {
             details.push({
               field: 'quantity',
-              message: 'quantity must be a positive number.',
+              message:
+                'quantity must be a positive number with at most 4 decimal places, smaller than 100000000000000.',
             });
           }
         }
@@ -264,6 +306,32 @@ export function createHandymanParameterizedQuotationRouter(): Router {
             message: 'attributeValues must be an object of code to value.',
           });
         }
+        // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — restate or clear (null) the
+        // reported UOM / per-item note; client-master and length rules stay
+        // with the shared engine.
+        if (
+          body.uomId !== undefined &&
+          body.uomId !== null &&
+          (typeof body.uomId !== 'string' || !isValidUuid(body.uomId))
+        ) {
+          details.push({
+            field: 'uomId',
+            message: 'uomId must be a valid UUID or null.',
+          });
+        }
+        if (
+          body.itemDescription !== undefined &&
+          body.itemDescription !== null &&
+          (typeof body.itemDescription !== 'string' ||
+            body.itemDescription.trim().length === 0 ||
+            body.itemDescription.trim().length > 1000)
+        ) {
+          details.push({
+            field: 'itemDescription',
+            message:
+              'itemDescription must be a string of at most 1000 characters or null.',
+          });
+        }
         if (details.length) fail(details);
         sendSuccess(
           res,
@@ -277,6 +345,17 @@ export function createHandymanParameterizedQuotationRouter(): Router {
               ...(body.quantity === undefined
                 ? {}
                 : { quantity: Number(body.quantity) }),
+              ...(body.uomId === undefined
+                ? {}
+                : { uomId: body.uomId as string | null }),
+              ...(body.itemDescription === undefined
+                ? {}
+                : {
+                    itemDescription:
+                      typeof body.itemDescription === 'string'
+                        ? body.itemDescription.trim()
+                        : null,
+                  }),
               ...(body.attributeValues === undefined
                 ? {}
                 : { attributeValues: body.attributeValues as never }),

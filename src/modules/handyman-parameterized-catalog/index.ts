@@ -107,9 +107,17 @@ export type {
 
 export {
   addHandymanServiceRequestItem,
+  authorHandymanServiceRequestItemInTransaction,
   listHandymanServiceRequestItems,
+  normalizeHandymanServiceRequestItemDescription,
+  normalizeHandymanServiceRequestItemQuantity,
   removeHandymanServiceRequestItem,
   updateHandymanServiceRequestItem,
+} from './handyman-request-items.service';
+export type {
+  AddHandymanServiceRequestItemInput,
+  HandymanServiceRequestItemAuthoringRequestContext,
+  UpdateHandymanServiceRequestItemInput,
 } from './handyman-request-items.service';
 
 export {

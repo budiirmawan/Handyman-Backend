@@ -4764,7 +4764,7 @@ paths:
     post:
       operationId: createBuildingCareRequest
       x-required-permission: handyman.care.building
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CARE_AUTHORITY_DENIED, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CHANNEL_ATTRIBUTION_CONTEXT_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_NOT_FOUND, HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_REFERENCE_CONFLICT, HANDYMAN_CHANNEL_ATTRIBUTION_REQUESTER_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_KEY_REQUIRED]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CARE_AUTHORITY_DENIED, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CHANNEL_ATTRIBUTION_CONTEXT_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_NOT_FOUND, HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_REFERENCE_CONFLICT, HANDYMAN_CHANNEL_ATTRIBUTION_REQUESTER_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_ITEM_INVALID, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, SERVICE_CATALOG_NOT_ACTIVE, SERVICE_CATALOG_NOT_FOUND, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_KEY_REQUIRED]
       summary: Create the canonical Handyman Request for an authorized Tenant
       description: >-
         CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted Tenant request
@@ -12215,13 +12215,38 @@ paths:
               properties:
                 serviceCatalogId: { type: string, format: uuid }
                 serviceVariantId: { type: string, format: uuid }
-                quantity: { type: number, exclusiveMinimum: 0 }
+                quantity:
+                  type: number
+                  exclusiveMinimum: 0
+                  multipleOf: 0.0001
+                  description: Positive, at most 4 decimal places, smaller than 100000000000000 (NUMERIC(18,4)).
+                uomId:
+                  type: string
+                  format: uuid
+                  description: >-
+                    CR-HM-BE-CARE-CATALOG-STRUCTURED-01 - the REPORTED unit
+                    of measure; must reference an ACTIVE units_of_measure
+                    master of this Client. Never the governed price UOM.
+                itemDescription:
+                  type: string
+                  minLength: 1
+                  maxLength: 1000
+                  description: >-
+                    CR-HM-BE-CARE-CATALOG-STRUCTURED-01 - the bounded
+                    per-item note, distinct from the request-level
+                    description.
                 attributeValues:
                   type: object
-                  additionalProperties: { type: string }
+                  maxProperties: 20
+                  description: >-
+                    At most 20 code-to-string values, each at most 200
+                    characters. Reported facts are preserved; the existing
+                    price resolver applies required/allowed-value semantics
+                    and may route incomplete or invalid facts to inspection.
+                  additionalProperties: { type: string, maxLength: 200 }
                 accessCondition:
                   type: string
-                  enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED]
+                  enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
       responses:
         '201':
           description: Item created
@@ -12275,10 +12300,34 @@ paths:
               additionalProperties: false
               properties:
                 serviceVariantId: { type: string, format: uuid }
-                quantity: { type: number, exclusiveMinimum: 0 }
+                quantity:
+                  type: number
+                  exclusiveMinimum: 0
+                  multipleOf: 0.0001
+                  description: Positive, at most 4 decimal places, smaller than 100000000000000 (NUMERIC(18,4)).
+                uomId:
+                  type: [string, 'null']
+                  format: uuid
+                  description: >-
+                    CR-HM-BE-CARE-CATALOG-STRUCTURED-01 - restate the
+                    REPORTED unit of measure (ACTIVE client master) or
+                    clear it with null.
+                itemDescription:
+                  type: [string, 'null']
+                  minLength: 1
+                  maxLength: 1000
+                  description: >-
+                    CR-HM-BE-CARE-CATALOG-STRUCTURED-01 - restate the
+                    bounded per-item note or clear it with null.
                 attributeValues:
                   type: object
-                  additionalProperties: { type: string }
+                  maxProperties: 20
+                  description: >-
+                    At most 20 code-to-string values, each at most 200
+                    characters. Reported facts are preserved; the existing
+                    price resolver applies required/allowed-value semantics
+                    and may route incomplete or invalid facts to inspection.
+                  additionalProperties: { type: string, maxLength: 200 }
                 accessCondition:
                   type: string
                   enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
@@ -132437,22 +132486,144 @@ components:
         status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    HandymanCareStructuredRequestItem:
+      type: object
+      description: >-
+        CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — one structured catalogue item
+        of a Care Building-scoped create. Same field vocabulary as the
+        existing mixed-item engine
+        (`POST /handyman/requests/{handymanRequestId}/items`), plus the
+        reported `uomId` and the bounded `itemDescription`. Every item is
+        re-validated server-side inside the creation transaction
+        (ACTIVE Client-owned service, ACTIVE variant of that service,
+        quantity grammar, ACTIVE Client-owned reported UOM, the reserved
+        access-condition key wall and the no-silent-contradiction
+        variant-inheritance rule).
+      additionalProperties: false
+      required: [serviceCatalogId, quantity]
+      properties:
+        serviceCatalogId:
+          type: string
+          format: uuid
+          description: ACTIVE service entry of the server-derived Client.
+        serviceVariantId:
+          type: string
+          format: uuid
+          description: Optional ACTIVE variant of the selected service.
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.0001
+          description: >-
+            Positive number with at most 4 decimal places and smaller than
+            100000000000000 (the NUMERIC(18,4) precision/bounds of the
+            persisted quantity — never silently rounded).
+        uomId:
+          type: string
+          format: uuid
+          description: >-
+            Optional REPORTED unit of measure; must reference an ACTIVE
+            units_of_measure master of the server-derived Client. A work
+            fact only — the later quotation keeps its governed price UOM.
+        attributeValues:
+          type: object
+          maxProperties: 20
+          description: >-
+            Optional stated technical attributes (attribute code to string
+            value), at most 20 entries with values up to 200 characters.
+            Intake preserves reported facts: missing/unknown/invalid values
+            are not guessed and remain subject to the existing price
+            resolver's INSPECTION_REQUIRED / MANUAL_REVIEW rules. A value
+            that contradicts the selected variant is refused, and the
+            variant's ACTIVE configured values are inherited and
+            materialised with their provenance.
+          additionalProperties: { type: string, maxLength: 200 }
+        itemDescription:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Optional bounded per-item note (trimmed).
+        accessCondition:
+          type: string
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
+          description: Reported access complexity; defaults to STANDARD.
+    HandymanCareStructuredRequestItemRead:
+      type: object
+      additionalProperties: false
+      required:
+        [id, serviceCatalogId, serviceVariantId, quantity, uomId,
+         itemDescription, attributeValues, inheritedAttributeValues,
+         accessCondition, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: [string, 'null'], format: uuid }
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.0001
+          description: >-
+            Persisted NUMERIC(18,4): positive, at most 4 decimal places,
+            smaller than 100000000000000.
+        uomId: { type: [string, 'null'], format: uuid }
+        itemDescription: { type: [string, 'null'] }
+        attributeValues:
+          type: object
+          description: >-
+            The EFFECTIVE attribute set of the persisted item: the values
+            inherited from the service variant plus the values stated at
+            intake — exactly what the price resolution reads.
+          additionalProperties: { type: string }
+        inheritedAttributeValues:
+          type: object
+          description: >-
+            The PROVENANCE: the part of attributeValues the service variant
+            supplied, written once at authoring so a later catalogue change
+            can never rewrite the item.
+          additionalProperties: { type: string }
+        accessCondition:
+          type: string
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
+        status: { type: string, enum: [ACTIVE, REMOVED] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     HandymanCareRequestCreateBody:
       type: object
       description: >-
-        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted create body.
-        Only the authorized Tenant/Unit/service selection and the problem
-        description are accepted. Any other context key (clientId,
-        buildingId, originChannel, createdByUserId, status, ...) and any
-        recording-identity spelling other than the represented `tenantPicId`
-        selection (recordedByUserId, actorUserId, careActorId, tenantId,
-        ...) is rejected 400 — never silently ignored. Client, Building and
-        the acting creator are derived server-side from the session;
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 (+ CR-HM-BE-CARE-CATALOG-
+        STRUCTURED-01) — staff-assisted create body with an EXCLUSIVE
+        legacy-versus-structured catalogue contract:
+        LEGACY — `serviceCatalogId` (required) with optional
+        `serviceVariantId`: the single-service selection, unchanged;
+        STRUCTURED — `items[]` (non-empty, at most 50 entries) instead of
+        the legacy selection keys: each item carries its own
+        serviceCatalogId / serviceVariantId / quantity / uomId /
+        attributeValues / itemDescription / accessCondition, and the
+        request row's anchor service is the FIRST item's selection.
+        An AMBIGUOUS mixed payload (items together with the legacy
+        selection keys) is rejected 400 — never merged or guessed. Any
+        other context key (clientId, buildingId, originChannel,
+        createdByUserId, status, ...) and any recording-identity spelling
+        other than the represented `tenantPicId` selection
+        (recordedByUserId, actorUserId, careActorId, tenantId, ...) is
+        rejected 400 — never silently ignored. Client, Building and the
+        acting creator are derived server-side from the session;
         `tenantPicId` identifies the REPRESENTED customer and is validated
         as an ACTIVE PIC of `tenantCompanyId`, so it can never become the
         acting identity.
       additionalProperties: false
-      required: [tenantCompanyId, serviceCatalogId]
+      required: [tenantCompanyId]
+      oneOf:
+        - description: LEGACY single-service contract; `items` is absent.
+          required: [serviceCatalogId]
+          not:
+            required: [items]
+        - description: STRUCTURED contract; both legacy selection fields are absent.
+          required: [items]
+          not:
+            anyOf:
+              - required: [serviceCatalogId]
+              - required: [serviceVariantId]
       properties:
         tenantCompanyId:
           type: string
@@ -132471,16 +132642,40 @@ components:
         serviceCatalogId:
           type: string
           format: uuid
-          description: ACTIVE service entry of the server-derived Client.
+          description: >-
+            LEGACY mode (mutually exclusive with `items`): ACTIVE service
+            entry of the server-derived Client.
         serviceVariantId:
           type: string
           format: uuid
-          description: Optional ACTIVE variant of the selected service.
+          description: >-
+            LEGACY mode only (mutually exclusive with `items`): optional
+            ACTIVE variant of the selected service.
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          description: >-
+            STRUCTURED mode (mutually exclusive with the legacy selection
+            keys): the mixed catalogue items of the request.
+          items: { $ref: '#/components/schemas/HandymanCareStructuredRequestItem' }
         description:
           type: string
           minLength: 1
           maxLength: 1000
-          description: Problem description recorded verbatim (trimmed).
+          description: >-
+            Overall problem description recorded verbatim (trimmed). In
+            STRUCTURED mode this stays the REQUEST-level note; per-item
+            notes belong to `items[].itemDescription` and are never
+            concatenated here.
+        approvalTenantCompanyId:
+          type: string
+          format: uuid
+          description: Optional approval-party designation (CR-HM-MASTER-IND-01).
+        costResponsibleTenantCompanyId:
+          type: string
+          format: uuid
+          description: Optional cost-responsibility designation (CR-HM-MASTER-IND-01).
     HandymanCareTenantPicSelection:
       type: object
       additionalProperties: false
@@ -132693,9 +132888,18 @@ components:
     HandymanCareStandaloneRequestDetail:
       type: object
       additionalProperties: false
-      required: [request, progress]
+      required: [request, items, progress]
       properties:
         request: { $ref: '#/components/schemas/HandymanCareStandaloneRequest' }
+        items:
+          type: array
+          description: >-
+            CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the PERSISTED ACTIVE
+            structured catalogue items of this request (quantity, reported
+            UOM, per-item note, effective attributes and the inherited
+            provenance), read under the same Building/Client authority as
+            the request. REMOVED items stay invisible.
+          items: { $ref: '#/components/schemas/HandymanCareStructuredRequestItemRead' }
         progress: { $ref: '#/components/schemas/HandymanCareStandaloneProgressBlock' }
     HandymanCareStandaloneProgress:
       type: object
@@ -132954,14 +133158,36 @@ components:
         handymanRequestId: { type: string, format: uuid }
         serviceCatalogId: { type: string, format: uuid }
         serviceVariantId: { type: [string, 'null'], format: uuid }
-        quantity: { type: number }
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.0001
+          description: >-
+            Persisted NUMERIC(18,4): positive, at most 4 decimal places,
+            smaller than 100000000000000.
+        uomId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            CR-HM-BE-CARE-CATALOG-STRUCTURED-01 - the REPORTED unit of
+            measure of the item (existing units_of_measure master of the
+            Client); null when no UOM was reported. The quotation engine
+            keeps its own governed price-UOM selection.
+        itemDescription:
+          type: [string, 'null']
+          description: >-
+            CR-HM-BE-CARE-CATALOG-STRUCTURED-01 - the bounded (1-1000)
+            per-item note; null when none was provided.
         attributeValues:
           type: object
           description: >-
             The EFFECTIVE attribute set of the item: the values inherited
             from the service variant plus the values stated for the item.
-            This is exactly what the price resolution reads.
-          additionalProperties: { type: string }
+            This is exactly what the price resolution reads. Reported values
+            are structurally bounded; required/allowed-value semantics are
+            evaluated by the existing price resolver and may require
+            inspection.
+          additionalProperties: { type: string, maxLength: 200 }
         inheritedAttributeValues:
           type: object
           description: >-

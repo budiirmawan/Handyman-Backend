@@ -10,6 +10,12 @@ import {
   createHandymanServiceRequestForAttribution,
   handymanServiceRequestNotFoundError,
 } from '../handyman-requests';
+import {
+  authorHandymanServiceRequestItemInTransaction,
+} from '../handyman-parameterized-catalog/handyman-request-items.service';
+import type {
+  HandymanServiceAccessCondition,
+} from '../handyman-parameterized-catalog/handyman-parameterized-catalog.types';
 import { executeHandymanIdempotent } from '../handyman-audit';
 import { computeRequestFingerprint } from '../request-idempotency';
 import { hasCurrentUnitPartyRole } from '../apartment-master';
@@ -278,14 +284,39 @@ export async function createBuildingCareRequest(input: {
       }),
   });
 
+  // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the canonical request row always
+  // carries ONE anchor service (the frozen `handyman_service_requests`
+  // schema keeps service_catalog_id NOT NULL for queue discovery). In the
+  // STRUCTURED mode the anchor is the FIRST structured item; the full
+  // mixed scope lives in the `handyman_service_request_items` rows written
+  // in the same transaction. In the LEGACY mode the anchor is the caller's
+  // single-service selection, exactly as before.
+  const structuredItems = input.body.items ?? null;
+  const anchorServiceCatalogId: string =
+    structuredItems === null
+      // The parser guarantees the legacy selection exists when `items` is
+      // absent (the exclusive-contract rule lives in the validation edge).
+      ? input.body.serviceCatalogId!
+      : structuredItems[0].serviceCatalogId;
+  const anchorServiceVariantId =
+    structuredItems === null
+      ? (input.body.serviceVariantId ?? null)
+      : (structuredItems[0].serviceVariantId ?? null);
+
   const normalized = {
     buildingId: authority.scope.buildingId,
     tenantCompanyId: input.body.tenantCompanyId,
     tenantPicId: input.body.tenantPicId ?? null,
     spaceId: input.body.spaceId ?? null,
-    serviceCatalogId: input.body.serviceCatalogId,
-    serviceVariantId: input.body.serviceVariantId ?? null,
+    serviceCatalogId: anchorServiceCatalogId,
+    serviceVariantId: anchorServiceVariantId,
     description: input.body.description ?? null,
+    // The FULL structured submission is part of the fingerprint, so the
+    // same Idempotency-Key with a different item set is a 409 conflict,
+    // never a silent replay of a different scope. Legacy submissions omit
+    // this key altogether to preserve the exact pre-PART-01 fingerprint and
+    // keep a retry across deployment compatible with its stored 201 result.
+    ...(structuredItems === null ? {} : { items: structuredItems }),
     approvalTenantCompanyId: parties.approvalTenantCompanyId,
     costResponsibleTenantCompanyId: parties.costResponsibleTenantCompanyId,
   };
@@ -317,7 +348,8 @@ export async function createBuildingCareRequest(input: {
 
       // Canonical request row: server-issued UUID + initial INTAKE state
       // from the shared intake insert; one-request-per-attribution wall
-      // and exact-Building authority included.
+      // and exact-Building authority included. In the STRUCTURED mode the
+      // anchor service/variant is the first item's selection.
       const request = await createHandymanServiceRequestForAttribution(
         {
           channelAttributionId: attribution.id,
@@ -332,6 +364,49 @@ export async function createBuildingCareRequest(input: {
         input.actorUserId,
         client,
       );
+
+      // CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the STRUCTURED items are
+      // authored through the EXISTING mixed-item engine (the same engine
+      // the BM/Operations item lane uses — no second intake engine), in
+      // the SAME transaction (and therefore the same idempotency claim)
+      // as the canonical request. Every item re-validates catalogue /
+      // variant scope, quantity grammar, reported UOM membership and the
+      // variant-inheritance walls against this transaction. A failure
+      // rolls back the attribution, the request and every item together.
+      if (structuredItems !== null) {
+        for (const item of structuredItems) {
+          await authorHandymanServiceRequestItemInTransaction(
+            {
+              id: request.id,
+              clientId: request.clientId,
+              buildingId: request.buildingId,
+              status: request.status,
+            },
+            {
+              serviceCatalogId: item.serviceCatalogId,
+              ...(item.serviceVariantId === undefined
+                ? {}
+                : { serviceVariantId: item.serviceVariantId }),
+              quantity: item.quantity,
+              ...(item.uomId === undefined ? {} : { uomId: item.uomId }),
+              ...(item.attributeValues === undefined
+                ? {}
+                : { attributeValues: item.attributeValues }),
+              ...(item.itemDescription === undefined
+                ? {}
+                : { itemDescription: item.itemDescription }),
+              ...(item.accessCondition === undefined
+                ? {}
+                : {
+                    accessCondition:
+                      item.accessCondition as HandymanServiceAccessCondition,
+                  }),
+            },
+            input.actorUserId,
+            client,
+          );
+        }
+      }
 
       // CR-HM-MASTER-IND-01 — explicit customer-side designations, recorded
       // in the SAME transaction (and therefore the same idempotency claim) as

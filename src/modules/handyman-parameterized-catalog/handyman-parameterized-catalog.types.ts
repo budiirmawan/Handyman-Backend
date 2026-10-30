@@ -299,6 +299,12 @@ export type HandymanServiceRequestItemRecord = {
   serviceCatalogId: string;
   serviceVariantId: string | null;
   quantity: number;
+  /** CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the REPORTED unit of measure
+   * (existing `units_of_measure` master), never the governed price UOM. */
+  uomId: string | null;
+  /** CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — the bounded per-item note,
+   * distinct from the request-level description. */
+  itemDescription: string | null;
   attributeValues: Record<string, string>;
   inheritedAttributeValues: Record<string, string>;
   accessCondition: HandymanServiceAccessCondition;

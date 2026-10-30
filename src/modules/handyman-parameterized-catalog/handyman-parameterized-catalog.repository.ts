@@ -812,6 +812,7 @@ const REQUEST_ITEM_SELECT = `
   id, client_id AS "clientId", handyman_request_id AS "handymanRequestId",
   service_catalog_id AS "serviceCatalogId",
   service_variant_id AS "serviceVariantId", quantity::float8 AS quantity,
+  uom_id AS "uomId", item_description AS "itemDescription",
   attribute_values AS "attributeValues",
   inherited_attribute_values AS "inheritedAttributeValues",
   access_condition AS "accessCondition", status,
@@ -825,6 +826,10 @@ export type NewHandymanServiceRequestItem = {
   serviceCatalogId: string;
   serviceVariantId: string | null;
   quantity: number;
+  /** The REPORTED unit of measure (existing units_of_measure master). */
+  uomId?: string | null;
+  /** The bounded per-item free-text note (1-1000, service-validated). */
+  itemDescription?: string | null;
   attributeValues: Record<string, string>;
   /** The provenance: the values the variant supplied. */
   inheritedAttributeValues: Record<string, string>;
@@ -840,10 +845,10 @@ async function insertRequestItem(
   const result = await executor.query<HandymanServiceRequestItemRecord>(
     `INSERT INTO handyman_service_request_items
        (id, client_id, handyman_request_id, service_catalog_id,
-        service_variant_id, quantity, attribute_values,
-        inherited_attribute_values, access_condition, status,
-        created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11)
+        service_variant_id, quantity, uom_id, item_description,
+        attribute_values, inherited_attribute_values, access_condition,
+        status, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13)
      RETURNING ${REQUEST_ITEM_SELECT}`,
     [
       randomUUID(),
@@ -852,6 +857,8 @@ async function insertRequestItem(
       input.serviceCatalogId,
       input.serviceVariantId,
       input.quantity,
+      input.uomId ?? null,
+      input.itemDescription ?? null,
       JSON.stringify(input.attributeValues),
       JSON.stringify(input.inheritedAttributeValues),
       input.accessCondition,
@@ -898,6 +905,10 @@ async function listRequestItems(
 export type UpdateHandymanServiceRequestItem = {
   serviceVariantId?: string | null;
   quantity?: number;
+  /** The REPORTED unit of measure (existing units_of_measure master). */
+  uomId?: string | null;
+  /** The bounded per-item free-text note. */
+  itemDescription?: string | null;
   attributeValues?: Record<string, string>;
   /** The provenance: the values the variant supplied. */
   inheritedAttributeValues?: Record<string, string>;
@@ -920,6 +931,10 @@ async function updateRequestItem(
     push('service_variant_id', patch.serviceVariantId);
   }
   if (patch.quantity !== undefined) push('quantity', patch.quantity);
+  if (patch.uomId !== undefined) push('uom_id', patch.uomId);
+  if (patch.itemDescription !== undefined) {
+    push('item_description', patch.itemDescription);
+  }
   if (patch.attributeValues !== undefined) {
     values.push(JSON.stringify(patch.attributeValues));
     sets.push(`attribute_values = $${values.length}::jsonb`);
@@ -1199,6 +1214,24 @@ async function findUnitOfMeasureByCode(
 }
 
 /**
+ * CR-HM-BE-CARE-CATALOG-STRUCTURED-01 — Client-scoped UOM membership for a
+ * REPORTED item uom (same `units_of_measure master of this client` idiom as
+ * the quotation-line engine). Returns the row's status so the service can
+ * also refuse a retired (INACTIVE) unit.
+ */
+async function findUnitOfMeasureForClient(
+  executor: QueryExecutor = getPool(),
+  uomId: string,
+  clientId: string,
+): Promise<{ id: string; status: string } | null> {
+  const result = await executor.query<{ id: string; status: string }>(
+    `SELECT id, status FROM units_of_measure WHERE id = $1 AND client_id = $2`,
+    [uomId, clientId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
  * The EXISTING `handyman_service_variants` master (migration 0376) — read
  * so a request item can prove its variant belongs to its service.
  */
@@ -1306,6 +1339,7 @@ export const handymanParameterizedCatalogRepository = {
   insertVariantIfAbsent,
   insertUnitOfMeasureIfAbsent,
   findUnitOfMeasureByCode,
+  findUnitOfMeasureForClient,
   findVariantById,
   findPriceCatalogEntryById,
 };

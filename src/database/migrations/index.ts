@@ -525,6 +525,8 @@ import { migration0479HandymanServiceVariantAttributeLifecycle }
   from './0479_handyman_service_variant_attribute_lifecycle';
 import { migration0480HandymanServiceRequestItemInheritedAttributes }
   from './0480_handyman_service_request_item_inherited_attributes';
+import { migration0481HandymanServiceRequestItemUomDescription }
+  from './0481_handyman_service_request_item_uom_description';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -1008,4 +1010,5 @@ export const migrations: readonly Migration[] = [
   migration0478ServicePriceTierKey,
   migration0479HandymanServiceVariantAttributeLifecycle,
   migration0480HandymanServiceRequestItemInheritedAttributes,
+  migration0481HandymanServiceRequestItemUomDescription,
 ];
