@@ -101,6 +101,10 @@ before(async () => {
       address text, city text, country text, total_floors int,
       created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
     );
+    CREATE TABLE floors(id uuid PRIMARY KEY, building_id uuid);
+    CREATE TABLE areas(id uuid PRIMARY KEY, floor_id uuid);
+    CREATE TABLE rooms(id uuid PRIMARY KEY, area_id uuid);
+    CREATE TABLE spaces(id uuid PRIMARY KEY, room_id uuid, name text);
     CREATE TABLE users(id uuid PRIMARY KEY, status text);
     CREATE TABLE user_building_assignments(
       id uuid PRIMARY KEY, user_id uuid, building_id uuid, status text,
@@ -150,11 +154,19 @@ before(async () => {
       handyman_crew_membership_id uuid, lead_seq int, designated_by_user_id uuid,
       designated_at timestamptz DEFAULT now()
     );
+    CREATE TABLE handyman_scheduling_readiness(
+      id uuid PRIMARY KEY, client_id uuid, handyman_request_id uuid, timezone text,
+      preferred_window_start timestamptz, preferred_window_end timestamptz, status text,
+      supersedes_readiness_id uuid, change_reason text, created_by_user_id uuid,
+      created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+    );
     CREATE TABLE handyman_service_requests(
       id uuid PRIMARY KEY, client_id uuid, tenant_company_id uuid,
       building_id uuid, space_id uuid, service_catalog_id uuid,
       service_variant_id uuid, description text, status text,
-      created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+      created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+      channel_attribution_id uuid, tenant_pic_id uuid, origin_channel text,
+      origin_reference text, created_by_user_id uuid
     );
     CREATE TABLE handyman_request_triage_decisions(
       id uuid PRIMARY KEY, client_id uuid, handyman_request_id uuid,
@@ -469,6 +481,13 @@ before(async () => {
     [randomUUID(), C1, REQ_1, VISIT_INSP_1, INSP_1, LEAD_1],
   );
 
+  await pool.query(`INSERT INTO handyman_scheduling_readiness
+      (id,client_id,handyman_request_id,timezone,preferred_window_start,preferred_window_end,status,
+       supersedes_readiness_id,change_reason,created_by_user_id)
+    VALUES ('10000000-0000-4000-8000-000000000801',$1,$2,'Asia/Jakarta','2031-10-10T01:00:00Z','2031-10-10T02:00:00Z','INACTIVE',NULL,NULL,$3),
+           ('10000000-0000-4000-8000-000000000802',$1,$2,'Asia/Jakarta','2031-10-11T01:00:00Z','2031-10-11T02:00:00Z','ACTIVE',
+            '10000000-0000-4000-8000-000000000801','Tenant coordinated revised preference',$3)`, [C1,REQ_1,LEAD_1]);
+
   sessionService.resolveSessionContext = async (token: string) => {
     const userId = sessions.get(token);
     if (!userId) throw new Error('Invalid token');
@@ -546,6 +565,11 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-A — Assigned Worker Read Authority', () 
       assert.equal(data.approvedQuotation.lines.length, 2);
       assert.equal(data.assignmentContext.crewId, data.visit.executionVisit.resourceId);
       assert.equal(data.assignmentContext.leadUserId, LEAD_1);
+      assert.equal(data.schedulingReadiness.current.id, '10000000-0000-4000-8000-000000000802');
+      assert.equal(data.schedulingReadiness.history[0].preferredWindowStart, '2031-10-10T01:00:00.000Z');
+      assert.equal(data.schedulingReadiness.current.supersedesReadinessId, data.schedulingReadiness.history[0].id);
+      assert.notEqual(data.visit.executionVisit.startAt, data.schedulingReadiness.current.preferredWindowStart,
+        'Requested preference is not silently substituted for confirmed execution');
       assert.equal(data.inspectionContext.inspection.inspectionResult, 'INSPECTED');
       assert.equal(data.inspectionContext.diagnosis.disciplineCode, 'SIMPLE_PLUMBING');
 
@@ -679,4 +703,28 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-A — Assigned Worker Read Authority', () 
     assert.equal(notFound.status, 404);
     assert.equal(notFound.body.error.code, 'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND');
   });
+  it('PART04 correction: another crew historical visit cannot replace the current assignment schedule in Surat Tugas detail', async () => {
+    const before = await request(app).get(`/api/v1/handyman/field/work-orders/${SCOPE_1}`)
+      .set('Authorization', `Bearer tok-${LEAD_1}`);
+    assert.equal(before.status, 200);
+    const otherCrew = (await pool.query('SELECT handyman_crew_id FROM handyman_execution_scope_assignments WHERE execution_scope_id=$1', [SCOPE_2])).rows[0].handyman_crew_id;
+    const historicalId = randomUUID();
+    try {
+      await pool.query(`INSERT INTO handyman_visit_appointments
+        (id,client_id,handyman_request_id,tenant_company_id,building_id,kind,execution_scope_id,
+         resource_type,resource_id,start_at,end_at,timezone,state,version,created_at)
+        SELECT $1,client_id,handyman_request_id,tenant_company_id,building_id,kind,execution_scope_id,
+          resource_type,$2,start_at + interval '1 day',end_at + interval '1 day',timezone,'COMPLETED',version,NOW()
+          FROM handyman_visit_appointments WHERE id=$3`, [historicalId,otherCrew,VISIT_EXEC_1]);
+      const after = await request(app).get(`/api/v1/handyman/field/work-orders/${SCOPE_1}`)
+        .set('Authorization', `Bearer tok-${LEAD_1}`);
+      assert.equal(after.status, 200, JSON.stringify(after.body));
+      assert.deepEqual(after.body.data.visit, before.body.data.visit);
+      assert.deepEqual(after.body.data.assignmentContext, before.body.data.assignmentContext);
+      assert.deepEqual(after.body.data.schedulingReadiness, before.body.data.schedulingReadiness);
+      assert.equal((await pool.query('SELECT id FROM handyman_visit_appointments WHERE id=$1', [historicalId])).rows.length, 1,
+        'History is retained, not deleted to hide the stale mapping');
+    } finally { await pool.query('DELETE FROM handyman_visit_appointments WHERE id=$1', [historicalId]); }
+  });
+
 });

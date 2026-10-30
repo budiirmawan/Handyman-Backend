@@ -1,3 +1,4 @@
+import { createHandymanFinancialReconciliationRouter } from './handyman-financial-reconciliation.routes';
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
@@ -7,9 +8,11 @@ import {
   getFinanceActionInboxHandler,
   getFinancialClientHandler,
   getFinancialTransactionHandler,
+  getWarrantyReworkExecutionHandler,
   getInvoiceReconciliationSummaryHandler,
   getPricingContractHandler,
   postAdjustCustomerLedgerHandler,
+  postReduceFinancialCorrectionHandler,
   postAllocateCustomerPaymentHandler,
   postBmFeeBeneficiaryHandler,
   postBmFeeRuleHandler,
@@ -18,6 +21,7 @@ import {
   postCommercialAgreementVersionActivateHandler,
   postCommercialAgreementVersionSupersedeHandler,
   postCompleteServiceWarrantyReworkHandler,
+  postCreateWarrantyReworkExecutionHandler,
   postComposeChargeLineHandler,
   postDeriveEntitlementsHandler,
   postExecuteManagerFinalCloseHandler,
@@ -64,12 +68,13 @@ import {
  *  - field rework propose/start/complete/verify are authentication-only
  *    at transport (mirroring work-sessions / evidence-QC): Crew Leads
  *    hold no tenant RBAC permissions, and the rework service enforces
- *    CURRENT Crew Lead authority for the rework's original scope.
+ *    CURRENT Crew Lead authority for the separate rework scope.
  *    Rework authorization (ACCEPT) remains the existing customer-side
  *    command on the service-warranty API.
  */
 export function createHandymanFinanceCloseApiRouter(): Router {
   const router = Router();
+  router.use(createHandymanFinancialReconciliationRouter());
   const auth = authenticationMiddleware;
   // CR-HM-FIN-AUTH-01 — explicit domain authorities. Generic
   // `tenant_company.manage` alone authorizes none of these commands;
@@ -201,6 +206,12 @@ export function createHandymanFinanceCloseApiRouter(): Router {
     postReverseCustomerPaymentHandler,
   );
   router.post(
+    '/handyman/execution-scopes/:executionScopeId/variations/:variationId/financial-correction',
+    auth,
+    finance,
+    postReduceFinancialCorrectionHandler,
+  );
+  router.post(
     '/handyman/execution-scopes/:executionScopeId/ledger-adjustments',
     auth,
     finance,
@@ -295,6 +306,16 @@ export function createHandymanFinanceCloseApiRouter(): Router {
     '/handyman/service-warranty-claims/:claimId/reworks',
     auth,
     postProposeServiceWarrantyReworkHandler,
+  );
+  router.post(
+    '/handyman/service-warranty-reworks/:reworkId/execution',
+    auth,
+    postCreateWarrantyReworkExecutionHandler,
+  );
+  router.get(
+    '/handyman/service-warranty-reworks/:reworkId/execution',
+    auth,
+    getWarrantyReworkExecutionHandler,
   );
   router.post(
     '/handyman/service-warranty-reworks/:reworkId/start',

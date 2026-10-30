@@ -1,4 +1,9 @@
-import { createHash } from 'node:crypto';
+import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
+import { findQuotationDecisionOffer } from './handyman-quotation-document.service';
+import { quotationDecisionFingerprint, careQuotationDecisionFingerprint } from './handyman-quotation-decision-fingerprint';
+import { resolveCareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
+import { assertCareConsentWriteFresh, verifyCareCommercialConsent, type CareDecisionChannel } from '../handyman-commercial-consent/commercial-consent.service';
+import { quotationCommercialTarget } from '../handyman-commercial-consent/commercial-consent.targets';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -72,16 +77,6 @@ function decisionNotFoundError(): AppError {
   });
 }
 
-/** sha256-hex fingerprint of the canonical decision payload (F7). */
-function decisionFingerprint(
-  quotationVersionId: string,
-  decision: string,
-): string {
-  return createHash('sha256')
-    .update(JSON.stringify([quotationVersionId, decision]))
-    .digest('hex');
-}
-
 function toPublicDecision(
   row: HandymanQuotationDecisionRecord,
 ): PublicHandymanQuotationDecision {
@@ -94,6 +89,9 @@ function toPublicDecision(
     tenantCompanyId: row.tenantCompanyId,
     tenantPicId: row.tenantPicId,
     decidedByUserId: row.decidedByUserId,
+    ...(row.decidedByCareActorId ? { decidedByCareActorId: row.decidedByCareActorId, commercialConsentId: row.commercialConsentId } : {}),
+    ...(row.offerDocumentId ? { offerDocumentId: row.offerDocumentId, offerSourceSha256: row.offerSourceSha256,
+      offerPdfSha256: row.offerPdfSha256 } : {}),
     idempotencyKey: row.idempotencyKey,
     decidedAt: row.decidedAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
@@ -121,10 +119,11 @@ export type HandymanQuotationDecisionResult =
 export async function decideHandymanQuotation(
   quotationVersionId: string,
   input: DecideHandymanQuotationInput,
-  actorUserId: string,
+  actor: string | CareDecisionChannel,
 ): Promise<HandymanQuotationDecisionResult> {
   assertUuid(quotationVersionId, 'quotationVersionId');
-  assertUuid(actorUserId, 'actorUserId');
+  const actorUserId = typeof actor === 'string' ? actor : null;
+  if (actorUserId !== null) assertUuid(actorUserId, 'actorUserId');
   if (
     !(HANDYMAN_QUOTATION_DECISIONS as readonly string[]).includes(
       input.decision,
@@ -146,11 +145,9 @@ export async function decideHandymanQuotation(
       },
     ]);
   }
-  const fingerprint = decisionFingerprint(
-    quotationVersionId,
-    input.decision,
-  );
-
+  // Authenticate before aggregate locks; live authority is rechecked and held
+  // on the SAME transaction below (no nested session transaction/deadlock).
+  const carePrincipal = typeof actor === 'string' ? null : await resolveCareWorkspacePrincipal(actor.workspaceToken);
   return withTransaction(async (tx) => {
     // 1) Exact version lock (F7) + lineage authority.
     const version = await handymanQuotationRepository.lockVersionById(
@@ -165,7 +162,7 @@ export async function decideHandymanQuotation(
     if (!quotation) throw handymanQuotationNotFoundError();
     // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
     // request's building_id (BE-02G; no same-Client shortcut).
-    await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+    if (actorUserId !== null) await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
     // Bind authority inside the same version-lock transaction and before
     // replay handling. Revocation therefore takes effect even for a retry;
@@ -176,13 +173,25 @@ export async function decideHandymanQuotation(
       quotation.handymanRequestId,
     );
     if (!request) throw handymanQuotationNotFoundError();
-    await assertHandymanTenantDecisionActor(tx, {
-      actorUserId,
-      handymanRequestId: request.id,
-      clientId: request.clientId,
-      tenantCompanyId: request.tenantCompanyId,
-      buildingId: request.buildingId,
+    if (actorUserId !== null) await assertHandymanTenantDecisionActor(tx, {
+      actorUserId, handymanRequestId: request.id, clientId: request.clientId,
+      tenantCompanyId: request.tenantCompanyId, buildingId: request.buildingId,
     });
+    const offer = await findQuotationDecisionOffer(tx, version.id);
+    if (actorUserId !== null && offer) {
+      if (!isValidUuid(input.offerDocumentId ?? '') || typeof input.offerPdfSha256 !== 'string' ||
+          !/^[0-9a-f]{64}$/.test(input.offerPdfSha256)) {
+        throw AppError.validation('The exact offerDocumentId and lowercase offerPdfSha256 are required for this decision.');
+      }
+      if (input.offerDocumentId!.toLowerCase() !== offer.id || input.offerPdfSha256 !== offer.pdfSha256) throw decisionConflictError();
+    } else if (actorUserId !== null && !offer && (input.offerDocumentId !== undefined || input.offerPdfSha256 !== undefined)) {
+      throw AppError.validation('Historical offers cannot be represented as a new price-basis disclosure.');
+    }
+    const consent = typeof actor === 'string' ? null : await verifyCareCommercialConsent(
+      tx, actor, request, quotationCommercialTarget(version.id, request, offer), input.decision === 'APPROVE' ? 'ACCEPT' : 'REJECT', carePrincipal!,
+    );
+    const personalFingerprint = quotationDecisionFingerprint(version.id, input.decision, offer);
+    const fingerprint = consent ? careQuotationDecisionFingerprint(personalFingerprint, consent.careActorId, consent.id) : personalFingerprint;
 
     // 2) One authoritative decision per version: replay or conflict.
     const existing = await handymanQuotationDecisionRepository
@@ -191,7 +200,10 @@ export async function decideHandymanQuotation(
       if (
         existing.idempotencyKey === idempotencyKey &&
         existing.requestFingerprint === fingerprint &&
-        existing.decision === input.decision
+        existing.decision === input.decision &&
+        existing.decidedByUserId === actorUserId &&
+        (existing.decidedByCareActorId ?? null) === (consent?.careActorId ?? null) &&
+        (existing.commercialConsentId ?? null) === (consent?.id ?? null)
       ) {
         // Replay-safe: the ORIGINAL authoritative facts, nothing new.
         const priorScope = await handymanExecutionScopeRepository
@@ -214,8 +226,11 @@ export async function decideHandymanQuotation(
       throw handymanQuotationInvalidTransitionError();
     }
 
+    if (input.decision === 'APPROVE') await assertHandymanQuotationInspectionReady(tx, request.id);
+
     // 4/5) Immutable decision insert + bounded lifecycle projection
     //    (ISSUED → APPROVED | REJECTED) — atomic, single transaction.
+    if (consent) await assertCareConsentWriteFresh(tx, consent, carePrincipal!);
     let record: HandymanQuotationDecisionRecord;
     try {
       record = await handymanQuotationDecisionRepository
@@ -227,6 +242,11 @@ export async function decideHandymanQuotation(
         tenantCompanyId: request.tenantCompanyId,
         tenantPicId: request.tenantPicId,
         decidedByUserId: actorUserId,
+        decidedByCareActorId: consent?.careActorId ?? null,
+        commercialConsentId: consent?.id ?? null,
+        offerDocumentId: offer?.id ?? null,
+        offerSourceSha256: offer?.sourceSha256 ?? null,
+        offerPdfSha256: offer?.pdfSha256 ?? null,
         idempotencyKey,
         requestFingerprint: fingerprint,
       });
@@ -261,6 +281,7 @@ export async function decideHandymanQuotation(
         derivedBuildingId: request.buildingId,
         derivedSpaceId: request.spaceId,
         createdByUserId: actorUserId,
+        createdByCareActorId: consent?.careActorId ?? null,
       });
       let scopeRow;
       try {
@@ -284,6 +305,7 @@ export async function decideHandymanQuotation(
           actorUserId,
           summary: `Handyman execution scope created for quotation version ${version.versionNumber}.`,
           metadata: {
+            ...(consent ? { recordedByCareActorId: consent.careActorId, commercialConsentId: consent.id } : {}),
             executionScopeId: scopeRow.id,
             quotationId: quotation.id,
             quotationVersionId: version.id,
@@ -315,6 +337,7 @@ export async function decideHandymanQuotation(
           quotationId: quotation.id,
           quotationVersionId: version.id,
           versionNumber: version.versionNumber,
+          ...(consent ? { recordedByCareActorId: consent.careActorId, commercialConsent: consent } : {}),
           decisionId: record.id,
           decision: input.decision,
           handymanRequestId: quotation.handymanRequestId,

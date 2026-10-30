@@ -35,7 +35,8 @@ export type HandymanExecutionScopeRecord = {
   roomId: string | null;
   spaceId: string | null;
   status: HandymanExecutionScopeStatus;
-  createdByUserId: string;
+  createdByUserId: string | null;
+  createdByCareActorId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 };

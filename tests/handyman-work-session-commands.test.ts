@@ -1,9 +1,13 @@
+import { bmClearanceTestFact } from './helpers/handyman-bm-clearance';
+import { handymanBmClearanceVerifier } from '../src/modules/handyman-dispatch/handyman-bm-clearance';
+import { handymanDispatchService } from '../src/modules/handyman-dispatch';
+import { handymanWorkCrewService } from '../src/modules/handyman-providers';
 import assert from 'node:assert/strict';
 import { after, before, describe, it, type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
-import { closePool, initDatabase, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateUp, withTransaction } from '../src/database';
 import { createHandymanArrivalChallenge }
   from '../src/modules/handyman-arrival-challenges';
 import { createHandymanArrivalLocationIdentifier }
@@ -37,7 +41,10 @@ import {
   baseFixture,
   crewFixture,
   initHandymanFixtures,
+  transferCrewLeadFixture,
 } from './helpers/handyman-fixtures';
+import { pauseHandymanWorkSession, resumeHandymanWorkSession } from '../src/modules/handyman-work-sessions';
+import { handymanPermitReadinessRepository, handymanUnitAccessReadinessRepository, supersedeHandymanPermitReadiness, supersedeHandymanUnitAccessReadiness } from '../src/modules/handyman-scheduling';
 import { releaseDispatchFixture } from './helpers/handyman-dispatch';
 import { ensureTestDatabase } from './helpers/postgres';
 
@@ -151,13 +158,13 @@ function goodDevice() {
  * crew carries ONE helper membership (server-side snapshot source).
  * Arrival verification is NOT run by default.
  */
-async function authorityFixture(opts: { withHelper?: boolean } = {}) {
+async function authorityFixture(opts: { withHelper?: boolean; loginlessHelper?: boolean } = {}) {
   const { withHelper = true } = opts;
   const f = await baseFixture();
   const crew = await crewFixture(f.realm);
-  let helper: { workerContextId: string; userId: string } | null = null;
+  let helper: { workerContextId: string; userId: string | null } | null = null;
   if (withHelper) {
-    const helperUser = await userService.createUser({
+    const helperUser = opts.loginlessHelper ? null : await userService.createUser({
       email: `helper-${randomUUID().slice(0, 8)}@example.com`,
       displayName: 'Crew Helper',
     });
@@ -168,7 +175,7 @@ async function authorityFixture(opts: { withHelper?: boolean } = {}) {
       employeeCode: `HELP_${randomUUID().slice(0, 6)}`,
       fullName: 'Helper Worker',
       workforceType: 'EXTERNAL',
-      userId: helperUser.id,
+      userId: helperUser?.id ?? undefined,
     });
     await assignBuildingToWorkforce({
       workforceProfileId: profile.id,
@@ -191,7 +198,7 @@ async function authorityFixture(opts: { withHelper?: boolean } = {}) {
       handymanCrewId: crew.crew.id,
       handymanWorkerContextId: helperContext.id,
     }, adminUserId);
-    helper = { workerContextId: helperContext.id, userId: helperUser.id };
+    helper = { workerContextId: helperContext.id, userId: helperUser?.id ?? null };
   }
   const assignment = await assignHandymanExecutionScopeCrew({
     executionScopeId: f.scope.id,
@@ -471,4 +478,167 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
       [checkin.session.id]);
     assert.equal(events.rows[0].n, 1);
   });
+  it('PART05: rechecks revoked/expired clearances at check-in/start/resume, but preserves replay and safe pause', async () => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture({ withHelper: false });
+    await arriveVerified(f);
+    const requestId = (await q('SELECT handyman_request_id FROM handyman_execution_scopes WHERE id=$1', [f.scope.id])).rows[0].handyman_request_id;
+    const permit = await handymanPermitReadinessRepository.findActiveByRequest(undefined, requestId);
+    const access = await handymanUnitAccessReadinessRepository.findActiveByRequest(undefined, requestId);
+    assert.ok(permit); assert.ok(access);
+    const facts = () => Promise.all(['handyman_dispatch_releases', 'handyman_work_sessions',
+      'handyman_work_session_events', 'handyman_work_session_helper_presence'].map(async (table) =>
+      (await q(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY id`)).rows));
+    const denied = async (action: () => Promise<unknown>) => {
+      const before = await facts();
+      await assert.rejects(action, (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+      assert.deepEqual(await facts(), before);
+    };
+    const expired = { validFrom: new Date(Date.now() - 7_200_000).toISOString(),
+      validUntil: new Date(Date.now() - 3_600_000).toISOString(), permitType: 'UNIT', authorizationNote: 'Expired test authorization' };
+    const invalidPermit = await supersedeHandymanPermitReadiness(permit.id, expired, adminUserId);
+    const input = { executionScopeId: f.scope.id, idempotencyKey: randomUUID() };
+    await denied(() => checkInHandymanWorkSession(input, f.leadUserId));
+    const restored = await supersedeHandymanPermitReadiness(invalidPermit.id, {
+      ...expired, validFrom: permit.validFrom.toISOString(), validUntil: permit.validUntil.toISOString(),
+    }, adminUserId);
+    await checkInHandymanWorkSession(input, f.leadUserId);
+    const invalidAccess = await supersedeHandymanUnitAccessReadiness(access.id, {
+      accessWindowStart: expired.validFrom, accessWindowEnd: expired.validUntil, authorizationNote: 'Expired test access',
+    }, adminUserId);
+    const startInput = { ...input, idempotencyKey: randomUUID() };
+    await denied(() => startWorkHandymanWorkSession(startInput, f.leadUserId));
+    await supersedeHandymanUnitAccessReadiness(invalidAccess.id, {
+      accessWindowStart: access.accessWindowStart.toISOString(), accessWindowEnd: access.accessWindowEnd.toISOString(),
+      authorizationNote: 'Restored test access',
+    }, adminUserId);
+    await startWorkHandymanWorkSession(startInput, f.leadUserId);
+    await supersedeHandymanPermitReadiness(restored.id, expired, adminUserId);
+    // A safety stop is still allowed, but starting new work is not.
+    await pauseHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId);
+    await denied(() => resumeHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId));
+    const before = await facts();
+    assert.equal((await startWorkHandymanWorkSession(startInput, f.leadUserId)).replayed, true);
+    assert.equal((await checkInHandymanWorkSession(input, f.leadUserId)).replayed, true);
+    assert.deepEqual(await facts(), before);
+  });
+
+  it('PART05: cancelling the released visit blocks START_WORK despite the stored ready snapshot', async () => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture({ withHelper: false });
+    await arriveVerified(f);
+    const input = { executionScopeId: f.scope.id, idempotencyKey: randomUUID() };
+    await checkInHandymanWorkSession(input, f.leadUserId);
+    // Preserve the existing deferred booking/reservation invariant atomically.
+    await withTransaction(async tx => {
+      await tx.query(`UPDATE handyman_visit_appointments SET state='CANCELLED',
+        cancelled_by_user_id=$1, cancelled_at=NOW(), version=version+1, updated_at=NOW()
+        WHERE id=(SELECT appointment_id FROM handyman_dispatch_releases WHERE execution_scope_id=$2 AND status='IN_PROGRESS')`,
+        [adminUserId, f.scope.id]);
+      await tx.query(`UPDATE handyman_visit_capacity_reservations SET active=FALSE, released_at=NOW()
+        WHERE appointment_id=(SELECT appointment_id FROM handyman_dispatch_releases WHERE execution_scope_id=$1 AND status='IN_PROGRESS')`,
+        [f.scope.id]);
+    });
+    const before = (await q('SELECT * FROM handyman_work_sessions WHERE execution_scope_id=$1', [f.scope.id])).rows;
+    const events = (await q('SELECT * FROM handyman_work_session_events WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id])).rows;
+    await assert.rejects(() => startWorkHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId),
+      (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+    assert.deepEqual((await q('SELECT * FROM handyman_work_sessions WHERE execution_scope_id=$1', [f.scope.id])).rows, before);
+    assert.deepEqual((await q('SELECT * FROM handyman_work_session_events WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id])).rows, events);
+  });
+
+  it('PART04: fresh independent BM approval is rechecked at check-in/start/resume; replay and safe pause remain safe', async (t) => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture();
+    await arriveVerified(f);
+    let decision = 'PENDING';
+    const verifier = t.mock.method(handymanBmClearanceVerifier, 'verify', async binding =>
+      bmClearanceTestFact(binding, { decision }));
+    const facts = () => Promise.all(['handyman_dispatch_releases', 'handyman_work_sessions',
+      'handyman_work_session_events', 'handyman_work_session_helper_presence', 'operational_events'].map(async table =>
+      (await q(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY id`)).rows));
+    const blocked = async (action: () => Promise<unknown>) => {
+      const before = await facts();
+      await assert.rejects(action, (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+      assert.deepEqual(await facts(), before);
+    };
+    const checkInput = { executionScopeId: f.scope.id, idempotencyKey: randomUUID() };
+    await blocked(() => checkInHandymanWorkSession(checkInput, f.leadUserId));
+    decision = 'APPROVED';
+    const checked = await checkInHandymanWorkSession(checkInput, f.leadUserId);
+    decision = 'REVOKED';
+    let calls = verifier.mock.callCount();
+    assert.equal((await checkInHandymanWorkSession(checkInput, f.leadUserId)).replayed, true);
+    assert.equal(verifier.mock.callCount(), calls, 'Historical acknowledgment does not grant new work');
+    const startInput = { ...checkInput, idempotencyKey: randomUUID() };
+    await blocked(() => startWorkHandymanWorkSession(startInput, f.leadUserId));
+    decision = 'APPROVED';
+    const started = await startWorkHandymanWorkSession(startInput, f.leadUserId);
+    assert.equal(started.session.id, checked.session.id);
+    decision = 'REJECTED';
+    calls = verifier.mock.callCount();
+    await pauseHandymanWorkSession({ ...checkInput, idempotencyKey: randomUUID() }, f.leadUserId);
+    assert.equal(verifier.mock.callCount(), calls, 'Stopping work is not gated on BM availability');
+    const resumeInput = { ...checkInput, idempotencyKey: randomUUID() };
+    for (decision of ['PENDING', 'REJECTED', 'REVOKED', 'EXPIRED', 'UNAVAILABLE']) {
+      await blocked(() => resumeHandymanWorkSession(resumeInput, f.leadUserId));
+    }
+    decision = 'APPROVED';
+    assert.equal((await resumeHandymanWorkSession(resumeInput, f.leadUserId)).session.status, 'IN_PROGRESS');
+    assert.equal((await q("SELECT count(*)::int AS n FROM handyman_work_session_events WHERE session_id=$1 AND event_type='RESUME'", [checked.session.id])).rows[0].n, 1);
+  });
+
+  it('PART04: helper replacement/status changes require renewed coverage; helper login remains optional', async (t) => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture({ loginlessHelper: true });
+    await arriveVerified(f);
+    let approved: ReturnType<typeof bmClearanceTestFact> | null = null;
+    t.mock.method(handymanBmClearanceVerifier, 'verify', async binding => approved ??= bmClearanceTestFact(binding));
+    const evaluate = () => handymanDispatchService.evaluateDispatchReadiness(f.scope.id, adminUserId);
+    assert.equal((await evaluate()).ready, true);
+    const membershipId = (await q(`SELECT id FROM handyman_crew_memberships
+      WHERE handyman_crew_id=$1 AND handyman_worker_context_id=$2 AND status='ACTIVE'`,
+      [f.crew.crew.id, f.helper!.workerContextId])).rows[0].id;
+    await handymanWorkCrewService.setHandymanCrewMemberStatus(membershipId, 'INACTIVE', adminUserId);
+    assert.equal((await evaluate()).bmClearance.state, 'BINDING_MISMATCH');
+    await assert.rejects(() => checkInHandymanWorkSession({ executionScopeId: f.scope.id, idempotencyKey: randomUUID() }, f.leadUserId),
+      (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+    approved = null;
+    assert.equal((await evaluate()).ready, true);
+    await handymanWorkCrewService.setHandymanCrewMemberStatus(membershipId, 'ACTIVE', adminUserId);
+    assert.equal((await evaluate()).bmClearance.state, 'BINDING_MISMATCH');
+    approved = null;
+    const checked = await checkInHandymanWorkSession({ executionScopeId: f.scope.id, idempotencyKey: randomUUID() }, f.leadUserId);
+    assert.equal(checked.helperPresence.length, 1);
+    assert.equal(checked.helperPresence[0].helperWorkerId, f.helper!.workerContextId);
+    assert.equal(checked.helperPresence[0].helperUserId, null);
+  });
+
+  it('PART04: same-crew Lead replacement invalidates previous BM binding and old Lead authority', async (t) => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture({ withHelper: false });
+    let approved: ReturnType<typeof bmClearanceTestFact> | null = null;
+    t.mock.method(handymanBmClearanceVerifier, 'verify', async binding => approved ??= bmClearanceTestFact(binding));
+    assert.equal((await handymanDispatchService.evaluateDispatchReadiness(f.scope.id, adminUserId)).ready, true);
+    const replacement = await transferCrewLeadFixture(f.crew, f.realm);
+    assert.equal((await handymanDispatchService.evaluateDispatchReadiness(f.scope.id, adminUserId)).bmClearance.state, 'BINDING_MISMATCH');
+    const next = { ...f, leadUserId: replacement.leadUser.id, leadWorkerId: replacement.workerContext.id };
+    await arriveVerified(next);
+    const input = { executionScopeId: f.scope.id, idempotencyKey: randomUUID() };
+    await assert.rejects(() => checkInHandymanWorkSession(input, next.leadUserId),
+      (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+    approved = null;
+    await assert.rejects(() => checkInHandymanWorkSession(input, f.leadUserId));
+    await assert.rejects(() => withTransaction(tx => handymanDispatchService.assertDispatchExecutionClearance(
+      tx, f.scope.id, f.leadUserId, f.assignmentId)),
+      (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+    const checked = await checkInHandymanWorkSession(input, next.leadUserId);
+    assert.equal(checked.session.leadUserId, next.leadUserId);
+    await assert.rejects(() => startWorkHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId));
+    await startWorkHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, next.leadUserId);
+    await pauseHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, next.leadUserId);
+    await assert.rejects(() => resumeHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId));
+    assert.equal((await resumeHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, next.leadUserId)).session.status, 'IN_PROGRESS');
+  });
+
 });

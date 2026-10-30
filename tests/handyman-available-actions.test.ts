@@ -73,8 +73,8 @@ describe('CR-HM-17 P1 FIX02 — B6 payment availableActions', () => {
     'PENDING', 'CONFIRMED', 'REJECTED',
   ];
 
-  it('PENDING → CONFIRM and REJECT', () => {
-    const actions = computePaymentAvailableActions('PENDING');
+  it('Finance PENDING → CONFIRM and REJECT', () => {
+    const actions = computePaymentAvailableActions('PENDING', true);
     assert.deepEqual([...actions], ['CONFIRM', 'REJECT']);
   });
 
@@ -90,7 +90,7 @@ describe('CR-HM-17 P1 FIX02 — B6 payment availableActions', () => {
 
   it('only PENDING status has non-empty actions', () => {
     for (const status of allStatuses) {
-      const actions = computePaymentAvailableActions(status);
+      const actions = computePaymentAvailableActions(status,true);
       if (status === 'PENDING') {
         assert.ok(actions.length > 0, `PENDING should have actions`);
       } else {
@@ -227,10 +227,10 @@ describe('CR-HM-17 P1 FIX02 — authority preservation', () => {
     assert.equal(actions.length, 2);
   });
 
-  it('B6: no new lifecycle rules (only status-derived)', () => {
-    // PENDING is the only status where Customer Care can decide
+  it('B6: existing lifecycle plus explicit Finance authority', () => {
+    // PENDING plus explicit Finance authority is required; Care cannot decide
     // This matches CR-HM-13 PART 03 payment decision authority
-    const actions = computePaymentAvailableActions('PENDING');
+    const actions = computePaymentAvailableActions('PENDING', true);
     assert.ok(actions.includes('CONFIRM'));
     assert.ok(actions.includes('REJECT'));
     assert.equal(actions.length, 2);

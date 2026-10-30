@@ -376,8 +376,11 @@ describe('PART 06A — care workspace represented request list', () => {
     assert.deepEqual(await counts(), before);
   });
 
-  it('adds only list, not workspace detail/mutation, and documents the bounded existing projection', async () => {
-    assert.equal((await api().get(`${path}/${unitRequests[0]}`).set('Authorization', `Bearer ${token}`).query(selection())).status, 404);
+  it('keeps workspace detail and list read-only and documents the bounded projections', async () => {
+    const detail = await api().get(`${path}/${unitRequests[0]}`).set('Authorization', `Bearer ${token}`).query(selection());
+    assert.equal(detail.status, 200);
+    assert.equal(detail.body.data.id, unitRequests[0]);
+    assert.ok(Array.isArray(detail.body.data.items));
     assert.equal((await api().post(path).set('Authorization', `Bearer ${token}`).send(selection())).status, 404);
     const spec = parseYaml(readFileSync('docs/api/openapi.yaml', 'utf8'));
     const route = spec.paths['/handyman/care/requests'];
@@ -385,6 +388,7 @@ describe('PART 06A — care workspace represented request list', () => {
     assert.deepEqual(route.get.security, [{ careWorkspaceSession: [] }]);
     assert.deepEqual(route.get.parameters.filter((p: any) => p.required).map((p: any) => p.name), ['propertyId', 'tenantCompanyId', 'buildingId']);
     assert.equal(spec.components.schemas.CareWorkspaceRequestPage.properties.items.items.$ref, '#/components/schemas/HandymanCustomerCareServiceRequest');
-    assert.equal(spec.paths['/handyman/care/requests/{handymanRequestId}'], undefined);
+    assert.ok(spec.paths['/handyman/care/requests/{requestId}'].get);
+    assert.deepEqual(spec.paths['/handyman/care/requests/{requestId}'].get.security, [{ careWorkspaceSession: [] }]);
   });
 });

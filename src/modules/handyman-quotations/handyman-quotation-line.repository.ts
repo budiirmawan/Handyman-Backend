@@ -24,6 +24,7 @@ type LineRow = {
   line_total: string;
   currency: HandymanQuotationLineRecord['currency'];
   source_item_id: string | null;
+  origin_kind: HandymanQuotationLineRecord['originKind'];
   created_by_user_id: string;
   created_at: Date;
   updated_at: Date;
@@ -32,9 +33,15 @@ type LineRow = {
 const LINE_SELECT = `
   SELECT id, quotation_version_id, line_type, description, quantity,
          uom_id, reference_unit_amount, final_quoted_unit_amount,
-         line_total, currency, source_item_id, created_by_user_id,
-         created_at, updated_at
+         line_total, currency, source_item_id, origin_kind,
+         created_by_user_id, created_at, updated_at
     FROM handyman_quotation_lines`;
+
+const LINE_RETURNING = `
+  id, quotation_version_id, line_type, description, quantity,
+  uom_id, reference_unit_amount, final_quoted_unit_amount,
+  line_total, currency, source_item_id, origin_kind,
+  created_by_user_id, created_at, updated_at`;
 
 function mapLine(row: LineRow): HandymanQuotationLineRecord {
   return {
@@ -52,6 +59,7 @@ function mapLine(row: LineRow): HandymanQuotationLineRecord {
     lineTotal: Number(row.line_total),
     currency: row.currency,
     sourceItemId: row.source_item_id,
+    originKind: row.origin_kind,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -71,15 +79,13 @@ async function insertLine(
     `INSERT INTO handyman_quotation_lines (
        id, quotation_version_id, line_type, description, quantity,
        uom_id, reference_unit_amount, final_quoted_unit_amount,
-       line_total, currency, source_item_id, created_by_user_id
+       line_total, currency, source_item_id, origin_kind,
+       created_by_user_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8,
-       ROUND($5::numeric * $8::numeric, 2), $9, $10, $11
+       ROUND($5::numeric * $8::numeric, 2), $9, $10, $11, $12
      )
-     RETURNING id, quotation_version_id, line_type, description, quantity,
-               uom_id, reference_unit_amount, final_quoted_unit_amount,
-               line_total, currency, source_item_id, created_by_user_id,
-               created_at, updated_at`,
+     RETURNING ${LINE_RETURNING}`,
     [
       randomUUID(),
       input.quotationVersionId,
@@ -91,6 +97,7 @@ async function insertLine(
       input.finalQuotedUnitAmount,
       input.currency,
       input.sourceItemId,
+      input.originKind,
       input.createdByUserId,
     ],
   );
@@ -121,6 +128,45 @@ async function findVersionCurrency(
   );
   if (result.rows.length === 0) return null;
   return result.rows[0].currency;
+}
+
+/**
+ * The ONE input the origin law needs: which lane the parent request belongs to
+ * (0488 `intake_source`), and whether the governed pricing authority already
+ * recorded a MANUAL_REVIEW resolution for it (0477 — an outcome that by CHECK
+ * never carries an amount). Read-only: this PART never writes a resolution.
+ */
+async function findRequestOriginContext(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  handymanRequestId: string,
+  clientId: string,
+): Promise<{
+  intakeSource: 'CATALOG' | 'UNLISTED_TRIAGE';
+  hasManualReviewResolution: boolean;
+} | null> {
+  const result = await executor.query<{
+    intake_source: 'CATALOG' | 'UNLISTED_TRIAGE';
+    has_manual_review: boolean;
+  }>(
+    `SELECT r.intake_source,
+            EXISTS (
+              SELECT 1
+                FROM handyman_service_quote_resolutions res
+               WHERE res.handyman_request_id = r.id
+                 AND res.client_id = r.client_id
+                 AND res.outcome = 'MANUAL_REVIEW'
+            ) AS has_manual_review
+       FROM handyman_service_requests r
+      WHERE r.id = $1
+        AND r.client_id = $2`,
+    [handymanRequestId, clientId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    intakeSource: row.intake_source,
+    hasManualReviewResolution: row.has_manual_review,
+  };
 }
 
 /** Derived per-type subtotals (never persisted). */
@@ -176,7 +222,73 @@ async function itemBelongsToClient(
   return result.rows.length > 0;
 }
 
+/**
+ * CR-HM-MANUAL-QUOTATION-01 PART 03B — the ONLY authorized way a line leaves a
+ * version: it is never deleted (0392 immutability stands), the revised DRAFT
+ * version is a NEW snapshot that carries the selected predecessor lines
+ * forward verbatim. Every commercial fact (type, description, quantity, UOM,
+ * governed reference snapshot, final quoted amount, currency, MATERIAL source
+ * item and 0489 origin) is copied by the database itself, so no caller can
+ * re-author a carried line and nothing can be silently lost or duplicated:
+ * `selectedCount` is compared against the requested ids by the service.
+ */
+async function copyLinesIntoVersion(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    sourceVersionId: string;
+    targetVersionId: string;
+    lineIds: string[];
+    actorUserId: string;
+  },
+): Promise<{ copied: HandymanQuotationLineRecord[]; copiedCount: number }> {
+  if (input.lineIds.length === 0) return { copied: [], copiedCount: 0 };
+  const result = await executor.query<LineRow>(
+    `INSERT INTO handyman_quotation_lines (
+       id, quotation_version_id, line_type, description, quantity,
+       uom_id, reference_unit_amount, final_quoted_unit_amount,
+       line_total, currency, source_item_id, origin_kind,
+       created_by_user_id, created_at, updated_at
+     )
+     SELECT gen_random_uuid(), $2, s.line_type, s.description, s.quantity,
+            s.uom_id, s.reference_unit_amount, s.final_quoted_unit_amount,
+            ROUND(s.quantity * s.final_quoted_unit_amount, 2), s.currency,
+            s.source_item_id, s.origin_kind, $3, NOW(), NOW()
+       FROM handyman_quotation_lines s
+      WHERE s.quotation_version_id = $1
+        AND s.id = ANY($4::uuid[])
+      ORDER BY s.created_at ASC, s.id ASC
+     RETURNING ${LINE_RETURNING}`,
+    [
+      input.sourceVersionId,
+      input.targetVersionId,
+      input.actorUserId,
+      input.lineIds,
+    ],
+  );
+  return {
+    copied: result.rows.map(mapLine),
+    copiedCount: result.rowCount ?? 0,
+  };
+}
+
+/** Identities of one version's lines, in snapshot order. */
+async function listLineIds(
+  executor: Pick<PoolClient, 'query'>,
+  quotationVersionId: string,
+): Promise<string[]> {
+  const result = await executor.query<{ id: string }>(
+    `SELECT id FROM handyman_quotation_lines
+      WHERE quotation_version_id = $1
+      ORDER BY created_at ASC, id ASC`,
+    [quotationVersionId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
 export const handymanQuotationLineRepository = {
+  findRequestOriginContext,
+  copyLinesIntoVersion,
+  listLineIds,
   insertLine,
   listLines,
   findVersionCurrency,

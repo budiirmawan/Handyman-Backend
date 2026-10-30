@@ -16,6 +16,9 @@ export type FactInput = {
   versionNumber?: number; effectiveFrom?: string; effectiveTo?: string | null;
   ruleId?: string; termId?: string; ratePercent?: string;
   beneficiaryId?: string; beneficiaryReferenceId?: string;
+  beneficiaryKind?: 'BM_LEGAL_COUNTERPARTY'; counterpartyId?: string;
+  buildingId?: string; coverageId?: string; verificationId?: string;
+  coverageEffectiveFrom?: string; coverageEffectiveTo?: string | null;
   idempotencyKey: string; actorUserId: string;
 };
 
@@ -32,6 +35,10 @@ export type FactRow = {
   agreement_effective_to: Date | null; bm_rule_id: string | null;
   bm_term_id: string | null; bm_term_rate_percent: string | null;
   bm_beneficiary_id: string | null; bm_beneficiary_reference_id: string | null;
+  bm_beneficiary_kind: 'BM_LEGAL_COUNTERPARTY' | null;
+  bm_counterparty_id: string | null; bm_building_id: string | null;
+  bm_coverage_id: string | null; bm_verification_id: string | null;
+  bm_coverage_effective_from: Date | null; bm_coverage_effective_to: Date | null;
   idempotency_key: string; derived_by_user_id: string; derived_at: Date;
 };
 
@@ -116,10 +123,13 @@ export async function insertFact(tx: PoolClient, x: FactInput): Promise<FactRow>
       lead_user_id, agreement_id, agreement_version_id, agreement_version_number,
       agreement_effective_from, agreement_effective_to, bm_rule_id, bm_term_id,
       bm_term_rate_percent, bm_beneficiary_id, bm_beneficiary_reference_id,
+      bm_beneficiary_kind, bm_counterparty_id, bm_building_id, bm_coverage_id,
+      bm_verification_id, bm_coverage_effective_from, bm_coverage_effective_to,
       idempotency_key, derived_by_user_id
     ) VALUES (
       $1,$2,$3,$4,$5,$6,'CR-HM-13-PART-06',$7,'EARNED',$8,$9,$10,$11,$12,
-      $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
+      $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,
+      $29,$30,$31,$32,$33,$34,$35,$36,$37
     ) RETURNING *`, [
     randomUUID(), x.clientId, x.transactionId, x.executionScopeId, x.currency,
     x.ledgerPostedAt, x.kind,
@@ -131,6 +141,9 @@ export async function insertFact(tx: PoolClient, x: FactInput): Promise<FactRow>
     x.versionNumber ?? null, x.effectiveFrom ?? null, x.effectiveTo ?? null,
     x.ruleId ?? null, x.termId ?? null, x.ratePercent ?? null,
     x.beneficiaryId ?? null, x.beneficiaryReferenceId ?? null,
+    x.beneficiaryKind ?? null, x.counterpartyId ?? null, x.buildingId ?? null,
+    x.coverageId ?? null, x.verificationId ?? null,
+    x.coverageEffectiveFrom ?? null, x.coverageEffectiveTo ?? null,
     x.idempotencyKey, x.actorUserId,
   ]);
   return r.rows[0];

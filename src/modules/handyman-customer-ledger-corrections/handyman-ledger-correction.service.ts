@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
@@ -193,8 +194,9 @@ async function recordCorrection(
   scopeUuid: string,
   actorUuid: string,
   intent: CorrectionIntent,
+  executor?: PoolClient,
 ): Promise<HandymanLedgerCorrectionCommandResult> {
-  return withTransaction(async (tx) => {
+  const execute = async (tx: PoolClient) => {
     const transaction = await lockLedgerTransaction(tx, scopeUuid);
     const replay = await handymanLedgerCorrectionRepository
       .findCorrectionByKey(tx, transaction.id, intent.idempotencyKey);
@@ -218,6 +220,19 @@ async function recordCorrection(
         );
       }
       return { correction: replay, replayed: true };
+    }
+
+    // Once a REDUCE is bound, an unqualified manual adjustment on that
+    // line or transaction could repeat the same deduction. Independently
+    // sourced integrations supply their executor and an atomic source binding;
+    // the deferred database guard verifies that binding before commit.
+    if (!executor && intent.correctionKind === 'ADJUSTMENT') {
+      const ambiguous = await tx.query(`SELECT 1 FROM handyman_reduce_financial_corrections
+        WHERE transaction_id=$1 AND ($2::uuid IS NULL OR charge_line_id=$2) LIMIT 1`,
+      [transaction.id, intent.sourceChargeLineId ?? null]);
+      if (ambiguous.rows.length) {
+        throw handymanLedgerCorrectionConflictError('adjustment-requires-explicit-reduce-provenance');
+      }
     }
 
     await assertSourceInLedger(tx, transaction.id, intent);
@@ -245,7 +260,8 @@ async function recordCorrection(
     } catch (error) {
       throw mapLedgerCorrectionGuardError(error);
     }
-  });
+  };
+  return executor ? execute(executor) : withTransaction(execute);
 }
 
 /**
@@ -258,6 +274,8 @@ async function recordCorrection(
  * Anything else propagates unchanged.
  */
 const LEDGER_CORRECTION_GUARD_REASONS: readonly [RegExp, string][] = [
+  [/Credited inspection payment requires explicit credit compensation/,
+    'credited-inspection-compensation-required'],
   [/refund exceeds what was actually received and applied/,
     'refund-exceeds-received-and-applied'],
   [/Only a CONFIRMED Handyman customer payment may be refunded/,
@@ -458,6 +476,7 @@ export async function reverseHandymanCustomerPayment(
 export async function adjustHandymanCustomerLedger(
   input: AdjustHandymanCustomerLedgerInput,
   actorUserId: string,
+  executor?: PoolClient,
 ): Promise<HandymanLedgerCorrectionCommandResult> {
   const scopeUuid = ensureUuid(input.executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
@@ -476,7 +495,7 @@ export async function adjustHandymanCustomerLedger(
     amount,
     reason,
     idempotencyKey: key,
-  });
+  }, executor);
 }
 
 /** Facts only (the published read contract is PART 06). */

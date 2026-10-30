@@ -4,8 +4,9 @@ import { mkdir, rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
-import { closePool, initDatabase, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateDown, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
+import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { baseFixture, crewFixture, initHandymanFixtures }
   from './helpers/handyman-fixtures';
@@ -82,6 +83,8 @@ async function fixture() {
   await activateHandymanCommercialAgreementVersion(actor,{
     versionId:version,effectiveFrom:new Date(Date.now()-60_000).toISOString(),
     idempotencyKey:id()});
+  const bmCoverage = await bindVerifiedTestBm({ actor, clientId: realm.client.id,
+    buildingId: realm.building.id, versionId: version, query: q });
   await openHandymanCustomerTransaction({executionScopeId:scope.id,
     idempotencyKey:id()},actor);
   const line = (await q(`SELECT id FROM handyman_quotation_lines
@@ -89,10 +92,11 @@ async function fixture() {
   [scope.approvedQuotationVersionId])).rows[0];
   const charge = await composeHandymanChargeLine({executionScopeId:scope.id,
     quotationLineId:line.id,idempotencyKey:id()},actor);
-  const derived = await deriveHandymanFinancialEntitlements(scope.id,actor,id());
+  const derivationKey = id();
+  const derived = await deriveHandymanFinancialEntitlements(scope.id,actor,derivationKey);
   assert.equal(derived.provider.amount,'97.50');
   assert.equal(derived.bmFee.amount,'2.50');
-  return { realm,scope,charge,derived };
+  return { realm,scope,charge,derived,derivationKey,bmCoverage };
 }
 async function fund(scopeId: string, amount: string) {
   const payment = await recordHandymanCustomerPayment({
@@ -134,6 +138,52 @@ async function sourceFingerprint() {
 }
 
 describe('CR-HM-14 PART 03 settlement and internal reconciliation', () => {
+  it('replays historical earned and settled facts without retroactively requiring coverage', async () => {
+    const f = await fixture();
+    await fund(f.scope.id, '100.00');
+    const unit = await prepare(f.scope.id);
+    await include(f.scope.id); await reconcile(f.scope.id); await settle(f.scope.id);
+    const factsBefore = await q('SELECT * FROM handyman_entitlement_facts WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id]);
+    const eventsBefore = await q('SELECT * FROM handyman_settlement_events WHERE unit_id=$1 ORDER BY id', [unit.unitId]);
+    // Simulate data earned before migration 0493: no retroactive coverage row
+    // existed. Disable only the test database's immutability trigger for setup.
+    await q('ALTER TABLE handyman_bm_building_coverages DISABLE TRIGGER hm_bm_coverage_no_rewrite');
+    try { await q('DELETE FROM handyman_bm_building_coverages WHERE id=$1', [f.bmCoverage.coverage.id]); }
+    finally { await q('ALTER TABLE handyman_bm_building_coverages ENABLE TRIGGER hm_bm_coverage_no_rewrite'); }
+    const replay = await deriveHandymanFinancialEntitlements(f.scope.id, actor, f.derivationKey);
+    assert.equal(replay.provider.replayed, true); assert.equal(replay.bmFee.replayed, true);
+    assert.deepEqual((await q('SELECT * FROM handyman_entitlement_facts WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id])).rows, factsBefore.rows);
+    assert.deepEqual((await q('SELECT * FROM handyman_settlement_events WHERE unit_id=$1 ORDER BY id', [unit.unitId])).rows, eventsBefore.rows);
+    // With the test-only identity rows removed, recreate the 0492 -> 0493
+    // upgrade over real earned/settled legacy rows and compare them verbatim.
+    for (const [table, trigger, row] of [
+      ['handyman_bm_counterparty_verifications', 'hm_bm_verification_no_mutation', f.bmCoverage.verification.id],
+      ['handyman_bm_legal_counterparties', 'hm_bm_party_no_mutation', f.bmCoverage.counterparty.id],
+    ] as const) {
+      await q(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`);
+      try { await q(`DELETE FROM ${table} WHERE id=$1`, [row]); }
+      finally { await q(`ALTER TABLE ${table} ENABLE TRIGGER ${trigger}`); }
+    }
+    assert.equal(await migrateDown(pool), '0500_handyman_bm_commission_tax_cases');
+    assert.equal(await migrateDown(pool),'0499_handyman_customer_tax_classifications');
+    assert.equal(await migrateDown(pool), '0498_handyman_request_buyer_bindings');
+    assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
+    assert.equal(await migrateDown(pool), '0496_handyman_tax_identity_approval');
+    assert.equal(await migrateDown(pool), '0495_handyman_tax_identity_profiles');
+    assert.equal(await migrateDown(pool), '0494_handyman_distinct_bm_entitlements');
+    assert.equal(await migrateDown(pool), '0493_handyman_bm_beneficiary_building_coverage');
+    const legacyBefore = (await q('SELECT * FROM handyman_bm_fee_beneficiary_definitions WHERE agreement_version_id=(SELECT agreement_version_id FROM handyman_entitlement_facts WHERE id=$1)', [f.derived.bmFee.id])).rows;
+    assert.deepEqual(await migrateUp(pool), ['0493_handyman_bm_beneficiary_building_coverage',
+      '0494_handyman_distinct_bm_entitlements', '0495_handyman_tax_identity_profiles',
+      '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications', '0500_handyman_bm_commission_tax_cases']);
+    assert.equal((await q(`SELECT count(*)::int AS n FROM handyman_bm_entitlement_guards
+      WHERE transaction_id=(SELECT transaction_id FROM handyman_entitlement_facts WHERE id=$1)`, [f.derived.bmFee.id])).rows[0].n, 0,
+    'upgrade never backfills legacy settlement history');
+    assert.deepEqual((await q('SELECT * FROM handyman_entitlement_facts WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id])).rows, factsBefore.rows);
+    assert.deepEqual((await q('SELECT * FROM handyman_settlement_events WHERE unit_id=$1 ORDER BY id', [unit.unitId])).rows, eventsBefore.rows);
+    assert.deepEqual((await q('SELECT * FROM handyman_bm_fee_beneficiary_definitions WHERE agreement_version_id=(SELECT agreement_version_id FROM handyman_entitlement_facts WHERE id=$1)', [f.derived.bmFee.id])).rows, legacyBefore);
+    assert.equal((await deriveHandymanFinancialEntitlements(f.scope.id, actor, f.derivationKey)).bmFee.replayed, true);
+  });
   it('funded full claim: PAYABLE → INCLUDED → exact reconciliation → terminal SETTLED, replay-safe',async () => {
     const f = await fixture();
     await assert.rejects(prepare(f.scope.id),code('HANDYMAN_SETTLEMENT_NOT_FUNDED'));

@@ -36,6 +36,7 @@ import { userService } from '../../src/modules/users';
 import { workforceService } from '../../src/modules/workforce';
 import { assignSupervisor } from '../../src/modules/workforce-reporting-lines';
 import { baseFixture, crewFixture } from './handyman-fixtures';
+import { handymanCustomerForScope, handymanCustomerConsentInput } from './handyman-customer-consent';
 
 /**
  * CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — shared guarded
@@ -77,6 +78,7 @@ export type GuardedBastFixture = {
   supervisorUserId: string;
   qcRunId: string;
   bastId: string;
+  customerUserId: string;
   bast: { id: string; status: string };
 };
 
@@ -435,7 +437,7 @@ export async function arrangeGuardedBast(input: {
   adminUserId: string;
   q: GuardedQcQuery;
   until?: GuardedBastStage;
-  signatureDigest?: string;
+  includeStructuredRequestItem?: boolean;
 }): Promise<GuardedBastFixture> {
   ensureEvidenceStorageDir();
   const until = input.until ?? 'ACCEPTED';
@@ -443,7 +445,11 @@ export async function arrangeGuardedBast(input: {
   const idem = () => `gb-${randomUUID()}`;
   await grant(adminId, ['handyman.qc.configure'], 'GB');
 
-  const { realm, scope } = await baseFixture();
+  const { realm, scope } = await baseFixture({
+    includeStructuredRequestItem: input.includeStructuredRequestItem,
+  });
+  const customer = await handymanCustomerForScope(scope.id);
+  await grant(customer.id, ['tenant_company.manage', 'tenant_company.read'], 'GB_CUSTOMER');
   // NOTE: the shared crewFixture already performs the 0439-required
   // workforce_building placement (and the Lead's user_building_assignments)
   // for the realm's building — do NOT repeat it here (a second ACTIVE
@@ -535,20 +541,14 @@ export async function arrangeGuardedBast(input: {
     await issueHandymanBast(adminId, { bastId, idempotencyKey: idem() });
   }
   const signAccept = async (targetBastId: string) => {
-    const evidence = await createHandymanEvidenceRecord(
-      { executionScopeId: scope.id, stage: 'AFTER', idempotencyKey: idem() },
-      crew.leadUser.id,
-    );
-    await acceptHandymanBast(adminId, {
-      bastId: targetBastId,
-      idempotencyKey: idem(),
-      signatureDigest: input.signatureDigest ?? `sig-${randomUUID()}`,
-      evidenceRecordId: evidence.record.id,
+    const consent = await handymanCustomerConsentInput(targetBastId, customer.id);
+    await acceptHandymanBast(customer.id, {
+      bastId: targetBastId, idempotencyKey: idem(), signatureDigest: consent.signatureDigest,
     });
   };
   if (until === 'ACCEPTED') await signAccept(bastId);
   if (until === 'REJECTED') {
-    await rejectHandymanBast(adminId, {
+    await rejectHandymanBast(customer.id, {
       bastId,
       idempotencyKey: idem(),
       signatureDigest: '',
@@ -585,6 +585,7 @@ export async function arrangeGuardedBast(input: {
     supervisorUserId: supervisor.id,
     qcRunId: run.id,
     bastId,
+    customerUserId: customer.id,
     bast: { id: row.id as string, status: row.status as string },
   };
 }

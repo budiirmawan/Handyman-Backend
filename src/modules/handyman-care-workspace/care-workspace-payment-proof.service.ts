@@ -98,8 +98,9 @@ async function findBoundPayment(
       SELECT r.client_id AS "clientId", r.id AS "requestId",
              es.id AS "executionScopeId", tx.id AS "transactionId",
              p.id AS "paymentId", p.status AS "paymentStatus",
-             tx.currency AS "paymentCurrency", i.id AS "invoiceId",
-             i.status AS "invoiceStatus", r.tenant_company_id AS "tenantCompanyId",
+             tx.currency AS "paymentCurrency", COALESCE(oi.id, i.id) AS "invoiceId",
+             CASE WHEN oi.id IS NOT NULL THEN 'ISSUED' ELSE i.status END AS "invoiceStatus",
+             r.tenant_company_id AS "tenantCompanyId",
              r.building_id AS "buildingId", r.space_id AS "spaceId"
         FROM handyman_service_requests r
         JOIN records c ON c."clientId" = r.client_id
@@ -119,12 +120,17 @@ async function findBoundPayment(
           AND i.space_id IS NOT DISTINCT FROM r.space_id
           AND i.currency_code = tx.currency
           AND i.status = 'FINALIZED'
+        LEFT JOIN handyman_official_invoice_payment_links link ON link.payment_id=p.id
+        LEFT JOIN handyman_official_invoices oi ON oi.id=link.invoice_id AND oi.execution_scope_id=es.id
+          AND oi.transaction_id=tx.id AND oi.client_id=r.client_id AND oi.request_id=r.id
+          AND oi.tenant_company_id=r.tenant_company_id AND oi.building_id=r.building_id AND oi.currency=tx.currency
        WHERE $5::text IS NULL AND $6::integer = 1
          AND r.id = $10 AND p.id = $12
          AND r.tenant_company_id = $7 AND r.building_id = $8
          AND r.space_id IS NOT DISTINCT FROM $9::uuid
          AND (
            $11::uuid IS NULL
+           OR oi.id = $11::uuid
            OR (
              i.id = $11::uuid
              AND EXISTS (
@@ -228,6 +234,27 @@ async function assertCareWriteAuthority(
   if (occupancy.rowCount !== 1) throw notFound();
 }
 
+/** Shared exact-occupancy read wall for a payment, independent of proof status. */
+export async function assertCareHandymanPaymentReadContext(input: {
+  principal: CareWorkspacePrincipal;
+  selection: HandymanPaymentProofSelection;
+  requestId: unknown;
+  invoiceId?: unknown;
+  paymentId: unknown;
+}, executor: Pick<PoolClient, 'query'> | ReturnType<typeof getPool> = getPool()) {
+  const requestId = uuid(input.requestId, 'requestId');
+  const invoiceId = optionalUuid(input.invoiceId, 'invoiceId');
+  const paymentId = uuid(input.paymentId, 'paymentId');
+  const binding = await findBoundPayment(executor, input.principal,
+    input.selection, requestId, invoiceId, paymentId, false);
+  if (!binding.authenticated) throw new AppError({
+    code: ERROR_CODES.HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED,
+    message: 'Care workspace authentication failed.', statusCode: 401,
+  });
+  if (!binding.selectedPropertyAvailable || !binding.item) throw notFound();
+  return binding.item;
+}
+
 export async function assertCareHandymanPaymentProofContext(input: {
   principal: CareWorkspacePrincipal;
   selection: HandymanPaymentProofSelection;
@@ -235,20 +262,11 @@ export async function assertCareHandymanPaymentProofContext(input: {
   invoiceId?: unknown;
   paymentId: unknown;
 }) {
-  const requestId = uuid(input.requestId, 'requestId');
-  const invoiceId = optionalUuid(input.invoiceId, 'invoiceId');
-  const paymentId = uuid(input.paymentId, 'paymentId');
-  const binding = await findBoundPayment(getPool(), input.principal,
-    input.selection, requestId, invoiceId, paymentId, false);
-  if (!binding.authenticated) throw new AppError({
-    code: ERROR_CODES.HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED,
-    message: 'Care workspace authentication failed.', statusCode: 401,
-  });
-  if (!binding.selectedPropertyAvailable || !binding.item) throw notFound();
-  if (binding.item.paymentStatus !== 'PENDING') {
+  const item = await assertCareHandymanPaymentReadContext(input);
+  if (item.paymentStatus !== 'PENDING') {
     throw handymanCustomerPaymentConflictError('payment-proof-requires-pending-claim');
   }
-  return binding.item;
+  return item;
 }
 
 export async function uploadCareHandymanPaymentProof(input: {

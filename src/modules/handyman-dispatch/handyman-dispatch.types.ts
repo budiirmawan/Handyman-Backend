@@ -1,8 +1,11 @@
+import type { HandymanBmClearanceAssessment } from './handyman-bm-clearance';
+
 export const HANDYMAN_DISPATCH_RELEASE_STATUSES = [
   'RELEASED',
   'IN_PROGRESS',
   'COMPLETED',
   'CANCELLED',
+  'SUPERSEDED',
 ] as const;
 export type HandymanDispatchReleaseStatus =
   (typeof HANDYMAN_DISPATCH_RELEASE_STATUSES)[number];
@@ -45,16 +48,21 @@ export type HandymanDispatchReadinessCheck = {
   permitClearance: boolean;
   unitAccessClearance: boolean;
   materialReady: boolean;
+  /** True when no DP is required, confirmed DP covers terms, or a covered noncommercial rework is exempt. */
+  requiredPaymentSatisfied: boolean;
   assignmentCurrent: boolean;
 };
 
 export type HandymanDispatchReadinessReport = {
   executionScopeId: string;
+  paymentRequirement?: 'COVERED_NONCOMMERCIAL_REWORK';
   ready: boolean;
   checks: HandymanDispatchReadinessCheck;
   failures: string[];
   appointmentId: string | null;
   assignmentId: string | null;
+  assignmentReadiness: 'UNASSIGNED' | 'PLANNED' | 'DISPATCH_READY';
+  bmClearance: HandymanBmClearanceAssessment;
 };
 
 export type ReleaseHandymanDispatchInput = {

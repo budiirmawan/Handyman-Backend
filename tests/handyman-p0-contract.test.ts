@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { resetAppConfigCache } from '../src/config';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
+import { buildingService } from '../src/modules/buildings';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { openHandymanCustomerTransaction, composeHandymanChargeLine } from '../src/modules/handyman-customer-transactions';
 import { recordHandymanCustomerPayment, confirmHandymanCustomerPayment } from '../src/modules/handyman-customer-payments';
@@ -21,11 +22,14 @@ import { admitCareWorkspace, resolveCareWorkspacePrincipal, signCareWorkspaceAss
   type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
 import { uploadCareHandymanPaymentProof, HANDYMAN_PAYMENT_PROOF_MAX_BYTES } from '../src/modules/handyman-care-workspace/care-workspace-payment-proof.service';
 import { getCareWorkspaceOperationalProjection } from '../src/modules/handyman-care-workspace/care-workspace-operational.service';
+import { startHandymanServiceWarranty } from '../src/modules/handyman-service-warranties';
+import { addHandymanEvidenceFile, createHandymanEvidenceRecord } from '../src/modules/handyman-evidence-qc';
 import { createEvidenceStorage, evidenceStorageKey } from '../src/modules/evidence/storage';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 import { createAdminUser } from './helpers/access';
 import { initHandymanFixtures, realmFixture, locationChain, scopeFixture } from './helpers/handyman-fixtures';
+import { arrangeGuardedBast } from './helpers/handyman-guarded-bast';
 
 const ROOT = '/tmp/handyman-p0-contract-pg';
 const DB_DIR = `${ROOT}/database`;
@@ -358,6 +362,94 @@ describe('ARENA Handyman P0 contract boundaries', () => {
     const reversedPayment = (netProjection.invoicePayment as any).payments
       .find((row: { id: string }) => row.id === payment.payment.id);
     assert.equal(reversedPayment.allocatedToInvoice, '0.00');
+  });
+
+  it('rereads persisted request items, quotation, QC/BAST, warranty and safe evidence metadata through exact Care scope', async (t) => {
+    if (!pool) { t.skip('PostgreSQL unavailable'); return; }
+    const arranged = await arrangeGuardedBast({
+      adminUserId: userId,
+      q: async (text, params = []) => pool!.query(text, params),
+      until: 'ACCEPTED',
+      includeStructuredRequestItem: true,
+    });
+    await startHandymanServiceWarranty({ executionScopeId: arranged.scope.id,
+      idempotencyKey: key() }, userId);
+    const evidence = await createHandymanEvidenceRecord({
+      executionScopeId: arranged.scope.id, stage: 'AFTER', idempotencyKey: key(),
+    }, arranged.crew.leadUser.id);
+    const privateEvidenceBytes = Buffer.from('private Care evidence bytes must never enter this projection');
+    const privateEvidenceKey = evidenceStorageKey(randomUUID());
+    await createEvidenceStorage().put(privateEvidenceKey, { buffer: privateEvidenceBytes, mimeType: 'image/png' });
+    await addHandymanEvidenceFile({
+      evidenceRecordId: evidence.record.id, mediaKind: 'PHOTO',
+      storageKey: privateEvidenceKey, contentType: 'image/png', byteSize: privateEvidenceBytes.byteLength,
+      sha256Digest: createHash('sha256').update(privateEvidenceBytes).digest('hex'),
+      captureTime: new Date().toISOString(), idempotencyKey: key(),
+    }, arranged.crew.leadUser.id);
+    await grantCareActorProperty({ careActorId, propertyId: arranged.realm.property.id,
+      clientId: arranged.realm.client.id }, userId);
+    const assertion = careAssertion();
+    const workspace = await admitCareWorkspace(assertion,
+      signCareWorkspaceAssertion(assertion, SECRET));
+    const selected = {
+      propertyId: arranged.realm.property.id,
+      tenantCompanyId: arranged.scope.tenantCompanyId,
+      buildingId: arranged.scope.buildingId,
+      spaceId: arranged.scope.spaceId!,
+    };
+    const projection = await getCareWorkspaceOperationalProjection(
+      workspace.workspaceToken, arranged.scope.handymanRequestId, selected);
+    assert.deepEqual(projection.documentAvailability,
+      { quotation: 'PRESENT', bast: 'PRESENT', warranty: 'PRESENT' });
+    const item = (projection.request as any).items[0];
+    assert.ok(item);
+    const persistedItem = await pool!.query(`SELECT id, service_catalog_id, quantity::text,
+        item_description, attribute_values FROM handyman_service_request_items
+      WHERE handyman_request_id = $1 AND status = 'ACTIVE' ORDER BY created_at, id LIMIT 1`,
+    [arranged.scope.handymanRequestId]);
+    assert.equal(item.id, persistedItem.rows[0].id);
+    assert.equal(item.serviceCatalogId, persistedItem.rows[0].service_catalog_id);
+    assert.equal(item.quantity, persistedItem.rows[0].quantity);
+    assert.equal(Number(item.quantity), 1);
+    assert.equal(item.itemDescription, 'Existing persisted structured request item');
+    const quotation = projection.quotation as any;
+    assert.ok(quotation?.versions.length);
+    assert.ok(quotation.versions[0].lines.length);
+    const qc = (projection.quality as any).qcRuns.find((row: any) => row.id === arranged.qcRunId);
+    assert.equal(qc.status, 'PASSED');
+    const bast = (projection.bast as any[]).find(row => row.id === arranged.bastId);
+    assert.equal(bast.status, 'ACCEPTED');
+    assert.equal(bast.serviceRequestId, arranged.scope.handymanRequestId);
+    assert.ok(bast.workSessions.length);
+    assert.ok(bast.signOffs.some((signOff: any) => signOff.decision === 'ACCEPT' && signOff.signerUserId));
+    const warranty = projection.warranty as any;
+    assert.equal(warranty.status, 'ACTIVE');
+    assert.equal(warranty.bastId, arranged.bastId);
+    assert.equal(warranty.coveredRequestItems[0].requestItemId, item.id);
+    const fileMetadata = (projection.quality as any).evidence.flatMap((row: any) => row.files);
+    assert.ok(fileMetadata.length);
+    for (const file of fileMetadata) {
+      assert.match(file.sha256Digest, /^[0-9a-f]{64}$/);
+      assert.equal(Object.keys(file).some(key => /^content$|fileReference|storageKey|url/i.test(key)), false);
+    }
+    const serialized = JSON.stringify(projection);
+    for (const secret of [workspace.workspaceToken, SECRET, privateEvidenceBytes.toString(),
+      privateEvidenceBytes.toString('base64'), 'fileReference', 'storageKey', 'signedUrl']) {
+      assert.equal(serialized.includes(secret), false);
+    }
+    const otherBuilding = await buildingService.createBuilding({
+      propertyId: arranged.realm.property.id, code: `CARE_${suffix()}`,
+      name: 'Different building in the same property',
+    });
+    await assert.rejects(() => getCareWorkspaceOperationalProjection(
+      workspace.workspaceToken, arranged.scope.handymanRequestId, {
+        ...selected, buildingId: otherBuilding.id,
+      }), (error: any) => error.statusCode === 404);
+    const foreign = await realmFixture('projection-foreign');
+    await assert.rejects(() => getCareWorkspaceOperationalProjection(
+      workspace.workspaceToken, arranged.scope.handymanRequestId, {
+        ...selected, propertyId: foreign.property.id, buildingId: foreign.building.id,
+      }), (error: any) => error.statusCode === 404);
   });
 
   it('enforces the payment-proof parent binding in PostgreSQL, not only in Care service code', async (t) => {

@@ -2,7 +2,7 @@
 
 **Repository**: `budiirmawan/Handyman-Backend` (backend ONLY).  
 **Branch**: `arena/c965a40c-handyman-backend` · **Date**: 2026-10-21 · **CR**: CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01  
-**Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/handyman/HANDYMAN_E2E_PERSONA_CAPABILITY_MATRIX.md` (§20), `docs/api/openapi.yaml` (1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0).  
+**Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/handyman/HANDYMAN_E2E_PERSONA_CAPABILITY_MATRIX.md` (§20), `docs/handyman/CR-HM-CARE-INTERNAL-NOTES-01_PART-01.md` (`GET/POST /handyman/requests/{handymanRequestId}/internal-notes`), `docs/handyman/CR-HM-CARE-UNLISTED-INTAKE_PART-01.md` (`GET /handyman/operations/unlisted-intake-cases`, `GET /handyman/unlisted-intake-cases/{intakeCaseId}`, `GET/POST /handyman/unlisted-intake-cases/{intakeCaseId}/internal-notes`), `docs/api/openapi.yaml` (1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0).
 **Claim boundary**: Backend-repository evidence only. **No cross-repository E2E PASS is claimed;** Operations availability waits on the Handyman-Operations repo integrating these contracts.
 
 ## Audience

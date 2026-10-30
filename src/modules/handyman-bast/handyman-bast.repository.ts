@@ -28,7 +28,7 @@ const BAST_SELECT = `
 
 const EVENT_SELECT = `
   SELECT id, client_id, bast_id, execution_scope_id, event_type,
-         idempotency_key, actor_user_id, occurred_at, created_at, metadata
+         idempotency_key, actor_user_id, actor_care_actor_id, commercial_consent_id, occurred_at, created_at, metadata
     FROM handyman_bast_events`;
 
 function mapBast(row: Row): HandymanBastRecord {
@@ -56,6 +56,7 @@ function mapEvent(row: Row): HandymanBastEventRecord {
     eventType: row.event_type as HandymanBastEventType,
     idempotencyKey: row.idempotency_key,
     actorUserId: row.actor_user_id,
+    ...(row.actor_care_actor_id ? { actorCareActorId: row.actor_care_actor_id, commercialConsentId: row.commercial_consent_id } : {}),
     occurredAt: row.occurred_at,
     createdAt: row.created_at,
     metadata: (row.metadata as Record<string, unknown> | null) ?? {},
@@ -146,6 +147,7 @@ async function updateBastStatus(
   id: string,
   status: HandymanBastStatus,
   expectedFromStatus: HandymanBastStatus,
+  completionVerificationId?: string,
 ): Promise<HandymanBastRecord> {
   const issuedAtSql = status === 'ISSUED'
     ? 'issued_at = COALESCE(issued_at, NOW())'
@@ -173,12 +175,13 @@ async function updateBastStatus(
             ${acceptedAtSql},
             ${rejectedAtSql},
             ${voidedAtSql},
+            completion_verification_id = COALESCE($4, completion_verification_id),
             updated_at = NOW()
       WHERE id = $1 AND status = $3
       RETURNING id, client_id, execution_scope_id, qc_run_id, status,
                 issued_at, accepted_at, rejected_at, voided_at,
                 created_at, updated_at`,
-    [id, status, expectedFromStatus],
+    [id, status, expectedFromStatus, completionVerificationId ?? null],
   );
   if (!result.rows[0]) {
     // Lost the concurrency race: another writer already transitioned this
@@ -202,10 +205,10 @@ async function insertEvent(
   const result = await executor.query(
     `INSERT INTO handyman_bast_events (
        id, client_id, bast_id, execution_scope_id, event_type,
-       idempotency_key, actor_user_id, metadata
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       idempotency_key, actor_user_id, metadata, actor_care_actor_id, commercial_consent_id
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
      RETURNING id, client_id, bast_id, execution_scope_id, event_type,
-               idempotency_key, actor_user_id, occurred_at, created_at, metadata`,
+               idempotency_key, actor_user_id, actor_care_actor_id, commercial_consent_id, occurred_at, created_at, metadata`,
     [
       id,
       record.clientId,
@@ -215,6 +218,8 @@ async function insertEvent(
       record.idempotencyKey,
       record.actorUserId,
       JSON.stringify(record.metadata ?? {}),
+      record.actorCareActorId ?? null,
+      record.commercialConsentId ?? null,
     ],
   );
   return mapEvent(result.rows[0]);

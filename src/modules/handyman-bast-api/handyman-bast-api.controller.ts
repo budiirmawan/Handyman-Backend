@@ -94,6 +94,7 @@ function toApprovedSignOffPayload(
     signatureDigest: binding.signatureDigest,
     evidenceRecordId: binding.evidenceRecordId,
     actorUserId: binding.actorUserId,
+    ...(binding.recordedByCareActorId ? { recordedByCareActorId: binding.recordedByCareActorId, commercialConsentId: binding.commercialConsentId } : {}),
     occurredAt: binding.occurredAt,
     createdAt: binding.createdAt,
   };
@@ -101,6 +102,8 @@ function toApprovedSignOffPayload(
 
 function toBastEventPayload(event: HandymanBastEventRecord) {
   const metadata = event.metadata ?? {};
+  const completion = metadata.completion && typeof metadata.completion === 'object'
+    ? metadata.completion as Record<string, unknown> : null;
   return {
     id: event.id,
     bastId: event.bastId,
@@ -108,6 +111,7 @@ function toBastEventPayload(event: HandymanBastEventRecord) {
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
     actorUserId: event.actorUserId,
+    ...(event.actorCareActorId ? { actorCareActorId: event.actorCareActorId, commercialConsentId: event.commercialConsentId } : {}),
     occurredAt: event.occurredAt,
     createdAt: event.createdAt,
     // CR-HM-BAST-HTTP-01 — expose only the bounded audit field from the
@@ -115,6 +119,12 @@ function toBastEventPayload(event: HandymanBastEventRecord) {
     // customer-care GET read-after-write without publishing arbitrary JSON.
     voidReason:
       typeof metadata.voidReason === 'string' ? metadata.voidReason : null,
+    completion: completion && typeof completion.verificationId === 'string'
+      && typeof completion.manifestId === 'string' && typeof completion.manifestVersion === 'number'
+      && typeof completion.manifestSha256 === 'string' ? {
+        verificationId: completion.verificationId, manifestId: completion.manifestId,
+        manifestVersion: completion.manifestVersion, manifestSha256: completion.manifestSha256,
+      } : null,
   };
 }
 
@@ -132,7 +142,7 @@ function toBastSignOffPayload(signOff: HandymanBastSignOffRecord) {
   };
 }
 
-function toCommandPayload(result: HandymanBastCommandResult) {
+export function toHandymanBastCommandPayload(result: HandymanBastCommandResult) {
   const events = [result.event];
   const signOffs = result.signOff ? [result.signOff] : [];
   return {
@@ -216,8 +226,9 @@ export async function postBastAcceptHandler(
       idempotencyKey: body.idempotencyKey,
       signatureDigest: body.signatureDigest,
       evidenceRecordId: body.evidenceRecordId,
+      rejectReason: body.rejectReason,
     });
-    sendSuccess(res, toCommandPayload(result), 200);
+    sendSuccess(res, toHandymanBastCommandPayload(result), 200);
   } catch (error) {
     next(error);
   }
@@ -238,7 +249,7 @@ export async function postBastRejectHandler(
       evidenceRecordId: body.evidenceRecordId,
       rejectReason: body.rejectReason,
     });
-    sendSuccess(res, toCommandPayload(result), 200);
+    sendSuccess(res, toHandymanBastCommandPayload(result), 200);
   } catch (error) {
     next(error);
   }
@@ -258,6 +269,7 @@ export async function postBastSignOffHandler(
           idempotencyKey: body.idempotencyKey,
           signatureDigest: body.signatureDigest,
           evidenceRecordId: body.evidenceRecordId,
+          rejectReason: body.rejectReason,
         })
       : await rejectHandymanBast(actor(req), {
           bastId,
@@ -266,7 +278,7 @@ export async function postBastSignOffHandler(
           evidenceRecordId: body.evidenceRecordId,
           rejectReason: body.rejectReason,
         });
-    sendSuccess(res, toCommandPayload(result), 200);
+    sendSuccess(res, toHandymanBastCommandPayload(result), 200);
   } catch (error) {
     next(error);
   }

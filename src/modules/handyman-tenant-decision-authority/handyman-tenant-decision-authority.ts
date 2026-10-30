@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 
 /**
- * Production authority for customer commercial decisions.
+ * Production authority for personal customer decisions (commercial/BAST/warranty).
  *
  * Building access and RBAC are necessary outer guards, but neither proves
  * that a user represents the tenant on one particular request.  The request's
@@ -24,6 +24,9 @@ export async function assertHandymanTenantDecisionActor(
     buildingId: string;
   },
 ): Promise<{ tenantPicId: string }> {
+  // All callers use their decision transaction. Hold the current PIC identity
+  // and ACTIVE account through decision/history insertion; a relink must wait,
+  // or this locking read rechecks the changed identity after the relink commits.
   const result = await executor.query<{ tenant_pic_id: string }>(
     `SELECT r.tenant_pic_id
        FROM handyman_service_requests r
@@ -36,6 +39,7 @@ export async function assertHandymanTenantDecisionActor(
         AND tp.tenant_company_id = r.tenant_company_id
         AND tp.user_id = $1
         AND tp.status = 'ACTIVE'
+       JOIN users u ON u.id = tp.user_id AND u.status = 'ACTIVE'
       WHERE r.id = $2
         AND r.client_id = $3
         AND r.tenant_company_id = $4
@@ -52,7 +56,8 @@ export async function assertHandymanTenantDecisionActor(
                AND (tsr.effective_from IS NULL OR tsr.effective_from <= NOW())
                AND (tsr.effective_until IS NULL OR tsr.effective_until > NOW())
           )
-        )`,
+        )
+      FOR SHARE OF tp, u`,
     [
       input.actorUserId,
       input.handymanRequestId,

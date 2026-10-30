@@ -4,6 +4,7 @@ import { isValidUuid } from '../clients';
 import {
   handymanCommercialAgreementActiveExistsError,
   handymanCommercialAgreementClientConflictError,
+  handymanCommercialAgreementCoverageConflictError,
   handymanCommercialAgreementIllegalTransitionError,
   handymanCommercialAgreementNotFoundError,
   handymanCommercialAgreementNotEffectiveAtAsOfError,
@@ -301,10 +302,18 @@ export async function supersedeHandymanCommercialAgreementVersion(
       effectiveFrom,
     );
 
-    await repo.updateVersionLifecycle(client, versionId, {
-      status: 'SUPERSEDED',
-      effectiveTo: effectiveFrom,
-    });
+    try {
+      await repo.updateVersionLifecycle(client, versionId, {
+        status: 'SUPERSEDED',
+        effectiveTo: effectiveFrom,
+      });
+    } catch (err) {
+      if ((err as { code?: string; constraint?: string }).code === '23514' &&
+          (err as { constraint?: string }).constraint === 'hm_bm_version_coverage') {
+        throw handymanCommercialAgreementCoverageConflictError();
+      }
+      throw err;
+    }
     const activated = await repo.updateVersionLifecycle(
       client,
       replacementVersionId,

@@ -37,6 +37,9 @@ export {
   getHandymanQuotationVersionTotals,
 } from './handyman-quotation-line.service';
 export { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
+export { setHandymanQuotationLineTaxPriceBasis, HANDYMAN_TAX_PRICE_BASES, parseTaxPriceBasis }
+  from './handyman-quotation-price-basis';
+export type { HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
 export {
   handymanQuotationVersionNotFoundError,
   handymanQuotationVersionNotDraftError,
@@ -53,6 +56,7 @@ export type {
 } from './handyman-quotation-line.types';
 export {
   HANDYMAN_QUOTATION_LINE_TYPES,
+  HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_CURRENCIES,
 } from './handyman-quotation-line.types';
 export {
@@ -97,3 +101,5 @@ export {
   handymanQuotationValidityInvalidError,
   handymanQuotationNotExpirableError,
 } from './handyman-quotation.errors';
+
+export { setHandymanQuotationLineWarrantyTerms } from './handyman-quotation-warranty-terms';

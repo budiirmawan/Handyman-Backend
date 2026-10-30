@@ -10,6 +10,7 @@ import {
   postHandymanDiagnosisHandler,
   postHandymanRequestCancelHandler,
   postHandymanInspectionHandler,
+  postAssignedHandymanInspectionHandler,
   postHandymanReferralHandler,
   postHandymanTriageHandler,
 } from './handyman-lifecycle-api.controller';
@@ -62,6 +63,11 @@ export function createHandymanLifecycleApiRouter(): Router {
     read,
     getHandymanTriageHandler,
   );
+  // No blanket manage grant to Mobile Staff: the service atomically requires
+  // their own live Inspector assignment + TERIMA and exact Building scope.
+  router.post('/handyman/field/requests/:handymanRequestId/inspection', auth, read,
+    postAssignedHandymanInspectionHandler);
+
   router.post(
     '/handyman/requests/:handymanRequestId/inspection',
     auth,

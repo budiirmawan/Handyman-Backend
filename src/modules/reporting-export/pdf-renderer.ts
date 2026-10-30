@@ -42,6 +42,11 @@ const MAX_TABLES = 100;
 const MAX_COLUMNS = 50;
 const MAX_PDF_PAGES = 200;
 
+/** The renderer only needs a dataset identifier, not membership in the reporting registry. */
+export type PdfRenderSnapshot = Omit<PublicReportingExport, 'metadata'> & {
+  metadata: Omit<PublicReportingExport['metadata'], 'dataset'> & { dataset: string };
+};
+
 export type PdfRendererOptions = {
   /** Optional display name; it never becomes a storage path or key. */
   filename?: string;
@@ -87,7 +92,7 @@ type ValidatedPdfTable = {
  * never performs database, authorization, storage, or archive work.
  */
 export async function renderReportingPdf(
-  snapshot: PublicReportingExport,
+  snapshot: PdfRenderSnapshot,
   options: PdfRendererOptions = {},
 ): Promise<PdfRenderResult> {
   const tables = validateSnapshotTables(snapshot);
@@ -290,7 +295,7 @@ export async function renderReportingPdf(
 }
 
 function validateSnapshotTables(
-  snapshot: PublicReportingExport,
+  snapshot: PdfRenderSnapshot,
 ): ValidatedPdfTable[] {
   if (!isRecord(snapshot) || !Array.isArray(snapshot.tables)) {
     throw new PdfRendererError(

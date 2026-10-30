@@ -1,3 +1,4 @@
+import { hasVerifiedHandymanBastCustomerAcceptance } from '../handyman-bast';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
@@ -15,7 +16,16 @@ import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worke
 import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
 import { assertHandymanTenantDecisionActor }
   from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
+import { assertHandymanQuotationPricingAuthority }
+  from '../handyman-quotations/handyman-quotation-access';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
+import { createIssuedVariationOfferDocument, requireVariationOfferForDecision }
+  from './handyman-variation-offer-document.service';
+import {
+  addLaborBindingFromEvents, addMaterialBindingFromEvents,
+  assertAddLaborQuoteBinding, assertAddMaterialQuoteBinding,
+  assertPinnedVariationApproval, variationConsentSnapshot,
+} from './handyman-scope-variation-material-authority';
 import {
   HANDYMAN_SCOPE_VARIATION_LINE_TYPES,
   HANDYMAN_SCOPE_VARIATION_QC_OUTCOMES,
@@ -308,6 +318,25 @@ async function assertOperationsManagerForExecutionScope(
   }
 }
 
+// Reviewing, pricing and authorizing a variation are commercial decisions,
+// not Care relay actions. Reuse the quotation writer's explicit Operations
+// permission and customer-side exclusion in addition to the existing
+// exact-Building and originator-separation checks.
+async function assertVariationCommercialAuthority(
+  tx: PoolClient,
+  actorUserId: string,
+  ctx: ExecutionScopeContext,
+  originActorUserId: string,
+): Promise<void> {
+  await assertOperationsManagerForExecutionScope(actorUserId, ctx, originActorUserId);
+  await assertHandymanQuotationPricingAuthority({
+    actorUserId,
+    clientId: ctx.clientId,
+    handymanRequestId: ctx.handymanRequestId,
+    tenantCompanyId: ctx.tenantCompanyId,
+  }, tx);
+}
+
 async function assertAuthorizedTenantDecisionActor(
   actorUserId: string,
   ctx: ExecutionScopeContext,
@@ -486,6 +515,8 @@ function fromCents(cents: bigint): string {
   return `${isNegative ? '-' : ''}${whole}.${frac}`;
 }
 
+// This validates the version and total delta, not an item-level mapping:
+// ADD variations have no authoritative revised-quotation-line identity.
 async function assertValidRevisedQuotationVersionForVariation(
   tx: PoolClient,
   ctx: ExecutionScopeContext,
@@ -494,12 +525,14 @@ async function assertValidRevisedQuotationVersionForVariation(
     revisedQuotationVersionId: string;
     expectedCurrency: string;
     expectedVariationDelta: string;
+    requireCurrentOffer?: boolean;
   },
 ): Promise<{
   revisedVersionNumber: number;
   originalVersionNumber: number;
   originalQuotedTotal: string;
   revisedQuotedTotal: string;
+  mode: 'STANDALONE' | 'CUMULATIVE';
 }> {
   if (params.revisedQuotationVersionId === ctx.approvedQuotationVersionId) {
     throw new AppError({
@@ -510,15 +543,25 @@ async function assertValidRevisedQuotationVersionForVariation(
     });
   }
 
+  // The same quotation offer cannot be used to approve two variations,
+  // including when two preparations race. Only the variation service binds
+  // this pointer; serialize its check and write without changing the quote.
+  await tx.query(
+    `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+    [`handyman-variation-quotation:${params.revisedQuotationVersionId.toLowerCase()}`],
+  );
+
   const qvRes = await tx.query<{
     id: string;
     version_number: number;
     status: string;
+    current_offer: boolean;
     orig_version_number: number;
   }>(
     `SELECT qv.id,
             qv.version_number,
             qv.status,
+            (qv.valid_until IS NOT NULL AND qv.valid_until > clock_timestamp()) AS current_offer,
             orig_qv.version_number AS orig_version_number
        FROM handyman_quotation_versions qv
        JOIN handyman_quotations q
@@ -559,6 +602,31 @@ async function assertValidRevisedQuotationVersionForVariation(
         'revisedQuotationVersionId must be in ISSUED or APPROVED status.',
     });
   }
+  // Currency belongs to the immutable quotation lines, not the version row.
+  // Like quotation decisions, new consent cannot be recorded against an
+  // expired or undated issued offer. Once consent is recorded, passage of the
+  // offer deadline alone does not invalidate that existing decision.
+  if (params.requireCurrentOffer && (qv.status !== 'ISSUED' || !qv.current_offer)) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'A current, unapproved ISSUED revised quotation offer is required.',
+    });
+  }
+
+  const duplicate = await tx.query<{ id: string }>(
+    `SELECT id FROM handyman_scope_variations
+      WHERE revised_quotation_version_id = $1 AND id <> $2
+      LIMIT 1`,
+    [params.revisedQuotationVersionId, params.variationId],
+  );
+  if (duplicate.rows.length > 0) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'This revised quotation version is already bound to another variation.',
+    });
+  }
 
   const origLinesRes = await tx.query<{
     line_total: string;
@@ -589,13 +657,13 @@ async function assertValidRevisedQuotationVersionForVariation(
         'revisedQuotationVersionId has no quotation lines; a valid revised scope/charge representation is required.',
     });
   }
-  for (const row of revLinesRes.rows) {
+  for (const row of [...origLinesRes.rows, ...revLinesRes.rows]) {
     if (row.currency !== params.expectedCurrency) {
       throw new AppError({
         statusCode: 409,
         code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
         message:
-          'revisedQuotationVersionId line currency does not match the variation currency.',
+          'Original and revised quotation line currencies must match the variation currency.',
       });
     }
   }
@@ -649,6 +717,7 @@ async function assertValidRevisedQuotationVersionForVariation(
     originalVersionNumber: Number(qv.orig_version_number),
     originalQuotedTotal: fromCents(origTotalCents),
     revisedQuotedTotal: fromCents(revTotalCents),
+    mode: matchesCumulative && priorVarsRes.rows.length > 0 ? 'CUMULATIVE' : 'STANDALONE',
   };
 }
 
@@ -738,6 +807,9 @@ function stripCommercialForField(
   v: HandymanScopeVariationRecord,
   events: HandymanScopeVariationEventRecord[],
 ): FieldScopeVariationProjection {
+  const binding = addMaterialBindingFromEvents(v, events) ?? addLaborBindingFromEvents(v, events);
+  const decision = events.find((event) => event.eventType === 'TENANT_DECISION');
+  const approvedVersion = (decision?.metadata.consentSnapshot as { version?: unknown } | undefined)?.version;
   return {
     id: v.id,
     executionScopeId: v.executionScopeId,
@@ -745,6 +817,9 @@ function stripCommercialForField(
     variationType: v.variationType,
     lineType: v.lineType,
     targetQuotationLineId: v.targetQuotationLineId,
+    ...(binding ? { revisedQuotationVersionId: v.revisedQuotationVersionId, ...binding } : {}),
+    ...(binding && v.tenantDecisionOutcome === 'APPROVED' && typeof approvedVersion === 'number'
+      ? { approvedVariationVersion: approvedVersion } : {}),
     title: v.title,
     description: v.description,
     technicalFinding: v.technicalFinding,
@@ -1458,10 +1533,8 @@ export async function reviewScopeVariation(
       });
     }
 
-    await assertOperationsManagerForExecutionScope(
-      actorUserId,
-      ctx,
-      variation.originActorUserId,
+    await assertVariationCommercialAuthority(
+      tx, actorUserId, ctx, variation.originActorUserId,
     );
 
     const existingEv =
@@ -1585,6 +1658,8 @@ export async function prepareVariationRevisedQuotation(
     quotedUnitAmount: unknown;
     currency?: unknown;
     revisedQuotationVersionId?: unknown;
+    revisedQuotationLineId?: unknown;
+    workOrderId?: unknown;
     evidenceReference?: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -1617,9 +1692,11 @@ export async function prepareVariationRevisedQuotation(
   const revisedQuotationVersionId = assertUuid(
     input.revisedQuotationVersionId,
     'revisedQuotationVersionId',
-  );
+  ).toLowerCase();
 
   return withTransaction(async (tx) => {
+    // Serialize cumulative scope, the issued offer and its snapshot together.
+    await lockHandymanQcScope(tx, ctx.executionScopeId);
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -1634,11 +1711,22 @@ export async function prepareVariationRevisedQuotation(
       });
     }
 
-    await assertOperationsManagerForExecutionScope(
-      actorUserId,
-      ctx,
-      variation.originActorUserId,
+    await assertVariationCommercialAuthority(
+      tx, actorUserId, ctx, variation.originActorUserId,
     );
+
+    const isAddItem = variation.variationType === 'ADD';
+    const hasBindingInput = input.revisedQuotationLineId != null || input.workOrderId != null;
+    // Existing unbound ADD labor offers remain historical/lifecycle-compatible,
+    // but cannot create item-level labor execution without fresh pinned consent.
+    const needsBinding = isAddItem && (variation.lineType === 'MATERIAL' || hasBindingInput);
+    const binding = needsBinding ? {
+      revisedQuotationLineId: assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase(),
+      workOrderId: assertUuid(input.workOrderId, 'workOrderId').toLowerCase(),
+    } : null;
+    if (!isAddItem && hasBindingInput) {
+      throw AppError.validation('The quotation line and Work Order binding is only valid for an ADD variation.');
+    }
 
     const existingEv =
       await handymanScopeVariationRepository.findEventByIdempotencyKey(
@@ -1648,6 +1736,20 @@ export async function prepareVariationRevisedQuotation(
         idempotencyKey,
       );
     if (existingEv) {
+      if (
+        existingEv.actorUserId !== actorUserId ||
+        variation.revisedQuotationVersionId !== revisedQuotationVersionId ||
+        variation.quotedUnitAmount !== quotedUnitAmount ||
+        variation.currency !== currency ||
+        (binding !== null && (existingEv.metadata.revisedQuotationLineId !== binding.revisedQuotationLineId ||
+          existingEv.metadata.workOrderId !== binding.workOrderId))
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT,
+          message: 'idempotencyKey was already used with different quotation terms.',
+        });
+      }
       const events =
         await handymanScopeVariationRepository.listEventsByVariation(
           variation.id,
@@ -1681,9 +1783,18 @@ export async function prepareVariationRevisedQuotation(
         revisedQuotationVersionId,
         expectedCurrency: currency,
         expectedVariationDelta: quotedTotalDelta,
+        requireCurrentOffer: true,
       },
     );
 
+    if (binding) {
+      const validateBinding = variation.lineType === 'MATERIAL' ? assertAddMaterialQuoteBinding : assertAddLaborQuoteBinding;
+      await validateBinding(tx, {
+        executionScopeId: ctx.executionScopeId, quotationVersionId: revisedQuotationVersionId,
+        quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
+        quantity: variation.quantity, uomId: variation.uomId, quotedUnitAmount, currency,
+      });
+    }
     const evidenceReference =
       input.evidenceReference !== undefined && input.evidenceReference !== null
         ? assertNonEmptyText(
@@ -1706,6 +1817,10 @@ export async function prepareVariationRevisedQuotation(
         revisedQuotationVersionId,
       });
 
+    const offer = await createIssuedVariationOfferDocument(tx, updated, actorUserId, binding, {
+      mode: qvValidation.mode, originalQuotedTotal: qvValidation.originalQuotedTotal,
+      revisedQuotedTotal: qvValidation.revisedQuotedTotal,
+    });
     await handymanScopeVariationRepository.insertEvent(tx, {
       id: randomUUID(),
       clientId: ctx.clientId,
@@ -1724,9 +1839,12 @@ export async function prepareVariationRevisedQuotation(
         quotedTotalDelta,
         currency,
         revisedQuotationVersionId,
+        ...(binding ?? {}),
         revisedVersionNumber: qvValidation.revisedVersionNumber,
         originalQuotedTotal: qvValidation.originalQuotedTotal,
         revisedQuotedTotal: qvValidation.revisedQuotedTotal,
+        offerDocument: { id: offer.offerDocumentId, version: offer.offerDocumentVersion,
+          number: offer.number, pdfSha256: offer.offerPdfSha256, sourceSha256: offer.sourceSha256 },
       },
     });
 
@@ -1769,11 +1887,16 @@ export async function recordVariationTenantDecision(
   variationId: string,
   input: {
     decision: unknown;
-    revisedQuotationVersionId?: unknown;
+    revisedQuotationVersionId: unknown;
+    revisedQuotationLineId?: unknown;
+    workOrderId?: unknown;
+    offerDocumentId?: unknown;
+    offerDocumentVersion?: unknown;
+    offerPdfSha256?: unknown;
     evidenceReference: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
-    expectedVersion?: unknown;
+    expectedVersion: unknown;
   },
 ): Promise<{
   replayed: boolean;
@@ -1814,6 +1937,9 @@ export async function recordVariationTenantDecision(
       : null;
 
   return withTransaction(async (tx) => {
+    // PART04: serialize work-revision changes with BM verification and new
+    // dispatch/check-in/start/resume. Scope first, then variation (QC order).
+    await lockHandymanQcScope(tx, ctx.executionScopeId);
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -1830,6 +1956,33 @@ export async function recordVariationTenantDecision(
 
     await assertAuthorizedTenantDecisionActor(actorUserId, ctx, tx);
 
+    const bindingEvents = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+    const itemBinding = addMaterialBindingFromEvents(variation, bindingEvents) ?? addLaborBindingFromEvents(variation, bindingEvents);
+    if (variation.variationType === 'ADD' && (variation.lineType === 'MATERIAL' || itemBinding)) {
+      if (!itemBinding) {
+        throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'ADD requires a revised quotation-line and Work Order binding before Tenant consent.' });
+      }
+      if (assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase() !== itemBinding.revisedQuotationLineId ||
+          assertUuid(input.workOrderId, 'workOrderId').toLowerCase() !== itemBinding.workOrderId) {
+        throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'Tenant decision must identify the exact offered line and Work Order.' });
+      }
+    }
+
+    // The PIC must identify both the variation state and the issued offer
+    // they actually reviewed; neither may be silently inferred from the head.
+    const callerQvId = assertUuid(
+      input.revisedQuotationVersionId, 'revisedQuotationVersionId',
+    ).toLowerCase();
+    const expectedVersion = Number(input.expectedVersion);
+    if (
+      (typeof input.expectedVersion !== 'number' && typeof input.expectedVersion !== 'string') ||
+      !Number.isInteger(expectedVersion) || expectedVersion < 1
+    ) {
+      throw AppError.validation('expectedVersion must be a positive integer.');
+    }
+
     const existingEv =
       await handymanScopeVariationRepository.findEventByIdempotencyKey(
         tx,
@@ -1838,12 +1991,23 @@ export async function recordVariationTenantDecision(
         idempotencyKey,
       );
     if (existingEv) {
-      if (variation.tenantDecisionOutcome !== decisionOutcome) {
+      const pinned = existingEv.metadata.consentSnapshot as { version?: unknown; offerDocumentId?: unknown;
+        offerDocumentVersion?: unknown; offerPdfSha256?: unknown } | undefined;
+      if (
+        (pinned?.offerDocumentId !== undefined &&
+          (input.offerDocumentId !== pinned.offerDocumentId || Number(input.offerDocumentVersion) !== pinned.offerDocumentVersion ||
+            input.offerPdfSha256 !== pinned.offerPdfSha256)) ||
+        existingEv.actorUserId !== actorUserId ||
+        existingEv.metadata.decisionOutcome !== decisionOutcome ||
+        variation.revisedQuotationVersionId !== callerQvId ||
+        pinned?.version !== expectedVersion ||
+        existingEv.evidenceReference !== evidenceReference ||
+        existingEv.notes !== notes
+      ) {
         throw new AppError({
           statusCode: 409,
           code: ERROR_CODES.HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT,
-          message:
-            'idempotencyKey was already used with a different tenant decision outcome.',
+          message: 'idempotencyKey was already used with different tenant consent.',
         });
       }
       const events =
@@ -1854,7 +2018,7 @@ export async function recordVariationTenantDecision(
       return { replayed: true, variation, events };
     }
 
-    assertExpectedVersion(variation, input.expectedVersion);
+    assertExpectedVersion(variation, expectedVersion);
 
     if (variation.status !== 'REVISED_QUOTATION') {
       throw new AppError({
@@ -1878,22 +2042,13 @@ export async function recordVariationTenantDecision(
       });
     }
 
-    if (
-      input.revisedQuotationVersionId !== undefined &&
-      input.revisedQuotationVersionId !== null
-    ) {
-      const callerQvId = assertUuid(
-        input.revisedQuotationVersionId,
-        'revisedQuotationVersionId',
-      );
-      if (callerQvId !== variation.revisedQuotationVersionId) {
-        throw new AppError({
-          statusCode: 409,
-          code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-          message:
-            'Tenant decision revisedQuotationVersionId does not match the variation bound revisedQuotationVersionId.',
-        });
-      }
+    if (callerQvId !== variation.revisedQuotationVersionId) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Tenant decision revisedQuotationVersionId does not match the variation bound revisedQuotationVersionId.',
+      });
     }
 
     await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
@@ -1901,9 +2056,33 @@ export async function recordVariationTenantDecision(
       revisedQuotationVersionId: variation.revisedQuotationVersionId,
       expectedCurrency: variation.currency,
       expectedVariationDelta: variation.quotedTotalDelta,
+      requireCurrentOffer: true,
     });
+    if (itemBinding && variation.quotedUnitAmount !== null) {
+      const validateBinding = variation.lineType === 'MATERIAL' ? assertAddMaterialQuoteBinding : assertAddLaborQuoteBinding;
+      await validateBinding(tx, {
+        executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
+        quotationLineId: itemBinding.revisedQuotationLineId, workOrderId: itemBinding.workOrderId,
+        quantity: variation.quantity, uomId: variation.uomId,
+        quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
+      });
+    }
+    const offer = await requireVariationOfferForDecision(tx, variation, bindingEvents, itemBinding, input);
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+    // Evidence I/O can outlast an offer's deadline; recheck at the write.
+    const liveOffer = await tx.query<{ valid: boolean }>(
+      `SELECT status = 'ISSUED' AND valid_until IS NOT NULL AND valid_until > clock_timestamp() AS valid
+         FROM handyman_quotation_versions WHERE id = $1`,
+      [variation.revisedQuotationVersionId],
+    );
+    if (!liveOffer.rows[0]?.valid) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message: 'The revised quotation offer expired before Tenant consent was recorded.',
+      });
+    }
 
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
@@ -1932,6 +2111,7 @@ export async function recordVariationTenantDecision(
         decisionOutcome,
         variationType: variation.variationType,
         quantity: variation.quantity,
+        consentSnapshot: { ...variationConsentSnapshot(variation, variation.version, itemBinding), ...offer },
       },
     });
 
@@ -1996,6 +2176,9 @@ export async function authorizeVariationScope(
       : null;
 
   return withTransaction(async (tx) => {
+    // PART04: serialize work-revision changes with BM verification and new
+    // dispatch/check-in/start/resume. Scope first, then variation (QC order).
+    await lockHandymanQcScope(tx, ctx.executionScopeId);
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -2010,10 +2193,8 @@ export async function authorizeVariationScope(
       });
     }
 
-    await assertOperationsManagerForExecutionScope(
-      actorUserId,
-      ctx,
-      variation.originActorUserId,
+    await assertVariationCommercialAuthority(
+      tx, actorUserId, ctx, variation.originActorUserId,
     );
 
     const existingEv =
@@ -2067,12 +2248,43 @@ export async function authorizeVariationScope(
       });
     }
 
+    await assertPinnedVariationApproval(tx, variation, variation.version - 1);
+
     await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
       variationId: variation.id,
       revisedQuotationVersionId: variation.revisedQuotationVersionId,
       expectedCurrency: variation.currency,
       expectedVariationDelta: variation.quotedTotalDelta,
     });
+    if (variation.variationType === 'ADD' && variation.lineType === 'MATERIAL') {
+      const events = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+      const binding = addMaterialBindingFromEvents(variation, events);
+      if (!binding || variation.quotedUnitAmount === null) {
+        throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'ADD material requires the PIC-approved quotation-line and Work Order binding.' });
+      }
+      await assertAddMaterialQuoteBinding(tx, {
+        executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
+        quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
+        quantity: variation.quantity, uomId: variation.uomId,
+        quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
+      });
+    }
+
+    // Legacy ADD labor approvals without an item binding retain their historical
+    // lifecycle, but are never executable through the new item-level contract.
+    if (variation.variationType === 'ADD' && variation.lineType === 'LABOR') {
+      const events = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+      const binding = addLaborBindingFromEvents(variation, events);
+      if (binding && variation.quotedUnitAmount !== null) {
+        await assertAddLaborQuoteBinding(tx, {
+          executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
+          quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
+          quantity: variation.quantity, uomId: variation.uomId,
+          quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
+        });
+      }
+    }
 
     if (variation.variationType === 'REDUCE') {
       await validateReduceTargetAndRemainingQuantity(tx, ctx, {
@@ -2159,8 +2371,9 @@ export async function authorizeVariationScope(
 }
 
 /**
- * 7. EXECUTION — Assigned PIC Pekerjaan (Crew Lead) executes an AUTHORIZED_SCOPE
- *    variation.
+ * 7. EXECUTION — Assigned PIC Pekerjaan (Crew Lead) records an AUTHORIZED_SCOPE
+ *    variation's execution. This event does not gate actual Work Sessions:
+ *    those carry only an execution scope/assignment, not a variation or line.
  */
 export async function recordVariationExecution(
   actorUserId: string,
@@ -2249,6 +2462,20 @@ export async function recordVariationExecution(
         message: `Variation cannot enter EXECUTION from status ${variation.status}. Requires AUTHORIZED_SCOPE.`,
       });
     }
+    if (!variation.revisedQuotationVersionId || !variation.currency || !variation.quotedTotalDelta) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message: 'Variation execution requires the approved revised quotation.',
+      });
+    }
+    await assertPinnedVariationApproval(tx, variation, variation.version - 2);
+    await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
+      variationId: variation.id,
+      revisedQuotationVersionId: variation.revisedQuotationVersionId,
+      expectedCurrency: variation.currency,
+      expectedVariationDelta: variation.quotedTotalDelta,
+    });
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
@@ -2692,7 +2919,8 @@ export async function confirmVariationFinalChargeEligibility(
       !bast ||
       bast.status !== 'ACCEPTED' ||
       !bast.accepted_at ||
-      !bast.has_valid_sign_off
+      !bast.has_valid_sign_off ||
+      !(await hasVerifiedHandymanBastCustomerAcceptance(tx, bast.id))
     ) {
       throw new AppError({
         statusCode: 409,
@@ -2764,7 +2992,9 @@ export async function confirmVariationFinalChargeEligibility(
         FOR SHARE`,
       [ctx.executionScopeId, ctx.clientId],
     );
-    if (finalizedInvoiceRes.rows[0]) {
+    const officialInvoiceRes = await tx.query('SELECT id FROM handyman_official_invoices WHERE execution_scope_id=$1 AND client_id=$2 FOR SHARE',
+      [ctx.executionScopeId, ctx.clientId]);
+    if (finalizedInvoiceRes.rows[0] || officialInvoiceRes.rows[0]) {
       throw new AppError({
         statusCode: 409,
         code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,

@@ -1,10 +1,15 @@
+import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
+import { createIssuedQuotationDocument } from './handyman-quotation-document.service';
+import { permissionRepository } from '../permissions';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
-import { assertQuotationThreadBuildingAccess }
-  from './handyman-quotation-access';
+import {
+  assertHandymanQuotationPricingAuthority,
+  assertQuotationThreadBuildingAccess,
+} from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import {
@@ -168,6 +173,17 @@ async function requireAccessibleQuotation(
   // request's building_id (BE-02G; no same-Client shortcut). This helper
   // guards issue / expire / supersede.
   await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+  // PART 03E: issuance (and any later presentation change) is an Operations
+  // commercial act, so the thread's customer side is refused here too — the
+  // customer's own commercial act is the decision, which stays PIC-personal.
+  await assertHandymanQuotationPricingAuthority(
+    {
+      clientId: quotation.clientId,
+      handymanRequestId: quotation.handymanRequestId,
+      actorUserId,
+    },
+    tx,
+  );
   return quotation;
 }
 
@@ -184,6 +200,7 @@ export async function issueHandymanQuotationVersion(
     dpPercentage?: number | null;
     dpAmount?: number | null;
     dpTermsNotes?: string | null;
+    documentLanguage?: 'id' | 'en';
   },
   actorUserId: string,
 ): Promise<PublicHandymanQuotationVersion> {
@@ -195,6 +212,8 @@ export async function issueHandymanQuotationVersion(
   }
 
   return withTransaction(async (tx) => {
+    // The ISSUE and its document read one consistent source view.
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     const version = await handymanQuotationRepository.lockVersionById(
       tx,
       quotationVersionId,
@@ -208,11 +227,30 @@ export async function issueHandymanQuotationVersion(
     if (version.status !== 'DRAFT') {
       throw handymanQuotationInvalidTransitionError();
     }
+    const permissions = await permissionRepository.listActivePermissionCodesForUser(actorUserId, tx);
+    const actor = (await tx.query<{ status: string }>('SELECT status FROM users WHERE id=$1', [actorUserId])).rows[0];
+    if (actor?.status !== 'ACTIVE' || !permissions.includes('handyman.commercial.manage')) {
+      throw new AppError({ statusCode: 403, code: 'PERMISSION_DENIED',
+        message: 'Issuing an official quotation requires Handyman commercial authority.' });
+    }
+    await assertHandymanQuotationInspectionReady(tx, quotation.handymanRequestId);
     const lines = await handymanQuotationLineRepository.listLines(
       tx,
       version.id,
     );
     if (lines.length < 1) throw handymanQuotationNoLinesError();
+    const basisCount = await tx.query<{ n: string }>(`SELECT count(*)::text AS n
+      FROM handyman_quotation_line_price_bases WHERE quotation_version_id=$1`, [version.id]);
+    if (Number(basisCount.rows[0]?.n) !== lines.length) {
+      throw new AppError({ code: 'HANDYMAN_QUOTATION_PRICE_BASIS_REQUIRED', statusCode: 409,
+        message: 'Explicit commercial tax price basis is required for every quotation line before issue.' });
+    }
+    const warrantyCount = await tx.query<{ n: string }>(`SELECT count(*)::text AS n
+      FROM handyman_quotation_line_warranty_terms WHERE quotation_version_id=$1`, [version.id]);
+    if (Number(warrantyCount.rows[0]?.n) !== lines.length) {
+      throw new AppError({ code: 'HANDYMAN_QUOTATION_WARRANTY_TERMS_REQUIRED', statusCode: 409,
+        message: 'Explicit warranty terms, including NONE where applicable, are required for every quotation line before issue.' });
+    }
     if (!(validUntilMs > Date.now())) {
       throw handymanQuotationValidityInvalidError();
     }
@@ -284,6 +322,9 @@ export async function issueHandymanQuotationVersion(
         resolvedDpTerms,
       );
     if (!issued) throw handymanQuotationVersionNotFoundError();
+    // The transition, frozen source, number and PDF are one commit. Any
+    // renderer, master-data or storage failure rolls the transition back.
+    await createIssuedQuotationDocument(tx, quotation, issued, actorUserId, input.documentLanguage);
     await recordOperationalEvent(
       {
         clientId: quotation.clientId,

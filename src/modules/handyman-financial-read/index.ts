@@ -11,6 +11,7 @@ export type {
   HandymanFinancialReadStatus,
   HandymanFinancialRecordedState,
   HandymanFinancialEntitlementFact,
+  HandymanFinancialBmFee,
   HandymanFinancialEntitlementCorrection,
   HandymanFinancialSettlementEvent,
   HandymanFinancialSettlementInclusion,

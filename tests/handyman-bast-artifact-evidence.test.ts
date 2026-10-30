@@ -17,6 +17,8 @@ import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 import {
   computeBastArtifactVersion,
+  HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL, HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD,
+  computeHandymanBastCustomerConsentDigest,
   resolveApprovedSignOff,
   toHandymanBastAcceptanceReadContract,
   toHandymanBastArtifactReference,
@@ -78,6 +80,35 @@ function signOffRecord(
     createdAt: new Date(),
     ...overrides,
   };
+}
+
+/** Pure converter fixture only; real authority/storage are exercised by PART04's DB/HTTP suite. */
+function attestSyntheticCustomerConsent(
+  bast: HandymanBastRecord, event: HandymanBastEventRecord, signOff: HandymanBastSignOffRecord,
+) {
+  bast.issuedAt = new Date('2026-10-01T00:00:00.000Z');
+  bast.acceptedAt = new Date('2026-10-01T01:00:00.000Z');
+  bast.qcRunId = randomUUID();
+  Object.assign(event, {
+    clientId: bast.clientId, executionScopeId: bast.executionScopeId,
+    occurredAt: bast.acceptedAt, createdAt: bast.acceptedAt,
+  });
+  Object.assign(signOff, { clientId: bast.clientId, executionScopeId: bast.executionScopeId, createdAt: bast.acceptedAt });
+  const manifest = {
+    protocol: HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL, bastId: bast.id,
+    executionScopeId: bast.executionScopeId, approvedQuotationVersionId: randomUUID(),
+    clientId: bast.clientId, handymanRequestId: randomUUID(),
+    tenantCompanyId: randomUUID(), tenantPicId: randomUUID(), buildingId: randomUUID(),
+    issuedArtifactRef: `BAST/${bast.id}/v2`, issuedArtifactVersion: 2, issueEventId: randomUUID(),
+    issuedAt: bast.issuedAt.toISOString(), qcRunId: bast.qcRunId, actorUserId: event.actorUserId,
+    decision: 'ACCEPT' as const, rejectReason: null,
+    evidence: signOff.evidenceRecordId ? {
+      recordId: signOff.evidenceRecordId, finalizeEventId: randomUUID(),
+      files: [{ id: randomUUID(), mediaKind: 'PHOTO', contentType: 'image/png', byteSize: 12, sha256Digest: 'a'.repeat(64) }],
+    } : null,
+  };
+  signOff.signatureDigest = computeHandymanBastCustomerConsentDigest(manifest);
+  event.metadata = { customerConsent: { method: HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest, sha256Digest: signOff.signatureDigest } };
 }
 
 describe('CR-HM-17 P1 FIX01 — BAST artifact reference', () => {
@@ -177,6 +208,7 @@ describe('CR-HM-17 P1 FIX01 — approved signature-evidence binding', () => {
       signatureDigest: 'b'.repeat(64),
       evidenceRecordId: randomUUID(),
     });
+    attestSyntheticCustomerConsent(bast, acceptEvent, signOff);
     const result = resolveApprovedSignOff(
       bast,
       [acceptEvent],
@@ -185,9 +217,33 @@ describe('CR-HM-17 P1 FIX01 — approved signature-evidence binding', () => {
     assert.notEqual(result, null);
     assert.equal(result!.signOffId, signOff.id);
     assert.equal(result!.eventId, acceptEvent.id);
-    assert.equal(result!.signatureDigest, 'b'.repeat(64));
+    assert.equal(result!.signatureDigest, signOff.signatureDigest);
     assert.equal(result!.evidenceRecordId, signOff.evidenceRecordId);
     assert.equal(result!.actorUserId, acceptEvent.actorUserId);
+  });
+
+  it('never certifies legacy status + opaque digest without a backend personal-consent attestation', () => {
+    const bast = bastRecord({ status: 'ACCEPTED' });
+    const event = eventRecord({ eventType: 'ACCEPT', bastId: bast.id });
+    const signOff = signOffRecord({ bastId: bast.id, eventId: event.id });
+    assert.equal(resolveApprovedSignOff(bast, [event], [signOff]), null);
+  });
+
+  it('fails closed on changed actor, digest, version or malformed receipt instead of promoting it', () => {
+    const bast = bastRecord({ status: 'ACCEPTED' });
+    const event = eventRecord({ eventType: 'ACCEPT', bastId: bast.id });
+    const signOff = signOffRecord({ bastId: bast.id, eventId: event.id });
+    attestSyntheticCustomerConsent(bast, event, signOff);
+    assert.ok(resolveApprovedSignOff(bast, [event], [signOff]));
+    for (const metadata of [
+      { customerConsent: { method: 'STAFF_ATTESTATION' } },
+      { customerConsent: { method: HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest: {} } },
+    ]) assert.equal(resolveApprovedSignOff(bast, [{ ...event, metadata }], [signOff]), null);
+    assert.equal(resolveApprovedSignOff(bast, [{ ...event, actorUserId: randomUUID() }], [signOff]), null);
+    assert.equal(resolveApprovedSignOff(bast, [event], [{ ...signOff, signatureDigest: '0'.repeat(64) }]), null);
+    const receipt: any = event.metadata!.customerConsent;
+    receipt.manifest.issuedArtifactVersion = 3;
+    assert.equal(resolveApprovedSignOff(bast, [event], [signOff]), null);
   });
 
   it('returns null when REJECTED (not ACCEPTED)', () => {
@@ -236,6 +292,7 @@ describe('CR-HM-17 P1 FIX01 — acceptance read contract integration', () => {
       decision: 'ACCEPT',
       signatureDigest: 'c'.repeat(64),
     });
+    attestSyntheticCustomerConsent(bast, acceptEvent, signOff);
     const contract = toHandymanBastAcceptanceReadContract(
       bast,
       [acceptEvent],
@@ -243,7 +300,7 @@ describe('CR-HM-17 P1 FIX01 — acceptance read contract integration', () => {
     );
     assert.notEqual(contract.approvedSignOff, null);
     assert.equal(contract.signOffComplete, true);
-    assert.equal(contract.approvedSignOff!.signatureDigest, 'c'.repeat(64));
+    assert.equal(contract.approvedSignOff!.signatureDigest, signOff.signatureDigest);
   });
 
   it('signOffComplete is false when ACCEPTED but no events/sign-offs passed', () => {

@@ -63,14 +63,16 @@ const ISO_MAX = 40;
 
 function toCents(value: unknown): bigint {
   const text = typeof value === 'string' ? value : String(value ?? '0');
-  const [whole, fraction = ''] = text.split('.');
-  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+  const negative = text.startsWith('-');
+  const [whole, fraction = ''] = (negative ? text.slice(1) : text).split('.');
+  const magnitude = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+  return negative ? -magnitude : magnitude;
 }
 
 function fromCents(cents: bigint): string {
-  const whole = cents / 100n;
-  const fraction = cents % 100n;
-  return `${whole}.${fraction.toString().padStart(2, '0')}`;
+  const sign = cents < 0n ? '-' : '';
+  const magnitude = cents < 0n ? -cents : cents;
+  return `${sign}${magnitude / 100n}.${(magnitude % 100n).toString().padStart(2, '0')}`;
 }
 
 function text(value: unknown): string {

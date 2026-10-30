@@ -5,6 +5,7 @@ import type {
   HandymanFieldEvidencePurpose,
   HandymanFieldEvidenceUploadRecord,
   HandymanFieldEvidenceUploadStatus,
+  HandymanScopeEvidenceItem,
 } from './handyman-field-evidence.types';
 
 type DbExecutor = Pick<PoolClient, 'query'>;
@@ -16,6 +17,7 @@ interface EvidenceRow {
   building_id: string;
   handyman_request_id: string;
   execution_scope_id: string | null;
+  work_session_id: string | null;
   variation_id: string | null;
   material_purchase_record_id: string | null;
   purpose: HandymanFieldEvidencePurpose;
@@ -53,6 +55,7 @@ function mapEvidenceRow(row: EvidenceRow): HandymanFieldEvidenceUploadRecord {
     buildingId: row.building_id,
     handymanRequestId: row.handyman_request_id,
     executionScopeId: row.execution_scope_id,
+    workSessionId: row.work_session_id,
     variationId: row.variation_id,
     materialPurchaseRecordId: row.material_purchase_record_id,
     purpose: row.purpose,
@@ -80,7 +83,7 @@ function mapEvidenceRow(row: EvidenceRow): HandymanFieldEvidenceUploadRecord {
 
 const EVIDENCE_COLUMNS = `
   id, client_id, tenant_company_id, building_id, handyman_request_id,
-  execution_scope_id, variation_id, material_purchase_record_id,
+  execution_scope_id, work_session_id, variation_id, material_purchase_record_id,
   purpose, upload_status, original_file_name, mime_type, storage_key,
   declared_byte_size, verified_byte_size, sha256_checksum,
   attachment_reference, uploaded_by_user_id, uploaded_by_role,
@@ -140,9 +143,10 @@ export const handymanFieldEvidenceRepository = {
       clientId: string;
       tenantCompanyId: string;
       buildingId: string;
-      handymanRequestId: string;
-      executionScopeId: string | null;
-      variationId: string | null;
+    handymanRequestId: string;
+    executionScopeId: string | null;
+    workSessionId: string | null;
+    variationId: string | null;
       materialPurchaseRecordId: string | null;
       purpose: HandymanFieldEvidencePurpose;
       uploadStatus: HandymanFieldEvidenceUploadStatus;
@@ -163,14 +167,14 @@ export const handymanFieldEvidenceRepository = {
     const res = await tx.query<EvidenceRow>(
       `INSERT INTO handyman_field_evidence_uploads (
          id, client_id, tenant_company_id, building_id, handyman_request_id,
-         execution_scope_id, variation_id, material_purchase_record_id,
+         execution_scope_id, work_session_id, variation_id, material_purchase_record_id,
          purpose, upload_status, original_file_name, mime_type, storage_key,
          declared_byte_size, verified_byte_size, sha256_checksum,
          attachment_reference, uploaded_by_user_id, uploaded_by_role,
          notes, idempotency_key, verified_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22
+         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
        )
        RETURNING ${EVIDENCE_COLUMNS}`,
       [
@@ -180,6 +184,7 @@ export const handymanFieldEvidenceRepository = {
         input.buildingId,
         input.handymanRequestId,
         input.executionScopeId,
+        input.workSessionId,
         input.variationId,
         input.materialPurchaseRecordId,
         input.purpose,
@@ -256,6 +261,66 @@ export const handymanFieldEvidenceRepository = {
       [executionScopeId],
     );
     return res.rows.map(mapEvidenceRow);
+  },
+
+  /**
+   * CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — bounded discovery of
+   * CONFIRMED (VERIFIED) evidence for one execution scope. Pending/staged
+   * upload intents are never discoverable; storage keys and bytes never
+   * leave the repository.
+   */
+  async listVerifiedByExecutionScope(
+    executionScopeId: string,
+    page: { limit: number; offset: number },
+    tx?: DbExecutor,
+  ): Promise<HandymanScopeEvidenceItem[]> {
+    const db = tx ?? getPool();
+    const res = await db.query<{
+      id: string;
+      work_session_id: string | null;
+      purpose: HandymanFieldEvidencePurpose;
+      mime_type: HandymanFieldEvidenceMimeType;
+      sha256_checksum: string;
+      uploaded_by_user_id: string;
+      uploaded_by_role: 'PIC_PEKERJAAN' | 'INSPECTOR' | 'OPERATIONS_MANAGER';
+      upload_status: HandymanFieldEvidenceUploadStatus;
+      created_at: Date | string;
+    }>(
+      `SELECT id, work_session_id, purpose, mime_type, sha256_checksum,
+              uploaded_by_user_id, uploaded_by_role, upload_status, created_at
+         FROM handyman_field_evidence_uploads
+        WHERE execution_scope_id = $1
+          AND upload_status = 'VERIFIED'
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2 OFFSET $3`,
+      [executionScopeId, page.limit, page.offset],
+    );
+    return res.rows.map((row) => ({
+      evidenceId: row.id,
+      workSessionId: row.work_session_id,
+      purpose: row.purpose,
+      mimeType: row.mime_type,
+      sha256Checksum: row.sha256_checksum,
+      uploadedByUserId: row.uploaded_by_user_id,
+      uploadedByRole: row.uploaded_by_role,
+      uploadStatus: row.upload_status,
+      createdAt: toIso(row.created_at)!,
+    }));
+  },
+
+  async countVerifiedByExecutionScope(
+    executionScopeId: string,
+    tx?: DbExecutor,
+  ): Promise<number> {
+    const db = tx ?? getPool();
+    const res = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM handyman_field_evidence_uploads
+        WHERE execution_scope_id = $1
+          AND upload_status = 'VERIFIED'`,
+      [executionScopeId],
+    );
+    return res.rows[0]?.n ?? 0;
   },
 
   async listByRequest(

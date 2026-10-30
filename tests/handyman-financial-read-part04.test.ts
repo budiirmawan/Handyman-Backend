@@ -7,6 +7,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
+import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { userService } from '../src/modules/users';
 import { baseFixture, crewFixture, initHandymanFixtures, locationChain, scopeFixture }
@@ -96,6 +97,8 @@ async function fixture(){
   await activateHandymanCommercialAgreementVersion(actor,{
     versionId:version,effectiveFrom:new Date(Date.now()-60_000).toISOString(),
     idempotencyKey:id()});
+  await bindVerifiedTestBm({ actor, clientId: realm.client.id, buildingId: realm.building.id,
+    versionId: version, query: q });
   const opened=await openHandymanCustomerTransaction({
     executionScopeId:scope.id,idempotencyKey:id()},actor);
   const line=(await q(`SELECT id FROM handyman_quotation_lines
@@ -165,6 +168,7 @@ describe('CR-HM-14 PART 04 financial read contract / firewall',()=>{
     assert.equal(bm.bmFee?.agreementVersionId!==null,true);
     assert.equal(bm.bmFee?.ratePercent,'2.5000');
     assert.equal(bm.bmFee?.beneficiaryReferenceId,f.realm.client.id);
+    assert.equal('beneficiaryKind' in bm.bmFee!,false,'legacy publication keeps its original shape');
     assert.equal(bm.basisKind,'LABOR_ONLY');
     assert.equal(bm.amount,'2.50');
     assert.equal('idempotencyKey' in bm,false);

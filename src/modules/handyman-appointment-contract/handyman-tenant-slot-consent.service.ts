@@ -166,7 +166,7 @@ export async function acceptTenantSlotChoice(
     const live = (await tx.query<LiveVisitRow>(
       `SELECT id, state, version, start_at AS "startAt", end_at AS "endAt"
          FROM handyman_visit_appointments
-        WHERE handyman_request_id = $1 AND kind = $2
+        WHERE handyman_request_id = $1 AND kind = $2 AND warranty_rework_id IS NULL
           AND state IN ('PROPOSED', 'TENANT_SELECTED', 'CONFIRMED', 'IN_PROGRESS')
         FOR UPDATE`,
       [request.id, assertion.kind],

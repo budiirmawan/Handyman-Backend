@@ -263,6 +263,7 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // CR-HM-QC-AUTHORITY-01: explicitly granted Handyman QC authority.
   // A reporting line + exact Building access are ALSO required at runtime.
   { code: 'handyman.qc.manage', name: 'Inspect and decide Handyman QC' },
+  { code: 'handyman.warranty.assess', name: 'Assess Handyman warranty claims' },
   { code: 'handyman.qc.configure', name: 'Configure Handyman QC checklist requirements' },
   // CR-HM-BAST-HTTP-01: explicitly granted Handyman BAST worker authority.
   // GATES the worker BAST transport (PREPARE / ISSUE / VOID) only; at runtime
@@ -282,6 +283,14 @@ export const FOUNDATION_PERMISSIONS: readonly {
     name: 'Author Handyman commercial agreements, pricing and BM-fee terms',
   },
   { code: 'handyman.finance.read', name: 'Read Handyman financial transactions' },
+  { code: 'handyman.customer_tax.read', name: 'Access customer tax classification evidence references' },
+  { code: 'handyman.tax_identity.approve', name: 'Approve or reject Handyman tax identities' },
+  { code: 'handyman.tax_rule.approve', name: 'Approve or reject Handyman tax rules' },
+  { code: 'handyman.bm_tax_case.approve', name: 'Approve or reject BM commission tax cases' },
+  { code: 'handyman.bm_bank_account.manage', name: 'Propose BM beneficiary bank account changes' },
+  { code: 'handyman.bm_bank_account.approve', name: 'Approve or reject BM beneficiary bank account changes' },
+  { code: 'handyman.bm_settlement.approve', name: 'Approve BM settlement authorization' },
+  { code: 'handyman.bm_settlement.verify_payment', name: 'Verify BM settlement payment evidence' },
   {
     code: 'handyman.finance.manage',
     name: 'Execute Handyman finance commands (ledger, allocations, corrections, payment verification)',
@@ -834,6 +843,8 @@ export const FOUNDATION_PERMISSIONS: readonly {
 export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new Set([
   'handyman.qc.manage',
   'handyman.qc.configure',
+  // Explicit assessment authority is never inherited by any seeded role.
+  'handyman.warranty.assess',
   // CR-HM-BAST-HTTP-01 — worker BAST PREPARE/ISSUE/VOID authority. Issuing or
   // voiding a BAST document is an explicit field authority: it must be
   // assigned as a deliberate administrative act, never inherited by being a
@@ -848,6 +859,15 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   'handyman.commercial.manage',
   'handyman.finance.read',
   'handyman.finance.manage',
+  // Dedicated checker authority: never granted automatically, including to PLATFORM_ADMIN.
+  'handyman.tax_identity.approve',
+  'handyman.tax_rule.approve',
+  'handyman.bm_tax_case.approve',
+  'handyman.bm_bank_account.manage',
+  'handyman.bm_bank_account.approve',
+  'handyman.bm_settlement.approve',
+  'handyman.bm_settlement.verify_payment',
+  'handyman.customer_tax.read',
   'handyman.settlement.manage',
   // CR-HM-WORKER-COMPETENCY-01 PART 02 — verifying (or rejecting) a worker's
   // individual certificate is an attestation about a person's competence and

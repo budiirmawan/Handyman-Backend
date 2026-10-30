@@ -1,12 +1,4 @@
-/**
- * CR-HM-15 PART 03 — Handyman FREE WARRANTY REWORK barrel.
- * Rework bound to the APPROVED claim and, through it, to the service
- * warranty and its ORIGINAL execution scope, with the state-gated
- * PROPOSE/ACCEPT/START/COMPLETE/VERIFY ladder and a read-only CR-HM-10
- * evidence + QC verification bind. No HTTP/OpenAPI, no chargeable
- * additional-work execution (PART 04), no pricing/payment/settlement, no
- * FM/SaaS coupling.
- */
+/** Existing warranty rework lifecycle and the separate claim-bound execution projection. */
 
 export {
   HANDYMAN_SERVICE_WARRANTY_REWORK_STATUSES,
@@ -64,3 +56,6 @@ export {
   completeHandymanServiceWarrantyRework,
   verifyHandymanServiceWarrantyRework,
 } from './handyman-service-warranty-rework.service';
+
+export { createWarrantyReworkExecution, readWarrantyReworkExecution }
+  from './handyman-warranty-rework-execution.service';

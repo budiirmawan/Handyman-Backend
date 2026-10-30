@@ -1,13 +1,17 @@
 import { AppError } from '../../shared/errors';
-import { withTransaction } from '../../database';
+import { getPool, withTransaction } from '../../database';
+import { parseTaxPriceBasis, writeDraftLinePriceBasis, type HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
 import { isValidUuid } from '../clients';
 import { recordOperationalEvent } from '../operational-events';
 import { priceCatalogLookupService } from '../price-catalog-entries';
 import {
   handymanServiceRequestRepository,
 } from '../handyman-requests';
-import { assertQuotationThreadBuildingAccess }
-  from './handyman-quotation-access';
+import {
+  assertHandymanQuotationPricingAuthority,
+  assertQuotationThreadBuildingAccess,
+  assertQuotationVersionCustomerVisibility,
+} from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import { handymanQuotationNotFoundError } from './handyman-quotation.errors';
@@ -19,8 +23,10 @@ import {
 } from './handyman-quotation.errors';
 import {
   HANDYMAN_QUOTATION_CURRENCIES,
+  HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_LINE_TYPES,
   type AddHandymanQuotationLineInput,
+  type HandymanQuotationLineOriginKind,
   type HandymanQuotationLineRecord,
   type HandymanQuotationLineServiceView,
   type PublicHandymanQuotationTotals,
@@ -65,6 +71,7 @@ function toServiceLineView(
     lineTotal: row.lineTotal,
     currency: row.currency,
     sourceItemId: row.sourceItemId,
+    originKind: row.originKind,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -119,6 +126,17 @@ function validateInput(
       );
     }
   }
+  if (
+    input.originKind !== undefined &&
+    !(HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS as readonly string[]).includes(
+      input.originKind,
+    )
+  ) {
+    throw handymanQuotationLineInvalidError(
+      'originKind must be CATALOG or MANUAL_ONE_TIME when declared.',
+    );
+  }
+  if (input.taxPriceBasis !== undefined) parseTaxPriceBasis(input.taxPriceBasis);
   return { description };
 }
 
@@ -158,6 +176,16 @@ export async function addHandymanQuotationLine(
     //    traced to the parent request's building_id (BE-02G; no
     //    same-Client shortcut).
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+    // PART 03E: only an authorized Handyman Operations actor may price a
+    // quotation; the thread's customer side is refused even on a DRAFT.
+    await assertHandymanQuotationPricingAuthority(
+      {
+        clientId: quotation.clientId,
+        handymanRequestId: quotation.handymanRequestId,
+        actorUserId,
+      },
+      tx,
+    );
 
     // 4) Client-scoped master checks (no cross-client master references).
     if (
@@ -192,6 +220,41 @@ export async function addHandymanQuotationLine(
       );
     if (existingCurrency && existingCurrency !== input.currency) {
       throw handymanQuotationCurrencyMismatchError();
+    }
+
+    /*
+     * 5b) Origin provenance (CR-HM-MANUAL-QUOTATION-01 PART 03A, 0489). It is
+     *     DERIVED from the parent request's lane, never taken from the caller's
+     *     word alone: a manual-origin (unlisted-intake) request has no Service
+     *     Catalog anchor, so every line on it is MANUAL_ONE_TIME and an
+     *     attempted CATALOG claim is refused rather than silently accepted. On
+     *     the catalog lane an explicit MANUAL_ONE_TIME claim is honored only
+     *     when the governed pricing authority already recorded a MANUAL_REVIEW
+     *     resolution for the request — no resolution, quote rule or catalog
+     *     reference is invented here.
+     */
+    const originContext =
+      await handymanQuotationLineRepository.findRequestOriginContext(
+        tx,
+        quotation.handymanRequestId,
+        quotation.clientId,
+      );
+    if (!originContext) throw handymanQuotationNotFoundError();
+    let originKind: HandymanQuotationLineOriginKind = 'CATALOG';
+    if (originContext.intakeSource === 'UNLISTED_TRIAGE') {
+      if (input.originKind === 'CATALOG') {
+        throw handymanQuotationLineInvalidError(
+          'A manual-origin service request has no Service Catalog anchor, so its lines cannot be recorded as CATALOG origin.',
+        );
+      }
+      originKind = 'MANUAL_ONE_TIME';
+    } else if (input.originKind === 'MANUAL_ONE_TIME') {
+      if (!originContext.hasManualReviewResolution) {
+        throw handymanQuotationLineInvalidError(
+          'A MANUAL_ONE_TIME line requires a governed MANUAL_REVIEW quote resolution on this request.',
+        );
+      }
+      originKind = 'MANUAL_ONE_TIME';
     }
 
     // 6) Governed reference-price snapshot for MATERIAL provenance:
@@ -237,8 +300,12 @@ export async function addHandymanQuotationLine(
       finalQuotedUnitAmount: input.finalQuotedUnitAmount,
       currency: input.currency,
       sourceItemId: input.sourceItemId ?? null,
+      originKind,
       createdByUserId: actorUserId,
     });
+    if (input.taxPriceBasis !== undefined) {
+      await writeDraftLinePriceBasis(tx, version.id, line.id, parseTaxPriceBasis(input.taxPriceBasis), actorUserId);
+    }
     await recordOperationalEvent(
       {
         clientId: quotation.clientId,
@@ -252,12 +319,13 @@ export async function addHandymanQuotationLine(
           quotationVersionId: version.id,
           quotationLineId: line.id,
           lineType: line.lineType,
+          originKind: line.originKind,
           handymanRequestId: quotation.handymanRequestId,
         },
       },
       tx,
     );
-    return toServiceLineView(line);
+    return { ...toServiceLineView(line), taxPriceBasis: input.taxPriceBasis ?? null };
   });
 }
 
@@ -285,11 +353,28 @@ export async function listHandymanQuotationVersionLines(
     quotation,
     actorUserId,
   );
+  // PART 03D: this thread's customer never sees an un-issued DRAFT's lines.
+  await assertQuotationVersionCustomerVisibility(undefined as never, {
+    quotation,
+    versionStatus: version.status,
+    actorUserId,
+  });
   const lines = await handymanQuotationLineRepository.listLines(
     undefined,
     version.id,
   );
-  return lines.map(toServiceLineView);
+  const bases = await getPool().query<{ quotation_line_id: string; tax_price_basis: HandymanTaxPriceBasis }>(
+    'SELECT quotation_line_id,tax_price_basis FROM handyman_quotation_line_price_bases WHERE quotation_version_id=$1', [version.id]);
+  const byLine = new Map(bases.rows.map(row => [row.quotation_line_id, row.tax_price_basis]));
+  const warranties = await getPool().query<{ quotation_line_id: string; replaces_quotation_line_id: string | null; terms: import('./handyman-quotation-warranty-terms').WarrantyTerms }>(
+    `SELECT quotation_line_id,replaces_quotation_line_id,jsonb_build_object('coverage',coverage,'coveredServices',covered_services,'coveredMaterials',covered_materials,
+      'conditions',conditions,'exclusions',exclusions,'commencementRule',commencement_rule,'endRule',end_rule,
+      'durationDays',duration_days,'fixedEndDate',to_char(fixed_end_date,'YYYY-MM-DD')) AS terms
+      FROM handyman_quotation_line_warranty_terms WHERE quotation_version_id=$1`, [version.id]);
+  const warrantyByLine = new Map(warranties.rows.map(row => [row.quotation_line_id, row]));
+  return lines.map(line => ({ ...toServiceLineView(line), taxPriceBasis: byLine.get(line.id) ?? null,
+    warrantyTerms: warrantyByLine.get(line.id)?.terms ?? null,
+    replacesQuotationLineId: warrantyByLine.get(line.id)?.replaces_quotation_line_id ?? null }));
 }
 
 /** Bounded derived totals (F4/F5: derived, never persisted). */
@@ -316,6 +401,12 @@ export async function getHandymanQuotationVersionTotals(
     quotation,
     actorUserId,
   );
+  // PART 03D: derived prices are gated exactly like the lines above.
+  await assertQuotationVersionCustomerVisibility(undefined as never, {
+    quotation,
+    versionStatus: version.status,
+    actorUserId,
+  });
   const sums = await handymanQuotationLineRepository.sumLines(
     undefined,
     version.id,

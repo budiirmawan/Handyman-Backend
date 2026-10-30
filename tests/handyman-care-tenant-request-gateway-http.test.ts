@@ -835,6 +835,145 @@ describe('CR-HM-CC-TENANT-REQUEST-GATEWAY-01 staff-assisted creation gateway', (
     ).rows[0];
     assert.equal(untouched.status, 'INTAKE');
   });
+  it('CARE DATE: dedicated Care intake atomically persists a preference, without tenant login, manage permission or booking', async () => {
+    const realm = await createRealm('Care date');
+    const care = await createCareStaff(realm.building.id);
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [realm.building.id]);
+    const body = { ...createBody(realm, 'Tenant-requested time'), tenantPicId: undefined,
+      preferredWindowStart: '2031-12-10T10:00:00+07:00', preferredWindowEnd: '2031-12-10T12:00:00+07:00' };
+    const response = await postGateway(care.token, realm.building.id, body, randomUUID());
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const created = response.body.data;
+    const pref = created.schedulingReadiness;
+    assert.deepEqual(Object.keys(pref).sort(), ['id','timezone','preferredWindowStart','preferredWindowEnd','status','supersedesReadinessId'].sort());
+    assert.equal(pref.preferredWindowStart, '2031-12-10T03:00:00.000Z');
+    assert.equal(pref.preferredWindowEnd, '2031-12-10T05:00:00.000Z');
+    assert.equal(pref.timezone, 'Asia/Jakarta');
+    assert.equal(pref.status, 'ACTIVE');
+    assert.equal(pref.supersedesReadinessId, null);
+    const row = (await pool.query(`SELECT s.*, r.created_by_user_id AS request_creator, r.tenant_pic_id
+      FROM handyman_scheduling_readiness s JOIN handyman_service_requests r ON r.id=s.handyman_request_id WHERE r.id=$1`, [created.id])).rows[0];
+    assert.equal(row.id, pref.id);
+    assert.equal(row.client_id, realm.client.id);
+    assert.equal(row.created_by_user_id, care.userId);
+    assert.equal(row.request_creator, care.userId);
+    assert.equal(row.tenant_pic_id, null);
+    assert.notEqual(row.created_by_user_id, realm.picUserId);
+    for (const key of ['clientId','tenantCompanyId','tenantPicId','createdByUserId','channelAttributionId']) {
+      assert.equal(key in created, false, key);
+      assert.equal(key in pref, false, key);
+    }
+    const sideEffects = (await pool.query(`SELECT
+      (SELECT count(*)::int FROM handyman_visit_appointments WHERE handyman_request_id=$1) AS visits,
+      (SELECT count(*)::int FROM handyman_execution_scopes WHERE handyman_request_id=$1) AS scopes`, [created.id])).rows[0];
+    assert.deepEqual(sideEffects, { visits: 0, scopes: 0 });
+    assert.equal(created.status, 'INTAKE');
+    // No broad scheduling/manage capability is granted to the Care session.
+    const denied = await api().post(`${V1}/handyman/requests/${created.id}/scheduling-readiness`)
+      .set(auth(care.token)).send(body);
+    assert.equal(denied.status, 403);
+  });
+
+  it('CARE DATE: canonical date pair participates in idempotency; replay creates neither a second preference nor a reschedule', async () => {
+    const realm = await createRealm('Care date idempotency');
+    const care = await createCareStaff(realm.building.id);
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [realm.building.id]);
+    const body = { ...createBody(realm, 'Date replay'), preferredWindowStart: '2031-12-11T10:00:00+07:00', preferredWindowEnd: '2031-12-11T11:00:00+07:00' };
+    const key = randomUUID();
+    const [first, concurrent] = await Promise.all([
+      postGateway(care.token, realm.building.id, body, key),
+      postGateway(care.token, realm.building.id, body, key),
+    ]);
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    assert.equal(concurrent.status, 201, JSON.stringify(concurrent.body));
+    assert.deepEqual(concurrent.body.data, first.body.data);
+    for (const equivalent of [body, { ...body, preferredWindowStart: '2031-12-11T03:00:00.000Z', preferredWindowEnd: '2031-12-11T04:00:00Z' }]) {
+      const replay = await postGateway(care.token, realm.building.id, equivalent, key);
+      assert.equal(replay.status, 201, JSON.stringify(replay.body));
+      assert.deepEqual(replay.body.data, first.body.data);
+    }
+    const changed = await postGateway(care.token, realm.building.id,
+      { ...body, preferredWindowEnd: '2031-12-11T12:00:00+07:00' }, key);
+    assert.equal(changed.status, 409);
+    assert.equal(changed.body.error.code, 'IDEMPOTENCY_CONFLICT');
+    const omitted = await postGateway(care.token, realm.building.id, createBody(realm, 'Date replay'), key);
+    assert.equal(omitted.status, 409);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE handyman_request_id=$1', [first.body.data.id])).rows[0].n, 1);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM operational_events WHERE entity_id=$1 AND event_type='HANDYMAN_SCHEDULING_READINESS_CREATED'", [first.body.data.schedulingReadiness.id])).rows[0].n, 1);
+  });
+
+  it('CARE DATE: incomplete, malformed, ambiguous and reversed dates are rejected together without writes', async () => {
+    const realm = await createRealm('Care invalid dates');
+    const care = await createCareStaff(realm.building.id);
+    const start = '2031-12-10T10:00:00+07:00';
+    const end = '2031-12-10T12:00:00+07:00';
+    for (const dates of [
+      {preferredWindowStart:start}, {preferredWindowEnd:end},
+      {preferredWindowStart:null,preferredWindowEnd:null},
+      {preferredWindowStart:'',preferredWindowEnd:end},
+      {preferredWindowStart:7,preferredWindowEnd:end},
+      {preferredWindowStart:'2031-12-10T10:00:00',preferredWindowEnd:end},
+      {preferredWindowStart:'2031-02-30T10:00:00Z',preferredWindowEnd:'2031-03-01T12:00:00Z'},
+      {preferredWindowStart:end,preferredWindowEnd:start},
+      {preferredWindowStart:start,preferredWindowEnd:start},
+    ]) {
+      const response = await postGateway(care.token, realm.building.id, { ...createBody(realm,'Invalid dates'), ...dates }, randomUUID());
+      assert.equal(response.status, 400, JSON.stringify(response.body));
+      assert.equal(response.body.error.code, 'HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID');
+    }
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_service_requests WHERE created_by_user_id=$1', [care.userId])).rows[0].n, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE client_id=$1', [realm.client.id])).rows[0].n, 0);
+  });
+
+  it('CARE DATE: server timezone failure rolls back creation/claim; clients without dates still work with the same key', async () => {
+    const realm = await createRealm('Care unset timezone');
+    const care = await createCareStaff(realm.building.id);
+    await pool.query('UPDATE buildings SET timezone=NULL WHERE id=$1', [realm.building.id]);
+    const body = createBody(realm,'Timezone-independent legacy intake');
+    const key = randomUUID();
+    const failed = await postGateway(care.token, realm.building.id, { ...body,
+      preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z' }, key);
+    assert.equal(failed.status, 400, JSON.stringify(failed.body));
+    assert.equal(failed.body.error.code, 'HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE');
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_service_requests WHERE created_by_user_id=$1', [care.userId])).rows[0].n, 0);
+    const retry = await postGateway(care.token, realm.building.id, body, key);
+    assert.equal(retry.status, 201, JSON.stringify(retry.body));
+    assert.equal('schedulingReadiness' in retry.body.data, false);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE handyman_request_id=$1', [retry.body.data.id])).rows[0].n, 0);
+  });
+
+  it('CARE DATE: audit failure rolls request, preference, attribution and idempotency claim back together', async () => {
+    const realm = await createRealm('Care preference atomicity');
+    const care = await createCareStaff(realm.building.id);
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [realm.building.id]);
+    const body = { ...createBody(realm,'Atomic preference'), preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z' };
+    const key = randomUUID();
+    await pool.query("ALTER TABLE operational_events ADD CONSTRAINT care_date_fail_audit CHECK (event_type <> 'HANDYMAN_SCHEDULING_READINESS_CREATED') NOT VALID");
+    try {
+      const failed = await postGateway(care.token, realm.building.id, body, key);
+      assert.equal(failed.status, 500, JSON.stringify(failed.body));
+      for (const table of ['handyman_service_requests','handyman_channel_attributions','handyman_scheduling_readiness']) {
+        assert.equal((await pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE client_id=$1`, [realm.client.id])).rows[0].n, 0, table);
+      }
+    } finally { await pool.query('ALTER TABLE operational_events DROP CONSTRAINT care_date_fail_audit'); }
+    const retried = await postGateway(care.token, realm.building.id, body, key);
+    assert.equal(retried.status, 201, JSON.stringify(retried.body));
+    assert.ok(retried.body.data.schedulingReadiness.id);
+  });
+
+  it('CARE DATE: dates do not bypass Building/Tenant authority or allow caller timezone/creator overrides', async () => {
+    const realm = await createRealm('Care date scope');
+    const other = await createRealm('Other date scope');
+    const care = await createCareStaff(realm.building.id);
+    const dates = {preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z'};
+    assert.equal((await postGateway(care.token,other.building.id,{...createBody(other,'Foreign'),...dates},randomUUID())).status,403);
+    assert.equal((await postGateway(care.token,realm.building.id,{...createBody(other,'Foreign tenant'),...dates},randomUUID())).status,403);
+    for (const override of [{timezone:'UTC'},{clientId:other.client.id},{createdByUserId:realm.picUserId},{careActorId:randomUUID()}]) {
+      assert.equal((await postGateway(care.token,realm.building.id,{...createBody(realm,'Spoof'),...dates,...override},randomUUID())).status,400);
+    }
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE client_id=ANY($1::uuid[])', [[realm.client.id,other.client.id]])).rows[0].n,0);
+  });
+
 });
 
 async function createSessionWithoutPermissions(): Promise<string> {

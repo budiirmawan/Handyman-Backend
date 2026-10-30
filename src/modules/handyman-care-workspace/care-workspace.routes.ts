@@ -1,3 +1,18 @@
+import { logger } from '../../shared/logger';
+import { recordWorkspaceFinalReceiptDownload } from '../handyman-final-receipts/handyman-final-receipt-delivery.service';
+import { downloadWarrantyCertificateForCare } from '../handyman-warranty-certificates/handyman-warranty-certificate.service';
+import { sendWarrantyCertificatePdf } from '../handyman-warranty-certificates/handyman-warranty-certificate.routes';
+import { downloadFinalReceiptForCare } from '../handyman-final-receipts/handyman-final-receipt.service';
+import { serveFinalReceiptPdf } from '../handyman-final-receipts/handyman-final-receipt.routes';
+import { downloadOfficialHandymanInvoiceForCare } from '../handyman-official-invoices/handyman-official-invoice.service';
+import { sendOfficialInvoicePdf } from '../handyman-official-invoices/handyman-official-invoice.routes';
+import { downloadOfficialBastDocumentForCare } from '../handyman-bast/handyman-bast-document.service';
+import { downloadQuotationDocumentForCare } from '../handyman-quotations/handyman-quotation-document.service';
+import { downloadVariationOfferDocumentForCare } from '../handyman-scope-variations/handyman-variation-offer-document.service';
+import { recordWorkspaceCareDownload } from '../handyman-quotations/handyman-quotation-delivery.service';
+import { sendQuotationDocumentPdf } from '../handyman-quotations/handyman-quotation-document.routes';
+import { downloadTenantPaymentReceiptForCare } from '../handyman-tenant-receipts/handyman-tenant-receipt.service';
+import { sendPaymentReceiptPdf } from '../handyman-tenant-receipts/handyman-tenant-receipt.routes';
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
 import { getCareWorkspaceOperationalProjection } from './care-workspace-operational.service';
 import multer from 'multer';
@@ -135,6 +150,101 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await getCareWorkspaceOperationalProjection(
         match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/warranty-certificates/:certificateId/document.pdf', async (req,res,next) => {
+    res.setHeader('Cache-Control','private, no-store');
+    try {
+      const match=/^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length))
+        throw AppError.validation('Warranty download does not accept a body.');
+      sendWarrantyCertificatePdf(res,await downloadWarrantyCertificateForCare(match[1],req.params.requestId,req.params.certificateId,req.query));
+    } catch(error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/invoices/:invoiceId/final-receipt.pdf', async (req,res,next) => {
+    res.setHeader('Cache-Control','private, no-store');
+    try {
+      const match=/^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body && (typeof req.body!=='object' || Array.isArray(req.body) || Object.keys(req.body).length))
+        throw AppError.validation('Final Receipt download does not accept a body.');
+      if (req.method!=='GET') { res.status(405).end(); return; }
+      const receipt=await downloadFinalReceiptForCare(match[1],req.params.requestId,req.params.invoiceId,req.query);
+      if (req.aborted || res.destroyed) return;
+      await recordWorkspaceFinalReceiptDownload(await resolveCareWorkspacePrincipal(match[1]),req.params.requestId as string,receipt,
+        ()=>serveFinalReceiptPdf(res,receipt));
+    } catch(error) {
+      if (res.headersSent || res.destroyed) {
+        if (res.writableFinished) logger.error('Final Receipt download journal commit failed after response.',
+          {errorMessage:error instanceof Error?error.message:String(error)});
+      } else next(error);
+    }
+  });
+  router.get('/handyman/care/requests/:requestId/invoices/:invoiceId/document.pdf', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length))
+        throw AppError.validation('Invoice download does not accept a body.');
+      sendOfficialInvoicePdf(res, await downloadOfficialHandymanInvoiceForCare(match[1],req.params.requestId,req.params.invoiceId,req.query));
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/basts/:bastId/document.pdf', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length)) {
+        throw AppError.validation('BAST document download does not accept a body.');
+      }
+      const document = await downloadOfficialBastDocumentForCare(match[1], req.params.requestId, req.params.bastId, req.query);
+      res.setHeader('X-BAST-Document-Id', document.id);
+      res.setHeader('X-BAST-Document-Number', document.number);
+      sendQuotationDocumentPdf(res, document);
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/variations/:variationId/offer.pdf', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length)) {
+        throw AppError.validation('Variation offer download does not accept a body.');
+      }
+      const document = await downloadVariationOfferDocumentForCare(match[1], req.params.requestId, req.params.variationId, req.query);
+      res.setHeader('X-Variation-Offer-Id', document.id);
+      res.setHeader('X-Variation-Offer-Version', String(document.version));
+      sendQuotationDocumentPdf(res, document);
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/quotation-versions/:quotationVersionId/document.pdf', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length)) {
+        throw AppError.validation('Quotation document download does not accept a body.');
+      }
+      const document = await downloadQuotationDocumentForCare(match[1], req.params.requestId,
+        req.params.quotationVersionId, req.query);
+      await recordWorkspaceCareDownload(match[1], req.params.requestId as string, req.params.quotationVersionId as string, document.pdfChecksum);
+      sendQuotationDocumentPdf(res, document);
+    } catch (error) { next(error); }
+  });
+  router.get([
+    '/handyman/care/requests/:requestId/payments/:paymentId/receipt.pdf',
+    '/handyman/care/requests/:requestId/invoices/:invoiceId/payments/:paymentId/receipt.pdf',
+  ], async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      const invoiceId = 'invoiceId' in req.params ? req.params.invoiceId : undefined;
+      const receipt = await downloadTenantPaymentReceiptForCare(match[1], req.params.requestId,
+        req.params.paymentId, req.query, invoiceId);
+      sendPaymentReceiptPdf(res, receipt);
     } catch (error) { next(error); }
   });
   router.post([

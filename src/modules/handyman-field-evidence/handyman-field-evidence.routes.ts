@@ -8,6 +8,7 @@ import {
   confirmFieldEvidenceUpload,
   createPresignedFieldEvidenceIntent,
   getFieldEvidenceMetadata,
+  listScopeFieldEvidence,
   putStagedFieldEvidenceBytes,
   readFieldEvidenceBytes,
   uploadFieldEvidenceBinary,
@@ -122,6 +123,28 @@ handymanFieldEvidenceRouter.post(
         file: req.file ?? null,
       });
       sendSuccess(res, result, result.replayed ? 200 : 201);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// CR-HM-MOBILE-EVIDENCE-E2E-01 PART 01B-BE — read-only discovery of
+// CONFIRMED field evidence for one exact execution scope. Route-level
+// authentication only; field authority (Operations / Crew Leader /
+// Inspector / appointed QC Supervisor) is service-enforced with exact
+// Client/Building/scope checks. No bytes, storage keys or uploads here.
+handymanFieldEvidenceRouter.get(
+  '/handyman/field/execution-scopes/:executionScopeId/evidence',
+  async (req, res, next) => {
+    try {
+      if (!req.auth) throw authenticationRequiredError();
+      const result = await listScopeFieldEvidence(
+        req.auth.userId,
+        req.params.executionScopeId,
+        req.query as Record<string, unknown>,
+      );
+      sendSuccess(res, { evidence: result.evidence }, 200, result.pagination);
     } catch (error) {
       next(error);
     }

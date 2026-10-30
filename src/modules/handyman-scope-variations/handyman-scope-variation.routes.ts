@@ -2,6 +2,9 @@ import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { authenticationRequiredError } from '../auth/auth.errors';
 import { sendSuccess } from '../../shared/api-response';
+import { AppError } from '../../shared/errors';
+import { sendQuotationDocumentPdf } from '../handyman-quotations/handyman-quotation-document.routes';
+import { downloadVariationOfferDocument } from './handyman-variation-offer-document.service';
 import {
   authorizeVariationScope,
   confirmVariationFinalChargeEligibility,
@@ -163,6 +166,24 @@ handymanScopeVariationRouter.get(
     } catch (error) {
       next(error);
     }
+  },
+);
+
+handymanScopeVariationRouter.get(
+  '/handyman/execution-scopes/:executionScopeId/variations/:variationId/offer.pdf',
+  async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      if (!req.auth) throw authenticationRequiredError();
+      if (Object.keys(req.query).length || (req.body !== undefined &&
+          (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length))) {
+        throw AppError.validation('Variation offer download accepts no context fields.');
+      }
+      const document = await downloadVariationOfferDocument(req.auth.userId, req.params.executionScopeId, req.params.variationId);
+      res.setHeader('X-Variation-Offer-Id', document.id);
+      res.setHeader('X-Variation-Offer-Version', String(document.version));
+      sendQuotationDocumentPdf(res, document);
+    } catch (error) { next(error); }
   },
 );
 

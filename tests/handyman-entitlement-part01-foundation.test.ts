@@ -6,6 +6,8 @@ import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
+import { bindHandymanBmBuildingCoverage, registerHandymanBmLegalCounterparty,
+  verifyHandymanBmLegalCounterparty } from '../src/modules/handyman-bm-binding';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { baseFixture, crewFixture, initHandymanFixtures }
   from './helpers/handyman-fixtures';
@@ -67,6 +69,14 @@ async function fixture() {
     executionScopeId: scope.id, providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,
   }, actor);
+  // Verification must exist before the ledger posting instant.
+  const party = await registerHandymanBmLegalCounterparty(actor, {
+    clientId: realm.client.id, legalName: 'Verified test Client', registrationNumber: id(),
+    representsClientOrganization: true, idempotencyKey: id(),
+  });
+  const verified = await verifyHandymanBmLegalCounterparty(actor, {
+    clientId: realm.client.id, counterpartyId: party.counterparty.id, evidenceReference: `test/${id()}`,
+  });
   const txId = id();
   await q(`INSERT INTO handyman_customer_transactions
      (id, client_id, execution_scope_id, quotation_version_id, currency, created_by_user_id)
@@ -74,7 +84,7 @@ async function fixture() {
        FROM handyman_execution_scopes WHERE id = $3`, [txId, actor, scope.id]);
   const tx = (await q('SELECT created_at FROM handyman_customer_transactions WHERE id=$1',
     [txId])).rows[0];
-  return { realm, scope, crew, assignment, txId, postedAt: tx.created_at };
+  return { realm, scope, crew, assignment, txId, postedAt: tx.created_at, party, verified };
 }
 
 function providerFact(f: Awaited<ReturnType<typeof fixture>>) {
@@ -162,6 +172,11 @@ describe('CR-HM-14 PART 01 entitlement fact foundation', () => {
       versionId, effectiveFrom: new Date(f.postedAt.getTime() - 60_000).toISOString(),
       idempotencyKey: id(),
     });
+    await bindHandymanBmBuildingCoverage(actor, { clientId: f.realm.client.id,
+      buildingId: f.realm.building.id, agreementVersionId: versionId,
+      counterpartyId: f.party.counterparty.id, beneficiaryKind: 'CLIENT_ORGANIZATION',
+      beneficiaryDefinitionId: beneficiary, effectiveFrom: f.verified.verification.verifiedAt.toISOString(),
+      idempotencyKey: id() });
     const v = (await q(`SELECT v.agreement_id, v.version_number, v.effective_from, v.effective_to
       FROM handyman_commercial_agreement_versions v WHERE v.id=$1`, [versionId])).rows[0];
     const bm = { id: id(), key: id(), rule, term, beneficiary, rate: '2.5000',
@@ -184,7 +199,7 @@ describe('CR-HM-14 PART 01 entitlement fact foundation', () => {
         x.client, x.key, actor]);
     };
     await assert.rejects(insertBm({ rate: '3.0000' }), /binding mismatch/);
-    await assert.rejects(insertBm({ beneficiary: id() }), /binding mismatch/);
+    await assert.rejects(insertBm({ beneficiary: id() }), /coverage|binding mismatch/i);
     await assert.rejects(insertBm({ rule: id() }), /binding mismatch/);
     await assert.rejects(insertBm({ agreement: id() }), /binding mismatch/);
     await assert.rejects(insertBm({ number: 99 }), /binding mismatch/);
@@ -225,6 +240,6 @@ describe('CR-HM-14 PART 01 entitlement fact foundation', () => {
       term: refTerm, beneficiary: refBeneficiary,
       client: other.realm.client.id, agreement: rv.agreement_id,
       version: refVersion, number: rv.version_number,
-      from: rv.effective_from, to: rv.effective_to }, other), /binding mismatch/);
+      from: rv.effective_from, to: rv.effective_to }, other), /coverage|binding mismatch/i);
   });
 });

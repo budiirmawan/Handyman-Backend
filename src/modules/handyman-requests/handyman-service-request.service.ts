@@ -1,3 +1,5 @@
+import { createInitialCareSchedulingReadiness, parseOptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.service';
+import type { OptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.types';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError } from '../../shared/errors';
@@ -17,6 +19,7 @@ import { isCurrentCareRepresentation } from '../handyman-handoff/care-representa
 import { handoffExchangeInvalidError } from '../handyman-handoff/handoff-runtime.errors';
 import { handymanServiceVariantNotActiveError } from '../handyman-catalog';
 import { handymanServiceVariantNotFoundError } from '../handyman-catalog';
+import { addCareHandymanServiceRequestItemInTransaction, type AddHandymanServiceRequestItemInput } from '../handyman-parameterized-catalog/handyman-request-items.service';
 import { handymanServiceVariantRepository } from '../handyman-catalog';
 import {
   serviceCatalogNotActiveError,
@@ -287,7 +290,7 @@ export async function createHandymanServiceRequest(
  * `insertRequest` used by every other intake seam.
  */
 export async function createHandymanServiceRequestForAttribution(
-  input: CreateHandymanServiceRequestInput,
+  input: CreateHandymanServiceRequestInput & OptionalHandymanRequestedWindow,
   actorUserId: string,
   client: PoolClient,
 ): Promise<PublicHandymanServiceRequest> {
@@ -305,7 +308,18 @@ export async function createHandymanServiceRequestForAttribution(
     clientId: attribution.clientId,
     buildingId: attribution.buildingId,
   });
-  return createFromAuthorizedAttribution(input, attribution, client);
+  const request = await createFromAuthorizedAttribution(input, attribution, client);
+  return attachInitialCarePreference(client, request, input);
+}
+
+async function attachInitialCarePreference(
+  client: PoolClient, request: PublicHandymanServiceRequest, input: OptionalHandymanRequestedWindow,
+): Promise<PublicHandymanServiceRequest> {
+  const dates = parseOptionalHandymanRequestedWindow(input.preferredWindowStart, input.preferredWindowEnd);
+  if (!dates) return request; // Preserve the exact legacy no-date response/write set.
+  const row = await createInitialCareSchedulingReadiness(client, request.id, dates);
+  const { id, timezone, preferredWindowStart, preferredWindowEnd, status, supersedesReadinessId } = row;
+  return { ...request, schedulingReadiness: { id, timezone, preferredWindowStart, preferredWindowEnd, status, supersedesReadinessId } };
 }
 
 /**
@@ -316,8 +330,11 @@ export async function createHandymanServiceRequestForAttribution(
  * again before request insertion; any failure rolls back all three writes.
  */
 export async function createCareHandymanServiceRequest(
-  input: { exchangeToken: string } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'>,
-): Promise<PublicHandymanServiceRequest> {
+  input: {
+    exchangeToken: string;
+    items?: Array<AddHandymanServiceRequestItemInput & { description?: string }>;
+  } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'> & OptionalHandymanRequestedWindow,
+): Promise<PublicHandymanServiceRequest & { items?: unknown[] }> {
   if (typeof input?.exchangeToken !== 'string' || input.exchangeToken.length === 0) {
     throw handoffExchangeInvalidError();
   }
@@ -331,7 +348,41 @@ export async function createCareHandymanServiceRequest(
         !(await isCurrentCareRepresentation(exchange, client))) {
       throw handoffExchangeInvalidError();
     }
-    return createFromAuthorizedAttribution(input, attribution, client);
+
+    const structuredItems = input.items;
+    const primary = structuredItems?.[0];
+    const created = await createFromAuthorizedAttribution({
+      ...input,
+      serviceCatalogId: primary?.serviceCatalogId ?? input.serviceCatalogId,
+      ...(primary
+        ? { serviceVariantId: primary.serviceVariantId ?? undefined }
+        : {}),
+    }, attribution, client);
+
+    if (!structuredItems) {
+      return attachInitialCarePreference(client, created, input);
+    }
+
+    const savedItems = [];
+    for (const item of structuredItems) {
+      savedItems.push(await addCareHandymanServiceRequestItemInTransaction(client, {
+        id: created.id,
+        clientId: created.clientId,
+        buildingId: created.buildingId,
+        status: created.status,
+      }, {
+        serviceCatalogId: item.serviceCatalogId,
+        serviceVariantId: item.serviceVariantId,
+        quantity: item.quantity,
+        uomId: item.uomId,
+        attributeValues: item.attributeValues,
+        accessCondition: item.accessCondition,
+        itemDescription: item.description,
+      }, attribution.careActorId));
+    }
+    const withItems = { ...created, items: savedItems };
+    const withPreference = await attachInitialCarePreference(client, withItems, input);
+    return withPreference as PublicHandymanServiceRequest & { items?: unknown[] };
   });
 }
 

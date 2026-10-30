@@ -82,14 +82,16 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //                                                  quotation preparation and
   //                                                  the post-inspection
   //                                                  revision lane)
-  //   294 + 7 = 301.
-  // MERGED RECONCILIATION (post PR #59): both additive lines are now on `main`,
-  // so the pin is the sum of the two disjoint deltas, measured on the merged
-  // tree — 294 (PR #59) + 7 (this CR) = 301.
-  // The runtime-parity assertion below is what actually guards the contract;
-  // the constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 301-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 301);
+  // Deployed baseline 4529 adds 17 documented/runtime operations after the
+  // previous 301-operation freeze, CR-HM-CARE-INTERNAL-NOTES-01 adds 6
+  // Internal Notes operations, and CR-HM-CARE-UNLISTED-INTAKE PART 01 adds 14
+  // Unlisted Service Intake + Internal Notes operations,
+  // CR-HM-MANUAL-QUOTATION-01 PART 01 adds 2 Operations Unlisted-Intake
+  // Triage operations (record + history read) and PART 02 adds 1 Operations
+  // conversion operation. The equality assertion below guards parity; this
+  // constant pins the reviewed surface size at the release baseline.
+  it('keeps the 341-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 341);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -151,12 +153,12 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
         `${operationId} must declare x-error-codes`,
       );
       // Every operation documents how malformed input is refused: the
-      // generic VALIDATION_ERROR, or — for the finance-read/warranty
-      // families whose services validate exclusively through domain
-      // `*_VALIDATION` factories — that domain code. The only input-free
-      // operation is the caller's own worker profile read.
+      // generic VALIDATION_ERROR/BAD_REQUEST, or — for finance-read/warranty
+      // families whose services validate through domain `*_VALIDATION`
+      // factories — that domain code. The only input-free operation is the
+      // caller's own worker profile read.
       assert.ok(
-        errors.includes('VALIDATION_ERROR') ||
+        errors.includes('VALIDATION_ERROR') || errors.includes('BAD_REQUEST') ||
           errors.some((c: string) => c.endsWith('_VALIDATION')) ||
           operationId === 'getMyHandymanWorkerProfile',
         `${operationId} must document its validation refusal code`,
@@ -202,8 +204,14 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     //   190 + 6 = 196.
     //   CR-HM-SERVICE-CATALOG-01 PART 01 +7 route-guarded operations
     //   (`tenant_company.read` / `tenant_company.manage`).
-    //   196 + 7 = 203 (measured on the merged tree after PR #59).
-    assert.equal(annotated, 203);
+    //   196 + 7 = 203 (previous freeze), +13 route-guarded baseline ops = 216,
+    //   +2 Building Care internal-notes route-guarded ops = 218,
+    //   +5 Building Care unlisted-intake route-guarded ops = 223,
+    //   CR-HM-MANUAL-QUOTATION-01 PART 01 +1 Operations triage-decision
+    //   write (`tenant_company.manage`; the history read stays on the
+    //   composite Operations/Care read authority and remains unannotated),
+    //   PART 02 +1 Operations conversion write (`tenant_company.manage`).
+    assert.equal(annotated, 225);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {
@@ -365,12 +373,18 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
       'acceptedAt',
       'createdAt',
       'events',
+      'executionScopeId',
       'id',
       'issuedAt',
+      'issuerUserId',
+      'materialUsage',
+      'qcRunId',
       'rejectedAt',
+      'serviceRequestId',
       'signOffs',
       'status',
       'voidedAt',
+      'workSessions',
     ]);
     assert.deepEqual(
       bastItem.properties.events.items.properties.eventType.enum,

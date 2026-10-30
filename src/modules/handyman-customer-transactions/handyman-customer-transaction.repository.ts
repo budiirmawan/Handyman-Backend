@@ -360,6 +360,7 @@ async function findEligibleVariationQuotationLine(
   lineTotal: number;
   currency: HandymanCustomerTransactionCurrency;
   sourceItemId: string | null;
+  originKind: 'CATALOG' | 'MANUAL_ONE_TIME';
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -368,7 +369,8 @@ async function findEligibleVariationQuotationLine(
     `SELECT ql.id, ql.quotation_version_id, ql.line_type, ql.description,
             ql.quantity, ql.uom_id, ql.reference_unit_amount,
             ql.final_quoted_unit_amount, ql.line_total, ql.currency,
-            ql.source_item_id, ql.created_by_user_id, ql.created_at, ql.updated_at
+            ql.source_item_id, ql.origin_kind, ql.created_by_user_id,
+            ql.created_at, ql.updated_at
        FROM handyman_quotation_lines ql
        JOIN handyman_scope_variations v
          ON v.revised_quotation_version_id = ql.quotation_version_id
@@ -398,6 +400,7 @@ async function findEligibleVariationQuotationLine(
     lineTotal: Number(row.line_total),
     currency: row.currency as HandymanCustomerTransactionCurrency,
     sourceItemId: (row.source_item_id as string | null) ?? null,
+    originKind: row.origin_kind as 'CATALOG' | 'MANUAL_ONE_TIME',
     createdByUserId: row.created_by_user_id as string,
     createdAt: row.created_at as Date,
     updatedAt: row.updated_at as Date,

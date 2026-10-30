@@ -1,3 +1,4 @@
+import { assertHandymanBmFiscalSettlement } from '../handyman-customer-transactions/handyman-financial-tax.service';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
@@ -134,6 +135,10 @@ async function earned(tx: PoolClient, ledger: HandymanLedgerTransactionRead,
         row.currency !== ledger.transaction.currency ||
         row.ledger_contract_version !== HANDYMAN_LEDGER_READ_CONTRACT_VERSION) {
       throw conflict();
+    }
+    if (row.bm_beneficiary_kind === 'BM_LEGAL_COUNTERPARTY') {
+      throw error('HANDYMAN_SETTLEMENT_NOT_AUTHORITATIVE',
+        'Distinct BM settlement requires future fiscal and beneficiary settlement rules.');
     }
     let amount = cents(row.amount);
     for (const change of await listCorrections(tx, row.id)) {
@@ -315,6 +320,7 @@ export async function settleHandymanSettlement(scope: string, actor: string,
     const prior = await replay(tx,key,'SETTLE',unit,actor);
     if (prior) return { unitId:unit.id,state:'SETTLED' as const,replayed:true };
     if (await state(tx,unit) !== 'INCLUDED_IN_SETTLEMENT') throw conflict();
+    await assertHandymanBmFiscalSettlement(tx,scope);
     await clearExceptions(tx,unit);
     await clientWindow(ledger,actor);
     const e = await earned(tx,ledger);

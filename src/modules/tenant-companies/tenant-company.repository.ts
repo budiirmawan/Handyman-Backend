@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   CreateTenantCompanyInput,
@@ -36,8 +37,8 @@ async function create(input: CreateTenantCompanyInput): Promise<TenantCompanyRec
   return result.rows[0];
 }
 
-async function findById(id: string): Promise<TenantCompanyRecord | null> {
-  const result = await getPool().query<TenantCompanyRecord>(
+async function findById(id: string, client?: PoolClient): Promise<TenantCompanyRecord | null> {
+  const result = await (client ?? getPool()).query<TenantCompanyRecord>(
     `SELECT ${SELECT} FROM tenant_companies WHERE id = $1`, [id],
   );
   return result.rows[0] ?? null;

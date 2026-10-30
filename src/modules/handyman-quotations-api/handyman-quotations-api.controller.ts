@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { setHandymanQuotationLineWarrantyTerms } from '../handyman-quotations/handyman-quotation-warranty-terms';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
@@ -14,6 +15,7 @@ import {
   getHandymanQuotationVersionTotals,
   issueHandymanQuotationVersion,
   listHandymanQuotationVersionLines,
+  setHandymanQuotationLineTaxPriceBasis,
   supersedeHandymanQuotationVersion,
 } from '../handyman-quotations';
 import type {
@@ -28,8 +30,10 @@ import {
   parseQuotationApiUuidParam,
   parseQuotationDecisionBody,
   parseQuotationDpTermsBody,
+  parseQuotationRevisionBody,
   parseQuotationIssueBody,
   parseQuotationLineBody,
+  parseQuotationPriceBasisBody,
 } from './handyman-quotations-api.validation';
 
 /**
@@ -69,6 +73,9 @@ type CustomerHandymanQuotationLinePayload = Pick<
   | 'finalQuotedUnitAmount'
   | 'lineTotal'
   | 'currency'
+  | 'taxPriceBasis'
+  | 'warrantyTerms'
+  | 'replacesQuotationLineId'
   | 'createdAt'
   | 'updatedAt'
 >;
@@ -86,6 +93,9 @@ function toCustomerQuotationLinePayload(
     finalQuotedUnitAmount: line.finalQuotedUnitAmount,
     lineTotal: line.lineTotal,
     currency: line.currency,
+    taxPriceBasis: line.taxPriceBasis ?? null,
+    warrantyTerms: line.warrantyTerms ?? null,
+    replacesQuotationLineId: line.replacesQuotationLineId ?? null,
     createdAt: line.createdAt,
     updatedAt: line.updatedAt,
   };
@@ -297,6 +307,9 @@ export async function postHandymanQuotationRevisionHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const { carryForwardLineIds, ...dpTerms } = parseQuotationRevisionBody(
+      req.body,
+    );
     sendSuccess(
       res,
       await createHandymanQuotationRevision(
@@ -305,7 +318,8 @@ export async function postHandymanQuotationRevisionHandler(
           'quotationId',
         ),
         actor(req),
-        parseQuotationDpTermsBody(req.body),
+        dpTerms,
+        carryForwardLineIds === undefined ? {} : { carryForwardLineIds },
       ),
       201,
     );
@@ -337,6 +351,25 @@ export async function postHandymanQuotationLineHandler(
   } catch (error) {
     next(error);
   }
+}
+
+export async function putHandymanQuotationLineTaxPriceBasisHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(res, await setHandymanQuotationLineTaxPriceBasis(
+      parseQuotationApiUuidParam(p(req.params.quotationVersionId), 'quotationVersionId'),
+      parseQuotationApiUuidParam(p(req.params.quotationLineId), 'quotationLineId'),
+      parseQuotationPriceBasisBody(req.body), actor(req)));
+  } catch (error) { next(error); }
+}
+
+export async function putHandymanQuotationLineWarrantyTermsHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(res, await setHandymanQuotationLineWarrantyTerms(
+      parseQuotationApiUuidParam(p(req.params.quotationVersionId), 'quotationVersionId'),
+      parseQuotationApiUuidParam(p(req.params.quotationLineId), 'quotationLineId'), req.body, actor(req)));
+  } catch (error) { next(error); }
 }
 
 export async function getHandymanQuotationLinesHandler(

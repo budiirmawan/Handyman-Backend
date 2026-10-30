@@ -48,7 +48,8 @@ export type HandymanSchedulingReadinessRecord = {
   supersedesReadinessId: string | null;
   /** PART 04: bounded optional scheduling-owned reason (no taxonomy). */
   changeReason: string | null;
-  createdByUserId: string;
+  /** Null only for an initial attested Care request; actor is its immutable attribution. */
+  createdByUserId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -89,3 +90,12 @@ export type PublicHandymanSchedulingReadiness = Omit<
   createdAt: string;
   updatedAt: string;
 };
+
+/** Optional intake transport pair. No additional date store or booking. */
+export type HandymanRequestedWindow = Pick<CreateHandymanSchedulingReadinessInput,
+  'preferredWindowStart' | 'preferredWindowEnd'>;
+export type OptionalHandymanRequestedWindow = Partial<HandymanRequestedWindow>;
+
+/** Creation-only safe projection: no Client, creator or customer identity leak. */
+export type HandymanCareSchedulingPreference = Pick<PublicHandymanSchedulingReadiness,
+  'id' | 'timezone' | 'preferredWindowStart' | 'preferredWindowEnd' | 'status' | 'supersedesReadinessId'>;

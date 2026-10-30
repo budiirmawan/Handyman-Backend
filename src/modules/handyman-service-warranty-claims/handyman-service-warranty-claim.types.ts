@@ -17,6 +17,7 @@
 
 import type { HandymanServiceWarrantyStatus }
   from '../handyman-service-warranties';
+import type { ClaimCertificatePin } from './handyman-warranty-claim-assessment.service';
 
 export const HANDYMAN_SERVICE_WARRANTY_CLAIM_STATUSES = [
   'CLAIM_DRAFT',
@@ -88,6 +89,7 @@ export type HandymanServiceWarrantyClaimRecord = {
   decidedAt: Date | null;
   decidedByUserId: string | null;
   decisionNote: string | null;
+  decisionAssessmentId: string | null;
   withdrawnAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -129,7 +131,7 @@ export type NewHandymanServiceWarrantyClaimEvent = {
   actorUserId: string;
 };
 
-export type OpenHandymanServiceWarrantyClaimInput = {
+export type OpenHandymanServiceWarrantyClaimInput = ClaimCertificatePin & {
   warrantyId: string;
   idempotencyKey: string;
   claimNote?: string | null;
@@ -145,6 +147,7 @@ export type SubmitHandymanServiceWarrantyClaimInput = {
 export type DecideHandymanServiceWarrantyClaimInput = {
   claimId: string;
   idempotencyKey: string;
+  assessmentId: string;
   decisionNote?: string | null;
 };
 

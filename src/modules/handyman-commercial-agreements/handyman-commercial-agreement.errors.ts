@@ -5,6 +5,15 @@ import { AppError, ERROR_CODES } from '../../shared/errors';
  * failure is closed and typed; nothing resolves implicitly.
  */
 
+/** A version cannot be truncated through already-authorized BM coverage. */
+export function handymanCommercialAgreementCoverageConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_BM_BINDING_CONFLICT,
+    message: 'Close or cancel BM Building coverage before superseding this agreement version.',
+    statusCode: 409,
+  });
+}
+
 export function handymanCommercialAgreementNotFoundError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_COMMERCIAL_AGREEMENT_NOT_FOUND,

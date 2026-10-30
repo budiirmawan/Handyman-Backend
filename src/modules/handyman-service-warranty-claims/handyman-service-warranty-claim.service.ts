@@ -27,6 +27,8 @@ import {
 } from './handyman-service-warranty-claim.lifecycle';
 import { handymanServiceWarrantyClaimRepository }
   from './handyman-service-warranty-claim.repository';
+import { assertCurrentClaimBinding, assertSubmissionPeriod, bindClaimToCertificate,
+  parseClaimCertificatePin, requireClaimDecisionAssessment } from './handyman-warranty-claim-assessment.service';
 import type {
   DecideHandymanServiceWarrantyClaimInput,
   HandymanServiceWarrantyClaimCommandResult,
@@ -40,11 +42,11 @@ import type {
  * (FROZEN governance `CR-HM-15_START_GOVERNANCE.md` §4/§5/§6/§8,
  * §8 row 02).
  *
- * A claim binds to an EXISTING service warranty on its ORIGINAL execution
- * scope: the scope, client and BAST anchors are read from the warranty
- * row inside the write transaction, never supplied by the caller. Intake
- * is gated on the ACTIVE warranty state, and at most one non-terminal
- * claim exists per warranty.
+ * A new claim binds to an EXISTING service warranty on its ORIGINAL scope
+ * and to one exact issued certificate item. Scope, client and BAST anchors
+ * come from the warranty. Filing uses the actual database statement time;
+ * an independent assessor must pin reviewed terms and evidence before a
+ * decision. Intake is gated on ACTIVE, with one non-terminal claim.
  *
  * Every command is one transaction + row lock + single-use idempotency
  * key, and the warranty HEAD moves only through the warranty module's own
@@ -186,10 +188,13 @@ async function lockWarrantyForClaim(
 export async function openHandymanServiceWarrantyClaim(
   actorUserId: string,
   input: OpenHandymanServiceWarrantyClaimInput,
+  /** Optional owner transaction for the scoped Care complaint adapter. */
+  transaction?: PoolClient,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const warrantyUuid = ensureUuid(input.warrantyId, 'warrantyId');
   const key = ensureKey(input.idempotencyKey);
+  const pin = parseClaimCertificatePin(input as unknown as Record<string, unknown>);
   const claimNote = ensureNote(input.claimNote, 'claimNote');
   const evidenceRecordId = ensureOptionalUuid(
     input.evidenceRecordId,
@@ -197,29 +202,34 @@ export async function openHandymanServiceWarrantyClaim(
   );
 
   const preflight = await handymanServiceWarrantyRepository.findWarrantyById(
-    getPool(),
+    transaction ?? getPool(),
     warrantyUuid,
   );
   if (!preflight) throw handymanServiceWarrantyNotFoundError();
   await assertClaimAuthority(actorUuid, preflight.executionScopeId);
   if (evidenceRecordId) {
     await assertEvidenceBelongs(
-      getPool(),
+      transaction ?? getPool(),
       evidenceRecordId,
       preflight.clientId,
       preflight.executionScopeId,
     );
   }
 
-  return withTransaction(async (client) => {
+  const run = async (client: PoolClient): Promise<HandymanServiceWarrantyClaimCommandResult> => {
+    await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [preflight.executionScopeId]);
     const warranty = await lockWarrantyForClaim(client, warrantyUuid, actorUuid);
-    assertHandymanServiceWarrantyClaimIntakeEligible(warranty.status);
     const replay = await handymanServiceWarrantyClaimRepository
       .findClaimEventByWarrantyIdempotency(client, warranty.id, 'OPEN', key);
     if (replay) {
       const claim = await handymanServiceWarrantyClaimRepository
         .findClaimById(client, replay.claimId);
       if (!claim) throw handymanServiceWarrantyClaimNotFoundError();
+      if (replay.actorUserId !== actorUuid || claim.claimNote !== claimNote ||
+          (evidenceRecordId && claim.evidenceRecordId !== evidenceRecordId)) {
+        throw handymanServiceWarrantyClaimConflictError('open-idempotency-mismatch');
+      }
+      await assertCurrentClaimBinding(client, claim, pin);
       return {
         claim,
         event: replay,
@@ -227,6 +237,7 @@ export async function openHandymanServiceWarrantyClaim(
         replayed: true,
       };
     }
+    assertHandymanServiceWarrantyClaimIntakeEligible(warranty.status);
     const open = await handymanServiceWarrantyClaimRepository
       .findOpenClaimByWarrantyId(client, warranty.id);
     if (open) {
@@ -243,6 +254,7 @@ export async function openHandymanServiceWarrantyClaim(
         openedByUserId: actorUuid,
       },
     );
+    await bindClaimToCertificate(client, claim, actorUuid, pin);
     const event = await handymanServiceWarrantyClaimRepository
       .insertClaimEvent(client, {
         clientId: claim.clientId,
@@ -260,7 +272,8 @@ export async function openHandymanServiceWarrantyClaim(
       warrantyStatus: warranty.status,
       replayed: false,
     };
-  });
+  };
+  return transaction ? run(transaction) : withTransaction(run);
 }
 
 type ClaimAction = 'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW';
@@ -277,7 +290,9 @@ async function applyClaimAction(
   options: {
     evidenceRecordId?: string | null;
     decisionNote?: string | null;
+    assessmentId?: string | null;
   },
+  transaction?: PoolClient,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const claimId = ensureUuid(claimIdRaw, 'claimId');
@@ -293,13 +308,14 @@ async function applyClaimAction(
       : null;
 
   const existing = await handymanServiceWarrantyClaimRepository.findClaimById(
-    getPool(),
+    transaction ?? getPool(),
     claimId,
   );
   if (!existing) throw handymanServiceWarrantyClaimNotFoundError();
   await assertClaimAuthority(actorUuid, existing.executionScopeId);
 
-  return withTransaction(async (client) => {
+  const run = async (client: PoolClient): Promise<HandymanServiceWarrantyClaimCommandResult> => {
+    await client.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [existing.executionScopeId]);
     const warranty = await lockWarrantyForClaim(
       client,
       existing.warrantyId,
@@ -315,6 +331,11 @@ async function applyClaimAction(
     const replay = await handymanServiceWarrantyClaimRepository
       .findClaimEventByIdempotency(client, claim.id, action, key);
     if (replay) {
+      if (action === 'APPROVE' || action === 'REJECT') {
+        const assessmentId = await requireClaimDecisionAssessment(client, claim, actorUuid, options.assessmentId, action);
+        if (replay.actorUserId !== actorUuid || claim.decisionAssessmentId !== assessmentId || claim.decisionNote !== decisionNote)
+          throw handymanServiceWarrantyClaimConflictError('decision-idempotency-mismatch');
+      }
       return {
         claim,
         event: replay,
@@ -340,6 +361,11 @@ async function applyClaimAction(
       }
     }
 
+    if (action === 'SUBMIT') await assertSubmissionPeriod(client, claim);
+    const assessmentId = action === 'APPROVE' || action === 'REJECT'
+      ? await requireClaimDecisionAssessment(client, claim, actorUuid, options.assessmentId, action)
+      : null;
+
     const nextClaimStatus = nextHandymanServiceWarrantyClaimStatus(
       claim.status,
       action,
@@ -357,6 +383,7 @@ async function applyClaimAction(
         evidenceRecordId,
         actorUuid,
         decisionNote,
+        assessmentId,
       );
     if (nextHeadStatus !== warranty.status) {
       await handymanServiceWarrantyRepository.updateWarrantyStatus(
@@ -382,16 +409,18 @@ async function applyClaimAction(
       warrantyStatus: nextHeadStatus,
       replayed: false,
     };
-  });
+  };
+  return transaction ? run(transaction) : withTransaction(run);
 }
 
 /** SUBMIT: CLAIM_DRAFT -> CLAIM_SUBMITTED (head ACTIVE -> CLAIM_OPEN). */
 export async function submitHandymanServiceWarrantyClaim(
   actorUserId: string,
   input: SubmitHandymanServiceWarrantyClaimInput,
+  transaction?: PoolClient,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   return applyClaimAction(actorUserId, input.claimId, input.idempotencyKey,
-    'SUBMIT', { evidenceRecordId: input.evidenceRecordId });
+    'SUBMIT', { evidenceRecordId: input.evidenceRecordId }, transaction);
 }
 
 /** APPROVE: CLAIM_SUBMITTED -> CLAIM_APPROVED (head -> CLAIM_APPROVED). */
@@ -400,7 +429,7 @@ export async function approveHandymanServiceWarrantyClaim(
   input: DecideHandymanServiceWarrantyClaimInput,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   return applyClaimAction(actorUserId, input.claimId, input.idempotencyKey,
-    'APPROVE', { decisionNote: input.decisionNote });
+    'APPROVE', { decisionNote: input.decisionNote, assessmentId: input.assessmentId });
 }
 
 /** REJECT: CLAIM_SUBMITTED -> CLAIM_REJECTED (head -> CLAIM_REJECTED). */
@@ -409,7 +438,7 @@ export async function rejectHandymanServiceWarrantyClaim(
   input: DecideHandymanServiceWarrantyClaimInput,
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   return applyClaimAction(actorUserId, input.claimId, input.idempotencyKey,
-    'REJECT', { decisionNote: input.decisionNote });
+    'REJECT', { decisionNote: input.decisionNote, assessmentId: input.assessmentId });
 }
 
 /** WITHDRAW: CLAIM_SUBMITTED -> CLAIM_WITHDRAWN (head -> ACTIVE). */

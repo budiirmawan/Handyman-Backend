@@ -18,6 +18,9 @@ import {
 } from '../src/modules/handyman-requests';
 import {
   decideHandymanQuotation,
+  createHandymanQuotation,
+  createHandymanQuotationRevision,
+  addHandymanQuotationLine,
   issueHandymanQuotationVersion,
   listHandymanQuotationVersionLines,
 } from '../src/modules/handyman-quotations';
@@ -242,7 +245,7 @@ async function realmFixture(label: string): Promise<Realm> {
 
 async function requestFixture(
   realm: Realm,
-  options: { withInspection?: boolean } = {},
+  options: { withInspection?: boolean; inspectionResult?: 'INSPECTED' | 'NOT_INSPECTABLE'; serviceCatalogId?: string } = {},
 ): Promise<string> {
   const attributionId = (
     await q(
@@ -254,7 +257,7 @@ async function requestFixture(
     )
   ).rows[0]?.id as string;
 
-  const service = await serviceCatalogService.createServiceCatalogEntry(
+  const service = options.serviceCatalogId ? { id: options.serviceCatalogId } : await serviceCatalogService.createServiceCatalogEntry(
     {
       clientId: realm.clientId,
       code: `HM${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -283,8 +286,8 @@ async function requestFixture(
     await recordHandymanInspection(
       {
         handymanRequestId: request.id,
-        inspectionResult: 'INSPECTED',
-        inspectionNotes: 'One split unit inspected.',
+        inspectionResult: options.inspectionResult ?? 'INSPECTED',
+        inspectionNotes: 'Recorded site inspection outcome.',
       },
       adminId,
     );
@@ -1339,5 +1342,115 @@ describe('CR-HM-SERVICE-CATALOG-01 PART 03 — inspection, revision, approval', 
     assert.equal(resolutions[0].reasonCode, 'PRICE_RULE_NOT_FOUND');
     assert.equal(resolutions[0].unitAmount, null);
     assert.equal(resolutions[0].computedTotal, null);
+  });
+});
+
+// E2E CATALOG & INSPECTION PART02 — reuse the real PR60 fixtures/engines.
+describe('E2E PART02 — inspection-first cannot be bypassed through manual quotations', () => {
+  const needsInspection = (error: unknown) => {
+    assert.equal((error as { code: string }).code, 'VALIDATION_ERROR');
+    assert.match((error as Error).message, /inspection/i);
+    return true;
+  };
+  async function manualLine(realm: Realm, versionId: string, type: 'LABOR' | 'MATERIAL' = 'LABOR', amount = 100) {
+    const uomId = (await q('SELECT id FROM units_of_measure WHERE client_id=$1 LIMIT 1', [realm.clientId])).rows[0].id;
+    return addHandymanQuotationLine(versionId, { lineType: type, description: `Inspected ${type} scope`,
+      quantity: 1, uomId, currency: 'IDR', finalQuotedUnitAmount: amount }, adminId);
+  }
+  for (const mode of ['FIXED', 'ESTIMATED']) it(`${mode} supports a final quotation without any inspection`, async () => {
+    const realm = await realmFixture(`P02${mode}`);
+    const serviceCatalogId = (await q(`SELECT service_catalog_id FROM handyman_service_commercial_profiles
+      WHERE client_id=$1 AND pricing_mode=$2 ORDER BY service_catalog_id LIMIT 1`, [realm.clientId, mode])).rows[0].service_catalog_id;
+    const requestId = await requestFixture(realm, { serviceCatalogId });
+    const quote = await createHandymanQuotation({ handymanRequestId: requestId }, adminId);
+    await manualLine(realm, quote.versions[0].id);
+    await issueHandymanQuotationVersion(quote.versions[0].id, { validUntil: VALID_UNTIL() }, adminId);
+    assert.equal((await decideHandymanQuotation(quote.versions[0].id, { decision: 'APPROVE', idempotencyKey: id() }, realm.picUserId)).decision, 'APPROVE');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_request_inspections WHERE handyman_request_id=$1', [requestId])).rows[0].n, 0);
+  });
+  it('requires a completed inspection for the primary INSPECTION_FIRST service even without catalog items', async () => {
+    const realm = await realmFixture('P02Primary');
+    const serviceCatalogId = await serviceIdFor(realm.clientId, 'ELECTRICAL_DIAGNOSIS');
+    const requestId = await requestFixture(realm, { serviceCatalogId });
+    await assert.rejects(createHandymanQuotation({ handymanRequestId: requestId }, adminId), needsInspection);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_quotations WHERE handyman_request_id=$1', [requestId])).rows[0].n, 0);
+    // A malformed legacy row cannot borrow another Building's inspection.
+    // The original FK binds request + Client, not the inspection Building.
+    const other = await realmFixture('P02ForeignInspection');
+    await q(`INSERT INTO handyman_request_inspections
+      (id,client_id,handyman_request_id,channel_attribution_id,building_id,inspection_result,inspection_notes,inspected_by_user_id)
+      SELECT $2,client_id,id,channel_attribution_id,$3,'INSPECTED','Wrong Building — must not unlock quoting',$4
+      FROM handyman_service_requests WHERE id=$1`, [requestId, id(), other.buildingId, adminId]);
+    await assert.rejects(createHandymanQuotation({ handymanRequestId: requestId }, adminId), needsInspection);
+  });
+  it('requires inspection for an INSPECTION_FIRST service in mixed active items, not just the primary service', async () => {
+    const realm = await realmFixture('P02Mixed'), requestId = await requestFixture(realm);
+    assert.equal((await addItem(requestId, { serviceCatalogId: await serviceIdFor(realm.clientId, 'LOCK_ACCESS_INTERCOM'), quantity: 1 })).status, 201);
+    await assert.rejects(createHandymanQuotation({ handymanRequestId: requestId }, adminId), needsInspection);
+  });
+  it('NOT_INSPECTABLE is not a completed inspection and cannot authorize a final inspection-first quote', async () => {
+    const realm = await realmFixture('P02Unavailable');
+    const requestId = await requestFixture(realm, { serviceCatalogId: await serviceIdFor(realm.clientId, 'ELECTRICAL_DIAGNOSIS'),
+      withInspection: true, inspectionResult: 'NOT_INSPECTABLE' });
+    await assert.rejects(createHandymanQuotation({ handymanRequestId: requestId }, adminId), needsInspection);
+  });
+  it('rechecks the catalog requirement at issuance when items changed after draft preparation', async () => {
+    const realm = await realmFixture('P02Issue'), requestId = await requestFixture(realm);
+    const draft = await createHandymanQuotation({ handymanRequestId: requestId }, adminId);
+    await manualLine(realm, draft.versions[0].id);
+    assert.equal((await addItem(requestId, { serviceCatalogId: await serviceIdFor(realm.clientId, 'ELECTRICAL_DIAGNOSIS'), quantity: 1 })).status, 201);
+    await assert.rejects(issueHandymanQuotationVersion(draft.versions[0].id, { validUntil: VALID_UNTIL() }, adminId), needsInspection);
+    assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [draft.versions[0].id])).rows[0].status, 'DRAFT');
+  });
+  it('rechecks before a new customer approval but preserves rejection and exact historical replay', async () => {
+    const realm = await realmFixture('P02Decision'), requestId = await requestFixture(realm);
+    const draft = await createHandymanQuotation({ handymanRequestId: requestId }, adminId);
+    await manualLine(realm, draft.versions[0].id);
+    await issueHandymanQuotationVersion(draft.versions[0].id, { validUntil: VALID_UNTIL() }, adminId);
+    assert.equal((await addItem(requestId, { serviceCatalogId: await serviceIdFor(realm.clientId, 'ELECTRICAL_DIAGNOSIS'), quantity: 1 })).status, 201);
+    await assert.rejects(decideHandymanQuotation(draft.versions[0].id, { decision: 'APPROVE', idempotencyKey: id() }, realm.picUserId), needsInspection);
+    const input = { decision: 'REJECT' as const, idempotencyKey: id() };
+    const rejected = await decideHandymanQuotation(draft.versions[0].id, input, realm.picUserId);
+    assert.equal((await decideHandymanQuotation(draft.versions[0].id, input, realm.picUserId)).id, rejected.id);
+  });
+  it('completed inspection-first pricing hands off to manual quotation, never a guessed price or another inspection', async () => {
+    const realm = await realmFixture('P02ManualHandoff');
+    const serviceCatalogId = await serviceIdFor(realm.clientId, 'ELECTRICAL_DIAGNOSIS');
+    const requestId = await requestFixture(realm, { serviceCatalogId, withInspection: true });
+    assert.equal((await addItem(requestId, { serviceCatalogId, quantity: 1,
+      attributeValues: { ELECTRICAL_DIAGNOSIS_SYMPTOM: 'NO_POWER' } })).status, 201);
+    const prepared = await prepareQuotation(requestId);
+    assert.equal(prepared.status, 200, JSON.stringify(prepared.body));
+    assert.equal(prepared.body.data.status, 'MANUAL_REVIEW');
+    assert.equal(prepared.body.data.quotation, null);
+    assert.equal(prepared.body.data.resolutions[0].unitAmount, null);
+    assert.match(prepared.body.data.resolutions[0].reasonDetail, /Inspection completed/);
+  });
+  it('the catalog post-inspection revision lane rejects NOT_INSPECTABLE without appending versions', async () => {
+    const realm = await realmFixture('P02NoRevision');
+    const requestId = await requestFixture(realm, { withInspection: true, inspectionResult: 'NOT_INSPECTABLE' });
+    const quote = await createHandymanQuotation({ handymanRequestId: requestId }, adminId);
+    const revised = await reviseQuotation(requestId);
+    assert.equal(revised.status, 400, JSON.stringify(revised.body));
+    assert.match(revised.body.error.message, /INSPECTED/);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_quotation_versions WHERE quotation_id=$1', [quote.quotation.id])).rows[0].n, 1);
+  });
+  it('after INSPECTED uses the existing manual labor/material revision and explicit customer approval', async () => {
+    const realm = await realmFixture('P02Inspected');
+    const serviceCatalogId = await serviceIdFor(realm.clientId, 'ELECTRICAL_DIAGNOSIS');
+    const requestId = await requestFixture(realm, { serviceCatalogId, withInspection: true });
+    const first = await createHandymanQuotation({ handymanRequestId: requestId }, adminId);
+    await manualLine(realm, first.versions[0].id);
+    await issueHandymanQuotationVersion(first.versions[0].id, { validUntil: VALID_UNTIL() }, adminId);
+    const revision = await createHandymanQuotationRevision(first.quotation.id, adminId);
+    await manualLine(realm, revision.id, 'LABOR', 150);
+    await manualLine(realm, revision.id, 'MATERIAL', 50);
+    await issueHandymanQuotationVersion(revision.id, { validUntil: VALID_UNTIL() }, adminId);
+    const history = await q('SELECT id,status FROM handyman_quotation_versions WHERE quotation_id=$1 ORDER BY version_number', [first.quotation.id]);
+    assert.deepEqual(history.rows.map(r=>r.status), ['SUPERSEDED', 'ISSUED']);
+    assert.equal(Number((await listHandymanQuotationVersionLines(first.versions[0].id, adminId))[0].lineTotal), 100);
+    assert.equal((await listHandymanQuotationVersionLines(revision.id, adminId)).reduce((n,l)=>n+Number(l.lineTotal),0), 200);
+    await assert.rejects(decideHandymanQuotation(first.versions[0].id, { decision: 'APPROVE', idempotencyKey: id() }, realm.picUserId));
+    assert.equal((await decideHandymanQuotation(revision.id, { decision: 'APPROVE', idempotencyKey: id() }, realm.picUserId)).decision, 'APPROVE');
   });
 });

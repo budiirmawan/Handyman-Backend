@@ -1,5 +1,13 @@
 # Handyman Backend — API Handoff: Customer Care (Frontend / Customer Care web)
 
+> **2026-10-26 Unlisted Service Intake + Internal Notes (CR-HM-CARE-UNLISTED-INTAKE PART 01):** Customer Care can register unlisted-service intake cases without a `serviceCatalogId` via `POST/GET /handyman/care/buildings/{buildingId}/unlisted-intake-cases`, `GET /handyman/care/buildings/{buildingId}/unlisted-intake-cases/{intakeCaseId}`, `POST/GET /handyman/care/unlisted-intake-cases`, and `GET /handyman/care/unlisted-intake-cases/{intakeCaseId}`, with internal notes at `POST/GET .../unlisted-intake-cases/{intakeCaseId}/internal-notes`. See [Unlisted Service Intake contract](../handyman/CR-HM-CARE-UNLISTED-INTAKE_PART-01.md).
+
+> **2026-10-26 Internal Notes (CR-HM-CARE-INTERNAL-NOTES-01):** dedicated internal operational notes for Customer Care and Handyman Operations are available at `POST/GET /handyman/care/buildings/{buildingId}/requests/{requestId}/internal-notes`, `POST/GET /handyman/care/requests/{requestId}/internal-notes`, and `POST/GET /handyman/requests/{handymanRequestId}/internal-notes`. See [Internal Notes contract](../handyman/CR-HM-CARE-INTERNAL-NOTES-01_PART-01.md).
+
+> **2026-10-25 Care request date integration:** both existing Care create endpoints now accept paired `preferredWindowStart`/`preferredWindowEnd` and atomically create the initial preference in existing Scheduling Readiness. No-date clients retain their behavior. Exact authentication, bodies, safe responses, idempotency and migration prerequisite: [Care date contract](CR-HM-CARE-REQUEST-DATE-INTEGRATION_HANDOFF.md). Preference is not a confirmed appointment or assignment.
+
+> **2026-10-25 PART01 addendum:** quotation/BAST recording may use the existing BM workspace credential, without a tenant login, only with independently verified exact-target customer consent. This is a separate, default-BLOCKED receiver; the local-session recipes below do not grant Care customer authority. See [commercial bridge contract](../handyman/CR-HM-COMMERCIAL-DECISION-BRIDGE-01_PART-01.md).
+
 **Repository**: `budiirmawan/Handyman-Backend` (backend ONLY).  
 **Branch**: `arena/c965a40c-handyman-backend` · **Date**: 2026-10-21 · **CR**: CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01  
 **Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/handyman/HANDYMAN_E2E_PERSONA_CAPABILITY_MATRIX.md` (§20), `docs/api/openapi.yaml` (1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0).  

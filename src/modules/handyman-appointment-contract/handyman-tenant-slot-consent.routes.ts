@@ -30,7 +30,7 @@ const wrap = (handler: (req: Request, res: Response) => Promise<void>) =>
  * - POST /handyman/integrations/tenant-slot-choices: server-to-server. No user
  *   session. Trust is the HMAC-verified BM assertion; any failure is one 401.
  * - POST .../visits/:appointmentId/confirm: Operations. Session + building scope
- *   and fail-closed while BM consent authority is not provisioned (409).
+ *   and exact stored tenant choice/version/capacity guards; no BM API is required.
  */
 export function createHandymanTenantSlotConsentRouter(): Router {
   const r = Router();

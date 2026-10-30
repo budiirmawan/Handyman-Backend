@@ -29,6 +29,7 @@ import {
   openHandymanCustomerTransaction,
 } from '../handyman-customer-transactions';
 import { allocateHandymanCustomerPayment } from '../handyman-customer-payment-allocations';
+import { postReduceFinancialCorrection } from '../handyman-scope-variations/handyman-reduce-financial-correction.service';
 import {
   adjustHandymanCustomerLedger,
   refundHandymanCustomerPayment,
@@ -55,6 +56,8 @@ import {
 } from '../handyman-service-warranties';
 import {
   completeHandymanServiceWarrantyRework,
+  createWarrantyReworkExecution,
+  readWarrantyReworkExecution,
   proposeHandymanServiceWarrantyRework,
   startHandymanServiceWarrantyRework,
   verifyHandymanServiceWarrantyRework,
@@ -533,6 +536,24 @@ export async function postReverseCustomerPaymentHandler(
   }
 }
 
+export async function postReduceFinancialCorrectionHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const body = requirePlainBody(req.body);
+    assertOnlyKeys(body, ['expectedVersion', 'idempotencyKey']);
+    const result = await postReduceFinancialCorrection(actor(req), {
+      executionScopeId: p(req.params.executionScopeId),
+      variationId: p(req.params.variationId),
+      expectedVersion: body.expectedVersion as number,
+      idempotencyKey: requireIdempotencyKey(body),
+    });
+    sendSuccess(res, result, result.replayed ? 200 : 201);
+  } catch (error) { next(error); }
+}
+
 export async function postAdjustCustomerLedgerHandler(
   req: Request,
   res: Response,
@@ -888,6 +909,21 @@ export async function postProposeServiceWarrantyReworkHandler(
   }
 }
 
+export async function postCreateWarrantyReworkExecutionHandler(req:Request,res:Response,next:NextFunction):Promise<void> {
+  try {
+    const body=requirePlainBody(req.body); assertOnlyKeys(body,['idempotencyKey']);
+    const result=await createWarrantyReworkExecution(actor(req),p(req.params.reworkId),requireIdempotencyKey(body));
+    sendSuccess(res,result,result.replayed ? 200 : 201);
+  } catch(error) { next(error); }
+}
+export async function getWarrantyReworkExecutionHandler(req:Request,res:Response,next:NextFunction):Promise<void> {
+  try {
+    const query=(req.query ?? {}) as Record<string,unknown>; assertOnlyKeys(query,['qcRunId']);
+    const result=await readWarrantyReworkExecution(actor(req),p(req.params.reworkId),optionalQueryString(query,'qcRunId'));
+    sendSuccess(res,result,200);
+  } catch(error) { next(error); }
+}
+
 export async function postStartServiceWarrantyReworkHandler(
   req: Request,
   res: Response,
@@ -917,10 +953,11 @@ export async function postCompleteServiceWarrantyReworkHandler(
     const actorUserId = actor(req);
     const reworkId = p(req.params.reworkId);
     const body = requirePlainBody(req.body);
-    assertOnlyKeys(body, ['completionNote', 'idempotencyKey']);
+    assertOnlyKeys(body, ['completionNote', 'evidenceReference', 'idempotencyKey']);
     const result = await completeHandymanServiceWarrantyRework(actorUserId, {
       reworkId,
       completionNote: optionalNullableStringField(body, 'completionNote'),
+      evidenceReference: requireStringField(body, 'evidenceReference'),
       idempotencyKey: requireIdempotencyKey(body),
     });
     sendSuccess(res, result, 200);

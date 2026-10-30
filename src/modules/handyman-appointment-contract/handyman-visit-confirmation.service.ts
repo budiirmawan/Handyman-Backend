@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { getPool, withTransaction } from '../../database';
+import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { recordOperationalEvent } from '../operational-events';
-import { tenantSlotConsentAuthorityConfigured } from './handyman-tenant-slot-authority';
+import { assertWarrantyReworkOperations } from '../handyman-service-warranty-reworks/handyman-warranty-rework-authority';
+import { assertReworkVisitCurrent } from './handyman-warranty-rework-visit.service';
 import {
   assertVisitResourceAdmission,
   encode,
@@ -17,7 +18,7 @@ import type { HandymanAppointmentRecord } from './handyman-appointment.repositor
  * CR-HM-FIELD-ASSIGN-01 PART 01D-2 — atomic booking confirmation (Operations).
  *
  * TENANT_SELECTED → CONFIRMED only when ALL of the following hold in ONE
- * transaction: fail-closed BM consent authority configured; the operator is
+ * transaction: the operator is
  * scoped to the exact request Building + Client; the row-locked visit is at the
  * exact TENANT_SELECTED version; its consent provenance exists and matches;
  * the Inspector/Crew is still eligible under the shared admission authority;
@@ -33,23 +34,23 @@ export const HANDYMAN_VISIT_CONFIRMED = 'HANDYMAN_VISIT_CONFIRMED';
 
 export type VisitConfirmationPorts = {
   admitResource: (tx: PoolClient, req: Awaited<ReturnType<typeof requestScope>>, target: VisitResourceTarget) => Promise<void>;
-  authorityConfigured: () => Promise<boolean>;
+  /** Legacy injection retained for callers; API provisioning is not booking authority. */
+  authorityConfigured?: () => Promise<boolean>;
   scope: (actorId: string, req: Awaited<ReturnType<typeof requestScope>>) => Promise<void>;
 };
 export const defaultVisitConfirmationPorts: VisitConfirmationPorts = {
   admitResource: assertVisitResourceAdmission,
-  authorityConfigured: () => tenantSlotConsentAuthorityConfigured(getPool()),
   scope: scoped,
 };
 
-type LockedAppointment = HandymanAppointmentRecord & { evidenceRef: string | null };
+type LockedAppointment = HandymanAppointmentRecord & { evidenceRef: string | null; reworkId: string | null };
 
 const APPOINTMENT_COLUMNS = `a.id, a.client_id AS "clientId", a.handyman_request_id AS "handymanRequestId",
   a.tenant_company_id AS "tenantCompanyId", a.building_id AS "buildingId", a.kind,
   a.execution_scope_id AS "executionScopeId", a.resource_type AS "resourceType",
   a.resource_id AS "resourceId", a.start_at AS "startAt", a.end_at AS "endAt",
   a.timezone, a.state, a.version`;
-const LOCKED_COLUMNS = `${APPOINTMENT_COLUMNS}, a.tenant_choice_evidence_ref AS "evidenceRef"`;
+const LOCKED_COLUMNS = `${APPOINTMENT_COLUMNS}, a.tenant_choice_evidence_ref AS "evidenceRef", a.warranty_rework_id AS "reworkId"`;
 
 export async function confirmTenantSlotVisit(
   requestId: string,
@@ -58,14 +59,10 @@ export async function confirmTenantSlotVisit(
   actorId: string,
   ports: VisitConfirmationPorts = defaultVisitConfirmationPorts,
 ): Promise<ReturnType<typeof encode> & { replayed: boolean }> {
-  // Fail closed before any lock or write while BM consent authority is not provisioned.
-  if (!await ports.authorityConfigured()) {
-    throw new AppError({
-      code: ERROR_CODES.HANDYMAN_VISIT_CONFIRMATION_DISABLED,
-      message: 'Visit confirmation is disabled until verified BM tenant consent authority is provisioned.',
-      statusCode: 409,
-    });
-  }
+  // Authority is the exact stored tenant choice, not whether a BM API/secret
+  // happens to be configured now. No preference becomes consent here: the
+  // state/version/provenance, eligibility and atomic capacity guards below
+  // remain mandatory, including when coordinating outside the platform.
 
   return withTransaction(async (tx: PoolClient) => {
     const req = await requestScope(tx, requestId, true);
@@ -77,6 +74,11 @@ export async function confirmTenantSlotVisit(
       [appointmentId, req.id, req.clientId],
     )).rows[0];
     if (!locked) throw AppError.notFound('Visit appointment not found.');
+    if (locked.reworkId) {
+      const {ctx}=await assertReworkVisitCurrent(tx,locked.id,actorId);
+      await assertWarrantyReworkOperations(tx,{clientId:ctx.client_id,buildingId:ctx.building_id,
+        handymanRequestId:ctx.handyman_request_id},actorId);
+    }
 
     // Idempotent replay of an already-applied confirmation for the same version.
     if (locked.state === 'CONFIRMED' && locked.version === version + 1) {
@@ -98,12 +100,17 @@ export async function confirmTenantSlotVisit(
     }
 
     // Consent provenance must be the consent bound to this exact visit, at the PROPOSED version.
-    const consent = (await tx.query<{ id: string }>(
-      `SELECT c.id FROM handyman_visit_tenant_slot_bindings b
-         JOIN handyman_visit_tenant_slot_consents c ON c.id = b.consent_id
-        WHERE b.appointment_id = $1 AND c.id::text = $2 AND b.appointment_version = $3`,
-      [locked.id, locked.evidenceRef, locked.version - 1],
-    )).rows[0];
+    const consent = locked.reworkId
+      ? (await tx.query<{id:string}>(`SELECT id FROM handyman_warranty_rework_visit_consents
+          WHERE appointment_id=$1 AND id::text=$2 AND appointment_version=$3
+            AND rework_id=$4 AND execution_scope_id=$5 AND start_at=$6 AND end_at=$7`,
+          [locked.id,locked.evidenceRef,locked.version-1,locked.reworkId,locked.executionScopeId,locked.startAt,locked.endAt])).rows[0]
+      : (await tx.query<{ id: string }>(
+          `SELECT c.id FROM handyman_visit_tenant_slot_bindings b
+             JOIN handyman_visit_tenant_slot_consents c ON c.id = b.consent_id
+            WHERE b.appointment_id = $1 AND c.id::text = $2 AND b.appointment_version = $3`,
+          [locked.id, locked.evidenceRef, locked.version - 1],
+        )).rows[0];
     if (!consent) {
       throw new AppError({
         code: ERROR_CODES.HANDYMAN_VISIT_SLOT_CONSENT_MISSING,

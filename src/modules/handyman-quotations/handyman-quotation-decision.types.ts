@@ -23,7 +23,12 @@ export type HandymanQuotationDecisionRecord = {
   tenantCompanyId: string;
   /** NULL when the authoritative request lineage has no PIC. */
   tenantPicId: string | null;
-  decidedByUserId: string;
+  decidedByUserId: string | null;
+  decidedByCareActorId?: string | null;
+  commercialConsentId?: string | null;
+  offerDocumentId?: string | null;
+  offerSourceSha256?: string | null;
+  offerPdfSha256?: string | null;
   idempotencyKey: string;
   requestFingerprint: string;
   decidedAt: Date;
@@ -45,6 +50,9 @@ export type PublicHandymanQuotationDecision = Omit<
 export type DecideHandymanQuotationInput = {
   decision: HandymanQuotationDecision;
   idempotencyKey: string;
+  /** Required for new personal decisions; Care uses the verified target digest. */
+  offerDocumentId?: string;
+  offerPdfSha256?: string;
 };
 
 /** Fully-resolved row ready for persistence. */
@@ -55,7 +63,12 @@ export type NewHandymanQuotationDecision = {
   decision: HandymanQuotationDecision;
   tenantCompanyId: string;
   tenantPicId: string | null;
-  decidedByUserId: string;
+  decidedByUserId: string | null;
+  decidedByCareActorId?: string | null;
+  commercialConsentId?: string | null;
+  offerDocumentId?: string | null;
+  offerSourceSha256?: string | null;
+  offerPdfSha256?: string | null;
   idempotencyKey: string;
   requestFingerprint: string;
 };

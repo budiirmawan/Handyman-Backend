@@ -8,9 +8,27 @@
  * an immutable line and inventory is never mutated from here).
  */
 
+import type { WarrantyTerms } from './handyman-quotation-warranty-terms';
+import type { HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
+
 export const HANDYMAN_QUOTATION_LINE_TYPES = ['LABOR', 'MATERIAL'] as const;
 export type HandymanQuotationLineType =
   (typeof HANDYMAN_QUOTATION_LINE_TYPES)[number];
+
+/**
+ * CR-HM-MANUAL-QUOTATION-01 PART 03A — line origin provenance (0489).
+ * `CATALOG` is the pre-existing lane (a governed catalog-anchored request);
+ * `MANUAL_ONE_TIME` marks an operator-authored one-time line, which is the ONLY
+ * origin a manual-origin (unlisted-intake) request may carry and is lawful on a
+ * catalog request only when the pricing authority already recorded a
+ * MANUAL_REVIEW resolution for it.
+ */
+export const HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS = [
+  'CATALOG',
+  'MANUAL_ONE_TIME',
+] as const;
+export type HandymanQuotationLineOriginKind =
+  (typeof HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS)[number];
 
 export const HANDYMAN_QUOTATION_CURRENCIES = [
   'IDR',
@@ -44,6 +62,8 @@ export type HandymanQuotationLineRecord = {
   currency: HandymanQuotationCurrency;
   /** MATERIAL provenance only; never authoritative re-pricing input. */
   sourceItemId: string | null;
+  /** Server-derived origin provenance (0489); never a pricing input. */
+  originKind: HandymanQuotationLineOriginKind;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -58,7 +78,7 @@ export type HandymanQuotationLineRecord = {
 export type HandymanQuotationLineServiceView = Omit<
   HandymanQuotationLineRecord,
   'createdAt' | 'updatedAt'
-> & { createdAt: string; updatedAt: string };
+> & { createdAt: string; updatedAt: string; taxPriceBasis?: HandymanTaxPriceBasis | null; warrantyTerms?: WarrantyTerms | null; replacesQuotationLineId?: string | null };
 
 /**
  * Caller input: the commercial facts ONLY (type, description, quantity,
@@ -74,7 +94,16 @@ export type AddHandymanQuotationLineInput = {
   uomId: string;
   currency: HandymanQuotationCurrency;
   finalQuotedUnitAmount: number;
+  /** Optional at draft creation, mandatory for every line before ISSUE. */
+  taxPriceBasis?: HandymanTaxPriceBasis;
   sourceItemId?: string;
+  /**
+   * Only `MANUAL_ONE_TIME` may be declared by a caller, and only to label one
+   * extra line on a catalog request that the pricing authority already marked
+   * MANUAL_REVIEW. On a manual-origin request the origin is forced
+   * server-side; a `CATALOG` claim there is refused (0489 law).
+   */
+  originKind?: HandymanQuotationLineOriginKind;
 };
 
 /** Fully-resolved row ready for persistence (server-derived). */
@@ -88,6 +117,7 @@ export type NewHandymanQuotationLine = {
   finalQuotedUnitAmount: number;
   currency: HandymanQuotationCurrency;
   sourceItemId: string | null;
+  originKind: HandymanQuotationLineOriginKind;
   createdByUserId: string;
 };
 

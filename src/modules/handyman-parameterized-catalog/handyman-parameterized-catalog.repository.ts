@@ -814,7 +814,8 @@ const REQUEST_ITEM_SELECT = `
   service_variant_id AS "serviceVariantId", quantity::float8 AS quantity,
   attribute_values AS "attributeValues",
   inherited_attribute_values AS "inheritedAttributeValues",
-  access_condition AS "accessCondition", status,
+  access_condition AS "accessCondition", uom_id AS "uomId",
+  item_description AS "itemDescription", status,
   created_by_user_id AS "createdByUserId",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
@@ -829,8 +830,10 @@ export type NewHandymanServiceRequestItem = {
   /** The provenance: the values the variant supplied. */
   inheritedAttributeValues: Record<string, string>;
   accessCondition: string;
+  uomId?: string | null;
+  itemDescription?: string | null;
   status: 'ACTIVE' | 'REMOVED';
-  createdByUserId: string;
+  createdByUserId: string | null;
 };
 
 async function insertRequestItem(
@@ -841,9 +844,9 @@ async function insertRequestItem(
     `INSERT INTO handyman_service_request_items
        (id, client_id, handyman_request_id, service_catalog_id,
         service_variant_id, quantity, attribute_values,
-        inherited_attribute_values, access_condition, status,
-        created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11)
+        inherited_attribute_values, access_condition, uom_id,
+        item_description, status, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13)
      RETURNING ${REQUEST_ITEM_SELECT}`,
     [
       randomUUID(),
@@ -855,6 +858,8 @@ async function insertRequestItem(
       JSON.stringify(input.attributeValues),
       JSON.stringify(input.inheritedAttributeValues),
       input.accessCondition,
+      input.uomId ?? null,
+      input.itemDescription ?? null,
       input.status,
       input.createdByUserId,
     ],

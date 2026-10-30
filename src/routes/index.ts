@@ -1,5 +1,18 @@
+import { createFinalReceiptDeliveryRouter } from '../modules/handyman-final-receipts/handyman-final-receipt-delivery.routes';
+import { createHandymanFinalReceiptRouter } from '../modules/handyman-final-receipts/handyman-final-receipt.routes';
+import { createHandymanWarrantyCareRouter } from '../modules/handyman-warranty-care/handyman-warranty-care.routes';
+import { createHandymanWarrantyCertificateRouter } from '../modules/handyman-warranty-certificates/handyman-warranty-certificate.routes';
+import { createHandymanOfficialInvoiceRouter } from '../modules/handyman-official-invoices/handyman-official-invoice.routes';
+import { createOfficialBastDocumentRouter } from '../modules/handyman-bast/handyman-bast-document.routes';
+import { createHandymanCompletionManifestRouter } from '../modules/handyman-completion-manifest/handyman-completion-manifest.routes';
+import { createHandymanInspectionWorkLinkRouter } from '../modules/handyman-requests/handyman-inspection-work-link.routes';
+import { createHandymanTenantReceiptRouter } from '../modules/handyman-tenant-receipts/handyman-tenant-receipt.routes';
+import { createCommercialConsentBridgeRouter } from '../modules/handyman-commercial-consent/commercial-consent.routes';
+import { createQuotationDeliveryRouter } from '../modules/handyman-quotations/handyman-quotation-delivery.routes';
+import { createVariationDeliveryRouter } from '../modules/handyman-scope-variations/handyman-variation-delivery.routes';
 import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
 import { createHandymanVisitApiRouter } from '../modules/handyman-appointment-contract/handyman-visit-api.routes';
+import { createHandymanWarrantyReworkVisitRouter } from '../modules/handyman-appointment-contract/handyman-warranty-rework-visit.routes';
 import { createHandymanTenantSlotConsentRouter } from '../modules/handyman-appointment-contract/handyman-tenant-slot-consent.routes';
 import { createCareWorkspaceRouter } from '../modules/handyman-care-workspace/care-workspace.routes';
 import { Router } from 'express';
@@ -48,6 +61,13 @@ import { createHandymanArrivalChallengeApiRouter }
   from '../modules/handyman-arrival-challenge-api';
 import { createHandymanArrivalConfigurationRouter }
   from '../modules/handyman-arrival-configuration';
+import { createHandymanDocumentIssuerProfileRouter } from '../modules/handyman-documents';
+import { createHandymanBmStatementRouter } from '../modules/handyman-bm-statement/handyman-bm-statement.routes';
+import { createHandymanBmReportRouter } from '../modules/handyman-bm-report/handyman-bm-report.routes';
+import { createHandymanBmDocumentsRouter } from '../modules/handyman-bm-documents/handyman-bm-documents.routes';
+import { createHandymanBmSettlementRouter } from '../modules/handyman-bm-settlement';
+import { createHandymanDocumentBankAccountRouter } from '../modules/handyman-documents';
+import { createHandymanDocumentSettingsRouter } from '../modules/handyman-documents';
 import { createHandymanWorkSessionsApiRouter }
   from '../modules/handyman-work-sessions-api';
 import { createHandymanMaterialExecutionApiRouter }
@@ -407,6 +427,8 @@ import { createWorkOrderHistoryRouter } from '../modules/work-order-history/work
 import { createHandymanScopeVariationRouter } from '../modules/handyman-scope-variations/handyman-scope-variation.routes';
 import { createHandymanCareAuthorityRouter } from '../modules/handyman-care-authority/handyman-care-authority.routes';
 import { createHandymanCareCommunicationsRouter } from '../modules/handyman-care-communications/handyman-care-communications.routes';
+import { createHandymanInternalNotesRouter } from '../modules/handyman-internal-notes/handyman-internal-notes.routes';
+import { createHandymanUnlistedIntakeRouter } from '../modules/handyman-unlisted-intake/handyman-unlisted-intake.routes';
 import { createHandymanCareStandaloneDiscoveryRouter } from '../modules/handyman-care-standalone-discovery/handyman-care-standalone-discovery.routes';
 import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHandymanFieldEvidenceRouter } from '../modules/handyman-field-evidence/handyman-field-evidence.routes';
@@ -867,6 +889,9 @@ export function createApiRouter(): Router {
   // session is not a substitute, and none is created).
   router.use(createHandoffHandymanRouter());
   router.use(createCareWorkspaceRouter());
+  router.use(createCommercialConsentBridgeRouter());
+  router.use(createQuotationDeliveryRouter());
+  router.use(createVariationDeliveryRouter());
   // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
   // attribution-bound request intake, and bounded INTAKE evidence upload
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
@@ -874,6 +899,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanApiRouter());
   router.use(createHandymanOperationsQueueRouter());
   router.use(createHandymanLifecycleApiRouter());
+  router.use(createHandymanWarrantyReworkVisitRouter());
   router.use(createHandymanVisitApiRouter()); // R1C — scoped appointment proposals only
   router.use(createHandymanTenantSlotConsentRouter()); // PART 01D-2 — BM-signed slot choice ingest + fail-closed Ops confirm
   router.use(createHandymanFieldFeedRouter()); // R1D — scoped, read-only Crew/Inspector feed
@@ -894,11 +920,26 @@ export function createApiRouter(): Router {
   router.use(createHandymanInspectorAssignmentsApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-A — inspector visit assignment surface
   router.use(createHandymanDispatchApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-C/P0-D — dispatch readiness/release + identity projection
   router.use(createHandymanArrivalConfigurationRouter()); // CR-HM-FIELD-OPERATIONS-01 PART 04 — approved G-2 QR registry + G-3 Building geofence configuration (building_configuration.* + BE-02G)
+  router.use(createHandymanBmStatementRouter()); // CR-HM-BM-COMMISSION-04 PART 01 — scoped, non-issued statement preview
+  router.use(createHandymanBmReportRouter()); // CR-HM-BM-REPORT-05 — Building-wide, non-issued monthly preview
+  router.use(createHandymanBmDocumentsRouter()); // CR-HM-BM-DOCUMENT-06 — immutable issued BM PDFs
+  router.use(createHandymanBmSettlementRouter()); // CR-HM-BM-SETTLEMENT-API-01 PART 01A — read-only settlement list & detail
+  router.use(createHandymanWarrantyCertificateRouter());
+  router.use(createHandymanOfficialInvoiceRouter()); // Immutable inclusive tenant invoice
+  router.use(createHandymanTenantReceiptRouter()); // Independently verified tenant payment receipts
+  router.use(createHandymanFinalReceiptRouter()); // On-demand settled invoice receipt
+  router.use(createFinalReceiptDeliveryRouter()); // Care journal and exact-recipient acknowledgment
+  router.use(createHandymanInspectionWorkLinkRouter());
+  router.use(createHandymanDocumentIssuerProfileRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01A — Handyman document issuer company profile (handyman.commercial.manage + provider-Client scope)
+  router.use(createHandymanDocumentBankAccountRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01B — issuer company receiving bank accounts (handyman.commercial.manage + provider-Client scope; verification act gates a payment destination)
+  router.use(createHandymanDocumentSettingsRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01C — per-kind/per-language document wording, prefix namespace and signatory identity (handyman.commercial.manage + provider-Client scope)
   router.use(createHandymanArrivalChallengeApiRouter()); // CR-HM-FIELD-OPS-ACK-01 PART 02 — server-issued arrival challenge (the missing issuer command)
   router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
   router.use(createHandymanWorkSessionsApiRouter()); // CR-HM-08 PART 05 — work session field-execution surface
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
+  router.use(createHandymanCompletionManifestRouter());
   router.use(createHandymanEvidenceQcApiRouter()); // CR-HM-10 PART 06 — evidence/QC/defect surface
+  router.use(createOfficialBastDocumentRouter());
   router.use(createHandymanBastApiRouter()); // CR-HM-17 GAP PART 04 — CR-HM-11 BAST read & sign-off surface
   router.use(createHandymanBastWorkerApiRouter()); // CR-HM-BAST-HTTP-01 — authorized worker BAST PREPARE/ISSUE/VOID transport
   router.use(createHandymanCustomerLedgerApiRouter()); // CR-HM-17 GAP PART 05 — CR-HM-13 customer ledger & payment surface
@@ -913,7 +954,10 @@ export function createApiRouter(): Router {
   router.use(createHandymanHelperAttendanceRouter()); // CR-HM-FIELD-EXPENSE-HELPER-01 PART 02 — Helper Attendance Confirmation & Operations Personnel Changes
   router.use(createHandymanCareAuthorityRouter()); // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A: identity + exact Building reach only)
   router.use(createHandymanCareStandaloneDiscoveryRouter()); // CR-HM-BM-CARE-DISCOVERY-01 — Backend-session-only read discovery + safe progress
+  router.use(createHandymanWarrantyCareRouter()); // Warranty complaint intake; assessment remains independent.
   router.use(createHandymanCareCommunicationsRouter()); // CR-HM-BM-CARE-EVIDENCE-01 — request-scoped non-executable communication intake
+  router.use(createHandymanInternalNotesRouter()); // CR-HM-CARE-INTERNAL-NOTES-01 — dedicated internal operational notes for Care & Operations
+  router.use(createHandymanUnlistedIntakeRouter()); // CR-HM-CARE-UNLISTED-INTAKE — PART 01: unlisted service intake cases & Operations triage queue
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

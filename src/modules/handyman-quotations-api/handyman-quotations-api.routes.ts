@@ -1,4 +1,6 @@
+import { createHandymanRequestScopeSetRouter } from '../handyman-request-scope-set/handyman-request-scope-set.routes';
 import { Router, type RequestHandler } from 'express';
+import { createQuotationDocumentRouter } from '../handyman-quotations/handyman-quotation-document.routes';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
@@ -15,6 +17,8 @@ import {
   postHandymanQuotationLineHandler,
   postHandymanQuotationRevisionHandler,
   postHandymanQuotationSupersedeHandler,
+  putHandymanQuotationLineTaxPriceBasisHandler,
+  putHandymanQuotationLineWarrantyTermsHandler,
 } from './handyman-quotations-api.controller';
 
 /**
@@ -52,6 +56,8 @@ import {
  */
 export function createHandymanQuotationsApiRouter(): Router {
   const router = Router();
+  router.use(createQuotationDocumentRouter());
+  router.use(createHandymanRequestScopeSetRouter());
   const auth = authenticationMiddleware;
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');
@@ -96,6 +102,10 @@ export function createHandymanQuotationsApiRouter(): Router {
     postHandymanQuotationRevisionHandler,
   );
   versionPost('/lines', postHandymanQuotationLineHandler);
+  router.put('/handyman/quotation-versions/:quotationVersionId/lines/:quotationLineId/tax-price-basis',
+    auth, manage, putHandymanQuotationLineTaxPriceBasisHandler);
+  router.put('/handyman/quotation-versions/:quotationVersionId/lines/:quotationLineId/warranty-terms',
+    auth, manage, putHandymanQuotationLineWarrantyTermsHandler);
   versionGet('/lines', getHandymanQuotationLinesHandler);
   versionGet('/totals', getHandymanQuotationTotalsHandler);
   versionPost('/issue', postHandymanQuotationIssueHandler);

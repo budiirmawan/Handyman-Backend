@@ -1,0 +1,100 @@
+import type { BuyerBindingPin } from '../handyman-buyer-binding';
+import type { CustomerDocumentClass, CustomerIdentifierKind, CustomerTaxClassificationPin } from '../handyman-customer-tax';
+import type { HandymanTaxIdentityOwner, TaxIdentityApprovalEvent } from '../handyman-tax-identity';
+import type { HandymanTaxRoundingMode, HandymanTaxTransactionContext, TaxRuleApprovalEvent } from '../handyman-tax-rules';
+
+export type PpnApplicability = 'TAXABLE' | 'EXEMPT' | 'NON_TAXABLE';
+export type PpnIdentityPin = Readonly<{
+  owner: HandymanTaxIdentityOwner;
+  profileId: string;
+  profileVersion: number;
+  profileDigest: string;
+  approvalDecisionId: string;
+}>;
+export type PpnRulePin = Readonly<{
+  ruleId: string;
+  ruleVersion: number;
+  ruleDigest: string;
+  approvalDecisionId: string;
+}>;
+export type CalculateApprovedPpnInput = Readonly<{
+  clientId: string;
+  /** Legacy customer requests remain blocked; use CalculateCustomerPpnInput for the verified-buyer boundary. */
+  transactionContext: HandymanTaxTransactionContext;
+  /** Explicit Indonesian calendar tax date and its actual zoned tax-point instant. */
+  taxDate: string;
+  taxPointAt: string;
+  currency: 'IDR';
+  amountBasis: 'PPN_EXCLUSIVE';
+  /** Nonnegative canonical NUMERIC(18,2) string; IDR's minor-unit precision is zero. */
+  sourceAmount: string;
+  applicability: PpnApplicability;
+  /** Explicit approved 0497 classification; never inferred from PKP alone. */
+  taxpayerClassification: string;
+  supplier: PpnIdentityPin;
+  recipient: PpnIdentityPin;
+  rule: PpnRulePin;
+}>;
+/** An omitted classification retains the legacy fail-closed customer boundary. */
+export type CalculateCustomerPpnInput = Omit<CalculateApprovedPpnInput, 'transactionContext' | 'recipient'> & Readonly<{
+  transactionContext: 'CUSTOMER_SERVICE_BILLING'; requestId: string; buyer: BuyerBindingPin;
+  classification?: CustomerTaxClassificationPin;
+}>;
+export type PpnIdentityReference = Readonly<{
+  ownerKind: HandymanTaxIdentityOwner['kind']; ownerId: string; clientId: string;
+  profileId: string; profileVersion: number; profileDigest: string;
+  issuerProfileId: string | null; counterpartyId: string | null; verificationId: string | null;
+  evidenceSource: string; evidenceReference: string; createdByUserId: string;
+  taxpayerKind: 'LEGAL_ENTITY' | 'INDIVIDUAL'; individualResidency: 'RESIDENT' | 'NON_RESIDENT' | null;
+  pkpStatus: 'PKP' | 'NON_PKP';
+  approval: Readonly<{ submission: TaxIdentityApprovalEvent; decision: TaxIdentityApprovalEvent }>;
+}>;
+export type ApprovedPpnBreakdown = Readonly<{
+  schema: 'HANDYMAN_PPN_CALCULATION_V1';
+  clientId: string; transactionContext: HandymanTaxTransactionContext; taxDate: string; taxPointAt: string;
+  currency: 'IDR'; amountBasis: 'PPN_EXCLUSIVE'; applicability: PpnApplicability; taxpayerClassification: string;
+  sourceAmount: string; dppAmount: string; ppnRatePercent: string; ppnAmount: string; totalIncludingPpn: string;
+  rounding: Readonly<{ mode: HandymanTaxRoundingMode; scale: 0 | null; stages: 'DPP_THEN_PPN' }>;
+  basisMethodCode: string;
+  rule: Readonly<{ id: string; version: number; digest: string; legalReference: string; legalSource: string;
+    classificationDescription: string; basisDescription: string; evidenceSource: string; evidenceReference: string;
+    createdByUserId: string; approval: Readonly<{ submission: TaxRuleApprovalEvent; decision: TaxRuleApprovalEvent }> }>;
+  supplier: PpnIdentityReference; recipient: PpnIdentityReference;
+  /** No invoice, contract, tenant-company or Building beneficiary binding is asserted by this pure calculation. */
+  transactionPartyBinding: 'CALLER_SUPPLIED_NOT_VERIFIED';
+  checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+
+/** Read-only result: Finance-reviewed source assertion, not invoice issuance or ledger proof. */
+export type ApprovedCustomerPpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' | 'transactionContext' | 'recipient' | 'transactionPartyBinding'> & Readonly<{
+  schema: 'HANDYMAN_CUSTOMER_PPN_CALCULATION_V1'; transactionContext: 'CUSTOMER_SERVICE_BILLING';
+  buyer: Readonly<{ tenantCompanyId: string; kind: 'INDIVIDUAL' | 'LEGAL_ENTITY'; binding: BuyerBindingPin }>;
+  customerClassification: Readonly<{
+    pin: CustomerTaxClassificationPin; documentClass: CustomerDocumentClass; identifierKind: CustomerIdentifierKind;
+    transactionEvidenceReferenceId: string; retailEvidenceReferenceId: string | null; verificationEvidenceReferenceId: string;
+  }>;
+  transactionPartyBinding: 'VERIFIED_BUYER_FINANCE_REVIEWED_TRANSACTION_ASSERTION';
+}>;
+
+/** Existing rule-based result and checksum remain unchanged. */
+export type VerifiedBmRulePpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' | 'transactionPartyBinding'> & Readonly<{
+  schema: 'HANDYMAN_VERIFIED_BM_PPN_CALCULATION_V1';
+  transactionPartyBinding: 'VERIFIED_BM_COMMISSION_FINANCE_APPROVED';
+  source: import('../handyman-pph-calculation').BmCommissionSource;
+  determination: import('../handyman-bm-tax-case').BmTaxCaseReference;
+}>;
+/** No rule, rate, tax basis or rounding is asserted for an independently reviewed non-applicability. */
+export type VerifiedBmNonApplicablePpnBreakdown = Readonly<{
+  schema: 'HANDYMAN_VERIFIED_BM_PPN_NOT_APPLICABLE_V1';
+  clientId: string; transactionContext: 'BM_COMMISSION'; taxDate: string; taxPointAt: string;
+  currency: 'IDR'; amountBasis: 'PPN_EXCLUSIVE'; applicability: 'NOT_APPLICABLE'; taxpayerClassification: null;
+  sourceAmount: string; dppAmount: null; ppnRatePercent: null; ppnAmount: '0.00'; totalIncludingPpn: string;
+  rounding: null; basisMethodCode: null; rule: null;
+  supplier: PpnIdentityReference; recipient: PpnIdentityReference;
+  nonApplicability: import('../handyman-bm-tax-case').BmNonApplicabilityProvenance;
+  transactionPartyBinding: 'VERIFIED_BM_COMMISSION_FINANCE_APPROVED';
+  source: import('../handyman-pph-calculation').BmCommissionSource;
+  determination: import('../handyman-bm-tax-case').BmTaxCaseReference;
+  checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+export type VerifiedBmPpnBreakdown = VerifiedBmRulePpnBreakdown | VerifiedBmNonApplicablePpnBreakdown;

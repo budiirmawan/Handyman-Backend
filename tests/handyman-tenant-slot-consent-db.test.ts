@@ -401,16 +401,20 @@ test('confirmation path: a bound visit confirms atomically with one reservation 
     'replay adds no second reservation');
 });
 
-test('confirmation stays disabled while BM authority is absent, and the bound visit is untouched', async () => {
+test('valid stored tenant coordination confirms without BM API provisioning; missing coordination still cannot confirm', async () => {
   const seed = await seedRequest();
   await ingest(seed, signed(seed));
   const visit = await proposeVisit(seed, SLOT_A_START, SLOT_A_END);
-  // No BM_TENANT secret is deployed to this process, so the real authority check is closed.
-  await expectCode(confirmTenantSlotVisit(seed.requestId, visit.id, 2, operatorId),
-    ERROR_CODES.HANDYMAN_VISIT_CONFIRMATION_DISABLED, 409);
-  const row = await visitOf(visit.id);
-  assert.equal(row.state, 'TENANT_SELECTED');
-  assert.equal(row.version, 2);
-  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM handyman_visit_capacity_reservations WHERE appointment_id = $1`,
-    [visit.id])).rows[0].n, 0);
+  const ports = {scope: async () => {}, admitResource: async () => {},
+    authorityConfigured: async () => { throw new Error('Must not require BM API provisioning'); }};
+  const confirmed = await confirmTenantSlotVisit(seed.requestId, visit.id, 2, operatorId, ports);
+  assert.equal(confirmed.state, 'CONFIRMED');
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM handyman_visit_capacity_reservations WHERE appointment_id=$1 AND active`, [visit.id])).rows[0].n, 1);
+
+  const uncoordinated = await seedRequest();
+  const proposal = await proposeVisit(uncoordinated, SLOT_B_START, SLOT_B_END);
+  await expectCode(confirmTenantSlotVisit(uncoordinated.requestId, proposal.id, 1, operatorId, ports),
+    ERROR_CODES.HANDYMAN_VISIT_STATE_CONFLICT, 409);
+  assert.equal((await visitOf(proposal.id)).state, 'PROPOSED');
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM handyman_visit_capacity_reservations WHERE appointment_id=$1`, [proposal.id])).rows[0].n, 0);
 });

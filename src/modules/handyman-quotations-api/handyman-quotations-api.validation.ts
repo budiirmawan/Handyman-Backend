@@ -3,7 +3,9 @@ import { isValidUuid } from '../clients';
 import {
   HANDYMAN_QUOTATION_CURRENCIES,
   HANDYMAN_QUOTATION_DECISIONS,
+  HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_LINE_TYPES,
+  parseTaxPriceBasis,
   type AddHandymanQuotationLineInput,
   type DecideHandymanQuotationInput,
 } from '../handyman-quotations';
@@ -99,6 +101,52 @@ export function parseQuotationDpTermsBody(body: unknown): {
   return out;
 }
 
+/**
+ * POST /quotations/:id/versions — a DRAFT revision. Optional DP terms (a
+ * declared policy replaces the predecessor's; omitting every DP key INHERITS
+ * the predecessor's policy instead of silently resetting it) and the
+ * manual-origin carry-forward SELECTION, which is the only authorized way to
+ * remove a line from a manual quotation (nothing is deleted: the new immutable
+ * snapshot simply omits the line). IDs are validated as UUIDs and bounded; they
+ * must belong to the immediately previous version, which the service verifies.
+ */
+export function parseQuotationRevisionBody(body: unknown): {
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+  carryForwardLineIds?: string[];
+} {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const dpTerms = parseQuotationDpTermsBody(src);
+  if (
+    src.carryForwardLineIds === undefined ||
+    src.carryForwardLineIds === null
+  ) {
+    return dpTerms;
+  }
+  if (!Array.isArray(src.carryForwardLineIds)) {
+    return fail('Request validation failed.', [
+      {
+        field: 'carryForwardLineIds',
+        message: 'carryForwardLineIds must be an array of line UUIDs.',
+      },
+    ]);
+  }
+  if (src.carryForwardLineIds.length > 200) {
+    return fail('Request validation failed.', [
+      {
+        field: 'carryForwardLineIds',
+        message: 'carryForwardLineIds may carry at most 200 lines.',
+      },
+    ]);
+  }
+  const carryForwardLineIds = src.carryForwardLineIds.map((value) =>
+    uuid(value, 'carryForwardLineIds'),
+  );
+  return { ...dpTerms, carryForwardLineIds };
+}
+
 /** POST /requests/:id/quotation — request identity comes from the URL; optional DP terms may be supplied. */
 export function parseQuotationCreate(body?: unknown): {
   dpRequired?: boolean;
@@ -165,6 +213,31 @@ export function parseQuotationLineBody(
   if (src.sourceItemId !== undefined && src.sourceItemId !== null) {
     sourceItemId = uuid(src.sourceItemId, 'sourceItemId');
   }
+  /*
+   * CR-HM-MANUAL-QUOTATION-01 PART 03A: the optional origin DECLARATION is
+   * whitelisted here, but it is never self-granting — the service re-derives
+   * the authoritative origin from the parent request's lane (a CATALOG claim on
+   * the manual/unlisted-intake lane and an ungrounded MANUAL_ONE_TIME claim on
+   * the catalog lane are both refused) and the database law (0489) backstops
+   * it. Unknown keys are still dropped by this explicit whitelist.
+   */
+  let originKind: AddHandymanQuotationLineInput['originKind'];
+  if (src.originKind !== undefined && src.originKind !== null) {
+    if (
+      typeof src.originKind !== 'string' ||
+      !(HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS as readonly string[]).includes(
+        src.originKind,
+      )
+    ) {
+      fail('Request validation failed.', [
+        {
+          field: 'originKind',
+          message: 'originKind must be CATALOG or MANUAL_ONE_TIME.',
+        },
+      ]);
+    }
+    originKind = src.originKind as AddHandymanQuotationLineInput['originKind'];
+  }
   return {
     lineType: lineType as AddHandymanQuotationLineInput['lineType'],
     description,
@@ -172,8 +245,18 @@ export function parseQuotationLineBody(
     uomId,
     currency: currency as AddHandymanQuotationLineInput['currency'],
     finalQuotedUnitAmount,
+    ...(src.taxPriceBasis !== undefined ? { taxPriceBasis: parseTaxPriceBasis(src.taxPriceBasis) } : {}),
     ...(sourceItemId ? { sourceItemId } : {}),
+    ...(originKind ? { originKind } : {}),
   };
+}
+
+export function parseQuotationPriceBasisBody(body: unknown) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).some(key => key !== 'taxPriceBasis')) {
+    throw AppError.validation('Only taxPriceBasis is accepted.');
+  }
+  return parseTaxPriceBasis((body as Record<string, unknown>).taxPriceBasis);
 }
 
 export function parseQuotationIssueBody(body: unknown): {
@@ -182,6 +265,7 @@ export function parseQuotationIssueBody(body: unknown): {
   dpPercentage?: number | null;
   dpAmount?: number | null;
   dpTermsNotes?: string | null;
+  documentLanguage?: 'id' | 'en';
 } {
   const src = (body ?? {}) as Record<string, unknown>;
   const validUntil =
@@ -196,14 +280,20 @@ export function parseQuotationIssueBody(body: unknown): {
       { field: 'validUntil', message: 'validUntil must be a valid ISO date.' },
     ]);
   }
+  if (src.documentLanguage !== undefined && src.documentLanguage !== 'id' && src.documentLanguage !== 'en') {
+    fail('Request validation failed.', [{ field: 'documentLanguage', message: 'documentLanguage must be id or en.' }]);
+  }
   return {
     validUntil,
     ...parseQuotationDpTermsBody(body),
+    ...(src.documentLanguage ? { documentLanguage: src.documentLanguage as 'id' | 'en' } : {}),
   };
 }
 
 export function parseQuotationDecisionBody(body: unknown): {
   decision: DecideHandymanQuotationInput['decision'];
+  offerDocumentId?: string;
+  offerPdfSha256?: string;
 } {
   const src = (body ?? {}) as Record<string, unknown>;
   const decision = typeof src.decision === 'string' ? src.decision : '';
@@ -214,5 +304,10 @@ export function parseQuotationDecisionBody(body: unknown): {
       { field: 'decision', message: 'decision must be APPROVE or REJECT.' },
     ]);
   }
-  return { decision: decision as DecideHandymanQuotationInput['decision'] };
+  const hasOffer = src.offerDocumentId !== undefined || src.offerPdfSha256 !== undefined;
+  if (hasOffer && (typeof src.offerPdfSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(src.offerPdfSha256))) {
+    throw AppError.validation('offerPdfSha256 must be the exact lowercase SHA-256 of the issued offer.');
+  }
+  return { decision: decision as DecideHandymanQuotationInput['decision'],
+    ...(hasOffer ? { offerDocumentId: uuid(src.offerDocumentId, 'offerDocumentId'), offerPdfSha256: src.offerPdfSha256 as string } : {}) };
 }

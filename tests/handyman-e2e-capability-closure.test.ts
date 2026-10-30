@@ -6,6 +6,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
+import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
 import {
   baseFixture,
   crewFixture,
@@ -243,6 +244,8 @@ async function fundedDisputeFixture() {
     effectiveFrom: new Date(Date.now() - 60_000).toISOString(),
     idempotencyKey: id(),
   });
+  await bindVerifiedTestBm({ actor: adminId, clientId: realm.client.id,
+    buildingId: realm.building.id, versionId: version, query: q });
   await openHandymanCustomerTransaction(
     { executionScopeId: scope.id, idempotencyKey: id() },
     adminId,
@@ -865,6 +868,8 @@ describe('CR-HM-18 FULL-CAPABILITY-E2E-CLOSURE-01', () => {
       effectiveFrom: new Date(Date.now() - 60_000).toISOString(),
       idempotencyKey: id(),
     });
+    await bindVerifiedTestBm({ actor: adminId, clientId: realm.client.id,
+      buildingId: realm.building.id, versionId: version, query: q });
     await openHandymanCustomerTransaction(
       { executionScopeId: scope.id, idempotencyKey: id() },
       adminId,
@@ -1108,6 +1113,8 @@ describe('CR-HM-18 FULL-CAPABILITY-E2E-CLOSURE-01', () => {
         effectiveFrom: new Date(Date.now() - 60_000).toISOString(),
         idempotencyKey: id(),
       });
+      await bindVerifiedTestBm({ actor: adminId, clientId: f.realm.client.id,
+        buildingId: f.realm.building.id, versionId: v, query: q });
       await openHandymanCustomerTransaction(
         { executionScopeId: f.scope.id, idempotencyKey: id() },
         adminId,

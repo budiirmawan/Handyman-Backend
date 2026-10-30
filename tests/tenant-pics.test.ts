@@ -9,6 +9,8 @@ import { buildingService } from '../src/modules/buildings';
 import { clientService } from '../src/modules/clients';
 import { propertyService } from '../src/modules/properties';
 import { parseCreateTenantPicBody } from '../src/modules/tenant-pics';
+import { userService } from '../src/modules/users';
+import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { createAdminUser, createPlainSession } from './helpers/access';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
@@ -17,12 +19,14 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let token = '';
 let userId = '';
+let embedded: EmbeddedTestDatabase | undefined;
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 const auth = (value = token) => ({ Authorization: `Bearer ${value}` });
 
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({ dir: `/tmp/hm-pic-contract-${randomUUID()}`, port: 55585 });
   const db = await ensureTestDatabase();
-  if (!db) return;
+  assert.ok(db, 'disposable PIC database must be available');
   pool = await initDatabase(db);
   await migrateUp(pool);
   await pool.query(
@@ -35,9 +39,13 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+  } finally {
+    await embedded?.stop();
+    pool = null;
+    database = null;
+  }
 });
 
 function ready(t: TestContext): boolean {
@@ -67,6 +75,15 @@ async function createContext(assignedUserId = userId) {
     buildingId: building.id,
   });
   return { client, building };
+}
+
+/** Identity administrators link a separate existing customer, never themselves. */
+async function linkableCustomer(buildingId: string) {
+  const user = await userService.createUser({
+    email: `pic-customer-${suffix().toLowerCase()}@example.com`, displayName: 'Customer',
+  });
+  await buildingAssignmentService.createAssignment(user.id, { buildingId });
+  return user;
 }
 
 async function createTenantCompany(clientId: string, withToken = token) {
@@ -133,10 +150,11 @@ describe('BE-14B Tenant PIC / User', () => {
     if (!ready(t)) return;
     const context = await createContext();
     const company = await createTenantCompany(context.client.id);
+    const customer = await linkableCustomer(context.building.id);
     const usersBefore = await pool!.query('SELECT id FROM users ORDER BY id');
-    const created = await createPic(company.id, payload({ userId }));
+    const created = await createPic(company.id, payload({ userId: customer.id }));
     assert.equal(created.status, 201, JSON.stringify(created.body));
-    assert.equal(created.body.data.userId, userId);
+    assert.equal(created.body.data.userId, customer.id);
     const usersAfter = await pool!.query('SELECT id FROM users ORDER BY id');
     assert.deepEqual(usersAfter.rows, usersBefore.rows);
   });
@@ -170,14 +188,15 @@ describe('BE-14B Tenant PIC / User', () => {
     const context = await createContext();
     const company = await createTenantCompany(context.client.id);
     const created = await createPic(company.id, payload({ isPrimary: true }));
+    const customer = await linkableCustomer(context.building.id);
     const inactive = await api()
       .patch(`/api/v1/tenant-pics/${created.body.data.id}`)
       .set(auth())
-      .send({ picName: 'Ayu Updated', roleTitle: 'Director', userId, status: 'INACTIVE' });
+      .send({ picName: 'Ayu Updated', roleTitle: 'Director', userId: customer.id, status: 'INACTIVE' });
     assert.equal(inactive.status, 200, JSON.stringify(inactive.body));
     assert.equal(inactive.body.data.picName, 'Ayu Updated');
     assert.equal(inactive.body.data.roleTitle, 'Director');
-    assert.equal(inactive.body.data.userId, userId);
+    assert.equal(inactive.body.data.userId, customer.id);
     assert.equal(inactive.body.data.status, 'INACTIVE');
     assert.equal(inactive.body.data.isPrimary, false);
 

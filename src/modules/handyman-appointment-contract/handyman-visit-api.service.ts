@@ -9,7 +9,10 @@ import { tenantSlotConsentAuthorityConfigured } from './handyman-tenant-slot-aut
 import {
   assertProposalMatchesPendingChoice, bindTenantSlotChoice, findPendingTenantSlotChoice,
 } from './handyman-tenant-slot-binding.repository';
-import type { VisitProposalBody } from './handyman-visit-api.validation';
+import { parseVisitWindow, type VisitProposalBody } from './handyman-visit-api.validation';
+import { handymanSchedulingReadinessRepository } from '../handyman-scheduling/handyman-scheduling.repository';
+import { getHandymanSchedulingReadiness } from '../handyman-scheduling/handyman-scheduling.service';
+import { sameInstant } from './handyman-tenant-slot-assertion';
 
 /**
  * Audit-only journal for visit PROPOSAL mutations. Written in the SAME
@@ -87,15 +90,23 @@ export async function readVisitProposals(requestId: string, actorId: string) {
   const req = await requestScope(db, requestId);
   await scoped(actorId, req);
   const rows = await listHandymanVisitAppointments(db, req.clientId, req.id);
-  // Fail-closed: true only when a BM integration is explicitly granted and its secret is deployed.
-  const enabled = await tenantSlotConsentAuthorityConfigured(db);
-  return {requestId, appointments: rows.map(encode), bookingEnabled: enabled, confirmationEnabled: enabled};
+  // Existing recorded tenant coordination can be confirmed without API provisioning.
+  // A configured tenant-choice producer is another availability signal, not a work permit.
+  const enabled = rows.some(row => row.state === 'TENANT_SELECTED') ||
+    await tenantSlotConsentAuthorityConfigured(db);
+  // Existing preference/history stays separate from CONFIRMED visit dates.
+  const schedulingReadiness = await getHandymanSchedulingReadiness(requestId, actorId);
+  return {requestId, appointments: rows.map(encode), bookingEnabled: enabled, confirmationEnabled: enabled, schedulingReadiness};
 }
 export async function createVisitProposal(requestId: string, body: VisitProposalBody, actorId: string) {
   try {
     return await withTransaction(async tx => {
       const req = await requestScope(tx, requestId, true);
       await scoped(actorId, req);
+      if (body.executionScopeId && (await tx.query(`SELECT 1 FROM handyman_warranty_rework_executions
+        WHERE execution_scope_id=$1`,[body.executionScopeId])).rowCount) {
+        throw conflict('Use the rework-specific visit and tenant-consent path.');
+      }
       if (!req.timezone) throw conflict('Building timezone is not configured.');
       try { new Intl.DateTimeFormat('en', {timeZone: req.timezone}).format(new Date()); }
       catch { throw conflict('Building timezone is invalid.'); }
@@ -105,10 +116,28 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
       // A tenant-originated choice pending for this kind is authoritative for the time:
       // Operations matches an eligible resource to it and cannot move it.
       const pending = await findPendingTenantSlotChoice(tx, requestId, body.kind);
-      if (pending) assertProposalMatchesPendingChoice(pending, body.startAt, body.endAt);
+      const requested = body.kind === 'EXECUTION'
+        ? await handymanSchedulingReadinessRepository.findActiveByRequest(tx, requestId) : null;
+      // A coordinated tenant revision takes precedence over the original
+      // preference; neither is overwritten. Inspection never borrows the
+      // request's execution preference.
+      const preferred = pending
+        ? { startAt: pending.selectedStartAt.toISOString(), endAt: pending.selectedEndAt.toISOString() }
+        : requested
+          ? { startAt: requested.preferredWindowStart.toISOString(), endAt: requested.preferredWindowEnd.toISOString() }
+          : null;
+      if ((!body.startAt || !body.endAt) && !preferred) {
+        throw conflict('No requested execution window is recorded. Reuse the existing request scheduling readiness; do not invent a date.');
+      }
+      const interval = parseVisitWindow(body.startAt ?? preferred?.startAt, body.endAt ?? preferred?.endAt);
+      if (pending) assertProposalMatchesPendingChoice(pending, interval.startAt, interval.endAt);
+      else if (requested && (!sameInstant(interval.startAt, requested.preferredWindowStart) ||
+          !sameInstant(interval.endAt, requested.preferredWindowEnd))) {
+        throw conflict('Execution proposal differs from the recorded requested window. Coordinate the revision with the tenant and preserve the existing scheduling history.');
+      }
       const inserted = await insertHandymanVisitProposal(tx, {handymanRequestId: requestId,
         kind: body.kind, resourceId: body.resourceId, executionScopeId: body.executionScopeId,
-        interval: {startAt: body.startAt, endAt: body.endAt, timezone: req.timezone}, createdByUserId: actorId});
+        interval: {...interval, timezone: req.timezone}, createdByUserId: actorId});
       // Bind in the same transaction: PROPOSED → TENANT_SELECTED under the 0431 rules.
       let created: HandymanAppointmentRecord = inserted;
       if (pending) {
@@ -127,7 +156,8 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
         metadata: {handymanRequestId: requestId, kind: body.kind, resourceType: created.resourceType,
           resourceId: created.resourceId, executionScopeId: created.executionScopeId,
           startAt: created.startAt.toISOString(), endAt: created.endAt.toISOString(),
-          state: created.state, version: created.version, tenantSlotConsentId: pending?.id ?? null},
+          state: created.state, version: created.version, tenantSlotConsentId: pending?.id ?? null,
+          schedulingReadinessId: requested?.id ?? null},
       }, tx);
       return encode(created);
     });
@@ -143,7 +173,7 @@ export async function cancelVisitProposal(requestId: string, appointmentId: stri
     const changed = await tx.query(`UPDATE handyman_visit_appointments SET
       state='CANCELLED', cancelled_by_user_id=$4, cancelled_at=NOW(), version=version+1,
       updated_at=NOW() WHERE id=$1 AND handyman_request_id=$2 AND client_id=$3
-        AND state='PROPOSED' AND version=$5 RETURNING id, state, version`,
+        AND state='PROPOSED' AND warranty_rework_id IS NULL AND version=$5 RETURNING id, state, version`,
       [appointmentId, requestId, req.clientId, actorId, version]);
     if (!changed.rows.length) throw conflict('Only the current PROPOSED appointment can be cancelled. Reload before retry.');
     await recordOperationalEvent({

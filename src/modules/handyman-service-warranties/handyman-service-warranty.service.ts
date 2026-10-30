@@ -1,7 +1,7 @@
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
-import { handymanBastRepository, type HandymanBastRecord }
+import { handymanBastRepository, hasVerifiedHandymanBastCustomerAcceptance, type HandymanBastRecord }
   from '../handyman-bast';
 import { handymanScopeAssignmentRepository }
   from '../handyman-scope-assignments';
@@ -140,6 +140,9 @@ export async function startHandymanServiceWarranty(
 
   try {
     return await withTransaction(async (client) => {
+      if (!(await hasVerifiedHandymanBastCustomerAcceptance(client, bast.id))) {
+        throw handymanServiceWarrantyNotEligibleError('verified-personal-customer-consent-required');
+      }
       const existing =
         await handymanServiceWarrantyRepository.findWarrantyByExecutionScopeId(
           client,

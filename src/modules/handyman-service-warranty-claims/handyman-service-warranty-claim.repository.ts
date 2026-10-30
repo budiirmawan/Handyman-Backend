@@ -39,7 +39,7 @@ const CLAIM_SELECT = `
   SELECT id, client_id, warranty_id, execution_scope_id, bast_id,
          status, claim_note, evidence_record_id, opened_by_user_id,
          submitted_at, claimant_user_id, decided_at, decided_by_user_id,
-         decision_note, withdrawn_at, created_at, updated_at
+         decision_note, decision_assessment_id, withdrawn_at, created_at, updated_at
     FROM handyman_service_warranty_claims`;
 
 const EVENT_SELECT = `
@@ -64,6 +64,7 @@ function mapClaim(row: Row): HandymanServiceWarrantyClaimRecord {
     decidedAt: row.decided_at ?? null,
     decidedByUserId: row.decided_by_user_id ?? null,
     decisionNote: row.decision_note ?? null,
+    decisionAssessmentId: row.decision_assessment_id ?? null,
     withdrawnAt: row.withdrawn_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -107,7 +108,7 @@ async function createClaim(
      RETURNING id, client_id, warranty_id, execution_scope_id, bast_id,
                status, claim_note, evidence_record_id, opened_by_user_id,
                submitted_at, claimant_user_id, decided_at,
-               decided_by_user_id, decision_note, withdrawn_at,
+               decided_by_user_id, decision_note, decision_assessment_id, withdrawn_at,
                created_at, updated_at`,
     [
       randomUUID(),
@@ -172,13 +173,14 @@ async function updateClaimStatus(
   evidenceRecordId: string | null,
   actorUserId: string,
   decisionNote: string | null,
+  decisionAssessmentId: string | null,
 ): Promise<HandymanServiceWarrantyClaimRecord> {
   const result = await executor.query(
     `UPDATE handyman_service_warranty_claims
         SET status = $2,
             evidence_record_id = COALESCE($3, evidence_record_id),
             submitted_at = CASE WHEN $2 = 'CLAIM_SUBMITTED'
-                                THEN COALESCE(submitted_at, NOW())
+                                THEN COALESCE(submitted_at, statement_timestamp())
                                 ELSE submitted_at END,
             claimant_user_id = CASE WHEN $2 = 'CLAIM_SUBMITTED'
                                     THEN COALESCE(claimant_user_id, $4)
@@ -194,6 +196,9 @@ async function updateClaimStatus(
               WHEN $2 IN ('CLAIM_APPROVED', 'CLAIM_REJECTED')
                 THEN $5
               ELSE decision_note END,
+            decision_assessment_id = CASE
+              WHEN $2 IN ('CLAIM_APPROVED', 'CLAIM_REJECTED') THEN $6
+              ELSE decision_assessment_id END,
             withdrawn_at = CASE WHEN $2 = 'CLAIM_WITHDRAWN'
                                 THEN COALESCE(withdrawn_at, NOW())
                                 ELSE withdrawn_at END,
@@ -202,9 +207,9 @@ async function updateClaimStatus(
       RETURNING id, client_id, warranty_id, execution_scope_id, bast_id,
                 status, claim_note, evidence_record_id, opened_by_user_id,
                 submitted_at, claimant_user_id, decided_at,
-                decided_by_user_id, decision_note, withdrawn_at,
+                decided_by_user_id, decision_note, decision_assessment_id, withdrawn_at,
                 created_at, updated_at`,
-    [claimId, status, evidenceRecordId, actorUserId, decisionNote],
+    [claimId, status, evidenceRecordId, actorUserId, decisionNote, decisionAssessmentId],
   );
   return mapClaim(result.rows[0]);
 }

@@ -1,3 +1,4 @@
+import { assertConfiguredHandymanInvoiceTax } from '../handyman-customer-transactions/handyman-financial-tax.service';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
@@ -11,6 +12,7 @@ import {
 import { readHandymanLedgerTransactionAt } from '../handyman-customer-ledger-read';
 import { assertCurrentGuardedHandymanQcPass } from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { handymanExecutionScopeRepository } from '../handyman-quotations';
+import { hasVerifiedHandymanBastCustomerAcceptance } from '../handyman-bast';
 import { recordOperationalEvent } from '../operational-events';
 
 type Executor = Pick<PoolClient, 'query'>;
@@ -160,6 +162,7 @@ export type HandymanFinalCloseBlockerCode =
   | 'FINAL_INVOICE_NOT_FINALIZED'
   | 'FINAL_INVOICE_LINES_INCOMPLETE'
   | 'FINAL_INVOICE_NOT_PAID'
+  | 'FISCAL_RECONCILIATION_REQUIRED'
   | 'OPEN_SETTLEMENT_EXCEPTION';
 
 export type HandymanFinalCloseBlocker = {
@@ -720,7 +723,7 @@ async function evaluateFinalCloseGates(
     });
   }
 
-  // 6. BAST ACCEPTED by authorized Tenant/PIC
+  // 6. BAST ACCEPTED with qualified direct-PIC or verified Care-recorded customer consent
   const bastDocRes = await executor.query<{
     id: string;
     status: string;
@@ -755,12 +758,13 @@ async function evaluateFinalCloseGates(
     blockers.push({
       code: 'BAST_NOT_ACCEPTED',
       message:
-        'BAST must be ACCEPTED by an authorized Tenant/PIC and bound to the latest Supervisor QC PASS run.',
+        'BAST must carry qualified customer acceptance and be bound to the latest Supervisor QC PASS run.',
     });
-  } else if (!activeBast.has_accept_signoff) {
+  } else if (!activeBast.has_accept_signoff ||
+      !(await hasVerifiedHandymanBastCustomerAcceptance(executor, activeBast.id))) {
     blockers.push({
       code: 'BAST_SIGN_OFF_MISSING',
-      message: 'Accepted BAST must have a valid customer ACCEPT sign-off record.',
+      message: 'Accepted BAST must have a qualified direct-PIC or independently verified Care-recorded customer consent receipt; legacy staff/digest-only sign-offs do not qualify.',
     });
   } else {
     bastAccepted = true;
@@ -875,6 +879,15 @@ async function evaluateFinalCloseGates(
     } else {
       finalInvoicePaid = true;
     }
+  }
+
+  // Fiscal completeness belongs to final reconciliation, not commercial
+  // invoice issuance. Legacy commercial-only scopes remain unchanged.
+  try {
+    await assertConfiguredHandymanInvoiceTax(executor, executionScopeId, true);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED') throw error;
+    blockers.push({code:'FISCAL_RECONCILIATION_REQUIRED', message:error.message});
   }
 
   // 9. Zero blocking settlement exceptions (while keeping settlement & warranty lifecycles separate)

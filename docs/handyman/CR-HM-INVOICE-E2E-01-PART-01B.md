@@ -1,0 +1,22 @@
+# Handyman inclusive invoice tax projection — PART 01B
+
+This part **does not issue an invoice, PDF or fiscal document**. It leaves quotation prices, ledger/payment/receipt/settlement history and existing V1 exclusive PPN behavior intact. It exposes a service-only, read-only projection for a later issuer, not an authorization to issue or submit e-Faktur.
+
+## Authority and use
+
+1. The existing `proposeCustomerTaxClassification` / `decideCustomerTaxClassification` maker–independent-checker flow now accepts `amountBasis: PPN_INCLUSIVE` and `invoice: { executionScopeId, supplier, lines }`. `supplier` is the existing approved issuer-identity pin. Every line must contain its **own** charge-line ID, customer taxpayer-classification code, exact Finance-approved rule pin, and line-specific evidence reference. The server derives and pins the complete commercial source, not caller-supplied amounts. The supplied `sourceAmount` must equal its correction-netted gross. The top-level classification/rule identify one of the individually reviewed lines; they are **not** an assertion that all lines share the same treatment. The existing buyer binding, customer identity/document checks, independent decision, exact Building and Finance permissions remain required.
+2. `calculateInclusiveHandymanInvoicePpn(actor, { clientId, requestId, classification })` revalidates the current V2 classification/decision, all line rules, approved issuer, buyer and commercial source in one repeatable-read, read-only transaction. It returns per-line consideration, DPP and PPN, their totals, the original gross, exact quote/charge/ADD/REDUCE provenance and SHA-256 checksum. The gross is never increased by PPN. It is neither a payment nor settlement assertion.
+3. A later invoice issuer **must revalidate current pins in its own issuance transaction**. A previous checksum or projection is not a lock or continuing authorization. Newly approved variations, changed correction sources, a superseded classification, or revoked/out-of-window authority fail closed.
+
+The commercial source requires the original tenant-approved quote, every original quoted line posted as an exact full charge with its composition anchor, every approved ADD final-charge eligible with its exact tenant-approved revised line, and each approved REDUCE paired with its 0517 signed binding and (when nonzero) its single positive-magnitude ledger adjustment. Each original/revised version must have effective, immutable, previously reviewed `GROSS_INCLUSIVE` price facts. The approved buyer must be the quote's tenant. Unposted, partial-usage, missing or extra charges, unexplained adjustments, transaction-level adjustments, inspection credits and fiscal withholding credits are **not** allocated to lines or tax bases here. They require independent reconciliation rather than being treated as a REDUCE or as a tax charge. No historical facts are backfilled.
+
+## Explicit, Finance-approved whole-IDR methods
+
+Nothing seeds a rate or declares a universal treatment. A separately approved rule must contain the exact method code **and** description below, with a Finance-validated approval, rate, and supported whole-rupiah rounding (`HALF_UP`, `HALF_EVEN`, `DOWN`, `UP` at scale 0; `NO_ROUNDING` at null scale only when all operations are exact). `RATE` is the approved percentage. For a ratio, `N` and `D` are positive integers at most 1,000,000, encoded in the method and description.
+
+- `PPN01B_INCLUSIVE_FULL_V1`: `P01B_V1|SOURCE=INCLUSIVE|NET=ROUND(SOURCE/(1+RATE/100))|DPP=NET|PPN=ROUND(DPP*RATE/100)|TOTAL=NET+PPN|VERIFY=SOURCE`
+- `PPN01B_INCLUSIVE_RATIO_N_D_V1`: `P01B_V1|SOURCE=INCLUSIVE|NET=ROUND(SOURCE/(1+N/D*RATE/100))|DPP=ROUND(NET*N/D)|PPN=ROUND(DPP*RATE/100)|TOTAL=NET+PPN|VERIFY=SOURCE` (replace `N` and `D` with their decimal integers).
+- `PPN01B_INCLUSIVE_EXEMPT_FULL_V1`, zero rate: `P01B_V1|APPLICABILITY=EXEMPT|SOURCE=INCLUSIVE|NET=SOURCE|DPP=SOURCE|PPN=0|TOTAL=SOURCE`
+- `PPN01B_INCLUSIVE_NON_TAXABLE_V1`, zero rate: `P01B_V1|APPLICABILITY=NON_TAXABLE|SOURCE=INCLUSIVE|NET=SOURCE|DPP=0|PPN=0|TOTAL=SOURCE`
+
+Methods are calculated per reviewed line with exact integer/rational arithmetic. If rounded consideration plus rounded PPN does not equal that line's agreed gross, calculation is refused; no residual, rate, or rounding fix is invented. Fractional rupiah sources, unsupported methods/rounding and unverified exempt/non-taxable claims are rejected. The `DPP` can differ from consideration under an approved ratio; it must not be added to PPN to produce gross.

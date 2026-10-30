@@ -1,0 +1,19 @@
+# Customer-agreed quotation price basis
+
+This part adds commercial disclosure and approval binding. It does not issue an invoice, calculate additional tax, change any agreed price, change a BAST or receipt, or make Finance review customer consent.
+
+## Authoring and issue
+
+Operations may add `taxPriceBasis` when creating each draft quotation line, or set it on an existing draft line with `PUT /handyman/quotation-versions/{versionId}/lines/{lineId}/tax-price-basis` and `{ "taxPriceBasis": "GROSS_INCLUSIVE" | "TAX_EXCLUSIVE" }`. The same Operations pricing and Building authority as quotation pricing applies. There is no default, inheritance from a Finance profile, or automatic inheritance when copying lines to a revised draft. Issue fails until every line has an explicit basis. Issued lines and their basis cannot be changed.
+
+`GROSS_INCLUSIVE` means the quoted amount includes any applicable PPN; `TAX_EXCLUSIVE` means any applicable PPN is not included. These terms do not establish whether a line is taxable, its rate, or the amount of any tax. New quotation PDFs show the term per line, the unchanged line amounts, a warning about exclusive amounts, and the precedence of the per-line basis over general tax terms. The frozen source contains the exact version, amounts, line bases and `HANDYMAN_QUOTATION_LINE_PRICE_BASIS_V1` protocol marker; the PDF and canonical source have independently verified SHA-256 checksums. The exact request Tenant PIC, Operations, and authorized Building Care may download the immutable quotation PDF; `X-Document-Id`, `X-Content-SHA256` and `X-Document-Source-SHA256` identify it.
+
+For a new personal Tenant PIC decision, submit `offerDocumentId` and the lowercase `offerPdfSha256` together with the decision and idempotency key. The server checks the exact issued document and stores its ID, source hash and PDF hash in the immutable decision; the decision fingerprint binds all three. For Care, the commercial-target endpoint returns the offer reference and a digest that includes those same values. An independently enrolled customer verifier must sign that exact digest; a Care communication or Finance profile is not consent. Historical decision fingerprints and replays keep their original meaning.
+
+New variation PDFs freeze and display the basis of the exact affected line, plus the original and revised quotation lines. An ADD without an existing line/Work Order binding must resolve exactly one matching revised line; no Work Order is fabricated. REDUCE references the original line. Legacy original lines are explicitly labeled as undisclosed, not silently treated as inclusive. A new REDUCE whose original line has no disclosed basis cannot be offered under this contract.
+
+## Read-only inclusive tax projection
+
+The existing inclusive commercial source now requires the original Tenant PIC decision (personal or independently verified Care) to pin the official basis-disclosing PDF, and requires every approved variation to pin its exact basis-disclosing PDF and revised quotation. The original lines, all revised lines and the affected ADD/REDUCE line must explicitly say `GROSS_INCLUSIVE`; exclusive, mixed, missing, unpinned, stale or mismatched terms fail closed. Offer IDs and checksums are included in the tax source snapshot and thus in classification/calculation digests. The existing independently verified buyer, supplier and per-line Finance tax classifications/rules remain mandatory; no tax rates are seeded and the calculator still preserves the agreed gross.
+
+No legacy document, decision, approval or Finance fact is backfilled. Historical ambiguous transactions are ineligible for this projection and require an authorized correction or supplemental customer agreement. This part does **not** implement that agreement or claim that a Finance profile can replace it; such transactions remain blocked until a separately governed remedy is implemented.

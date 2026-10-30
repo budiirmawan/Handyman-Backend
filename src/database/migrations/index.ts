@@ -1,3 +1,58 @@
+import { migration0535HandymanFieldEvidenceWorkSession } from './0535_handyman_field_evidence_work_session';
+import { migration0534HandymanBmSettlementSupersession } from './0534_handyman_bm_settlement_supersession';
+import { migration0533HandymanRequestScopeSet } from './0533_handyman_request_scope_set';
+import { migration0531HandymanFinalReceiptDelivery } from './0531_handyman_final_receipt_delivery';
+import { migration0532HandymanPaymentReceiptNumbering } from './0532_handyman_payment_receipt_numbering';
+import { migration0530HandymanFinalReceipts } from './0530_handyman_final_receipts';
+import { migration0529HandymanWarrantyClaimResolution } from './0529_handyman_warranty_claim_resolution';
+import { migration0528HandymanWarrantyCareComplaints } from './0528_handyman_warranty_care_complaints';
+import { migration0525HandymanWarrantyReworkExecution } from './0525_handyman_warranty_rework_execution';
+import { migration0526HandymanWarrantyReworkAppointments } from './0526_handyman_warranty_rework_appointments';
+import { migration0527HandymanWarrantyReworkDispatch } from './0527_handyman_warranty_rework_dispatch';
+import { migration0524HandymanWarrantyClaimAssessments } from './0524_handyman_warranty_claim_assessments';
+import { migration0523HandymanWarrantyCertificates } from './0523_handyman_warranty_certificates';
+import { migration0522HandymanAgreedWarrantyTerms } from './0522_handyman_agreed_warranty_terms';
+import { migration0521HandymanOfficialInvoicePayments } from './0521_handyman_official_invoice_payments';
+import { migration0520HandymanOfficialInvoices } from './0520_handyman_official_invoices';
+import { migration0519HandymanQuotationPriceBasis } from './0519_handyman_quotation_price_basis';
+import { migration0518HandymanInclusiveCustomerTax } from './0518_handyman_inclusive_customer_tax';
+import { migration0517HandymanReduceFinancialCorrections } from './0517_handyman_reduce_financial_corrections';
+import { migration0516HandymanBastOfficialDocuments } from './0516_handyman_bast_official_documents';
+import { migration0515HandymanCompletionManifest } from './0515_handyman_completion_manifest';
+import { migration0514HandymanVariationDeliveryEvents } from './0514_handyman_variation_delivery_events';
+import { migration0513HandymanVariationOfferDocuments } from './0513_handyman_variation_offer_documents';
+import { migration0512HandymanAddLaborExecution } from './0512_handyman_add_labor_execution';
+import { migration0511HandymanAddMaterialExecutionBinding } from './0511_handyman_add_material_execution_binding';
+import { migration0510HandymanQuotationDeliveryEvents } from './0510_handyman_quotation_delivery_events';
+import { migration0509HandymanQuotationDocuments } from './0509_handyman_quotation_documents';
+import { migration0508HandymanInspectionWorkLinks } from './0508_handyman_inspection_work_links';
+import { migration0507HandymanTenantPaymentReceipts } from './0507_handyman_tenant_payment_receipts';
+import { migration0506HandymanBmDocumentIssuance } from './0506_handyman_bm_document_issuance';
+import { migration0505HandymanBmSettlementPaymentEvidence } from './0505_handyman_bm_settlement_payment_evidence';
+import { migration0504HandymanBmBeneficiaryBankAccounts } from './0504_handyman_bm_beneficiary_bank_accounts';
+import { migration0503HandymanBmCommissionLedger } from './0503_handyman_bm_commission_ledger';
+import { migration0502HandymanBmCorrectionTaxApproval } from './0502_handyman_bm_correction_tax_approval';
+import { migration0501HandymanBmTaxNonApplicability } from './0501_handyman_bm_tax_non_applicability';
+import { migration0500HandymanBmCommissionTaxCases } from './0500_handyman_bm_commission_tax_cases';
+import { migration0499HandymanCustomerTaxClassifications } from './0499_handyman_customer_tax_classifications';
+import { migration0498HandymanRequestBuyerBindings } from './0498_handyman_request_buyer_bindings';
+import { migration0497HandymanTaxRuleGovernance } from './0497_handyman_tax_rule_governance';
+import { migration0496HandymanTaxIdentityApproval } from './0496_handyman_tax_identity_approval';
+import { migration0495HandymanTaxIdentityProfiles } from './0495_handyman_tax_identity_profiles';
+import { migration0494HandymanDistinctBmEntitlements } from './0494_handyman_distinct_bm_entitlements';
+import { migration0493HandymanBmBeneficiaryBuildingCoverage } from './0493_handyman_bm_beneficiary_building_coverage';
+import { migration0481HandymanCommercialConsentBridge } from './0481_handyman_commercial_consent_bridge';
+import { migration0482HandymanFinancialReconciliation } from './0482_handyman_financial_reconciliation';
+import { migration0483HandymanCareInitialSchedulingPreference } from './0483_handyman_care_initial_scheduling_preference';
+import { migration0484HandymanCareStructuredRequestItems } from './0484_handyman_care_structured_request_items';
+import { migration0485HandymanInternalNotes } from './0485_handyman_internal_notes';
+import { migration0486HandymanUnlistedServiceIntakeCases } from './0486_handyman_unlisted_service_intake_cases';
+import { migration0487HandymanUnlistedIntakeOperationsTriage } from './0487_handyman_unlisted_intake_operations_triage';
+import { migration0488HandymanUnlistedIntakeFormalRequestConversion } from './0488_handyman_unlisted_intake_formal_request_conversion';
+import { migration0489HandymanQuotationLineManualOrigin } from './0489_handyman_quotation_line_manual_origin';
+import { migration0490CreateHandymanDocumentIssuerProfiles } from './0490_create_handyman_document_issuer_profiles';
+import { migration0491CreateHandymanDocumentIssuerBankAccounts } from './0491_create_handyman_document_issuer_bank_accounts';
+import { migration0492CreateHandymanDocumentIssuerSettings } from './0492_create_handyman_document_issuer_settings';
 import { migration0446HandymanBastWorkerTransport } from './0446_handyman_bast_worker_transport';
 import { migration0447NetHandymanAllocationCaps } from './0447_net_handyman_allocation_caps';
 import { migration0448HandymanFinanceAuthorityPermissions } from './0448_handyman_finance_authority_permissions';
@@ -1008,4 +1063,59 @@ export const migrations: readonly Migration[] = [
   migration0478ServicePriceTierKey,
   migration0479HandymanServiceVariantAttributeLifecycle,
   migration0480HandymanServiceRequestItemInheritedAttributes,
+  migration0481HandymanCommercialConsentBridge,
+  migration0482HandymanFinancialReconciliation,
+  migration0483HandymanCareInitialSchedulingPreference,
+  migration0484HandymanCareStructuredRequestItems,
+  migration0485HandymanInternalNotes,
+  migration0486HandymanUnlistedServiceIntakeCases,
+  migration0487HandymanUnlistedIntakeOperationsTriage,
+  migration0488HandymanUnlistedIntakeFormalRequestConversion,
+  migration0489HandymanQuotationLineManualOrigin,
+  migration0490CreateHandymanDocumentIssuerProfiles,
+  migration0491CreateHandymanDocumentIssuerBankAccounts,
+  migration0492CreateHandymanDocumentIssuerSettings,
+  migration0493HandymanBmBeneficiaryBuildingCoverage,
+  migration0494HandymanDistinctBmEntitlements,
+  migration0495HandymanTaxIdentityProfiles,
+  migration0496HandymanTaxIdentityApproval,
+  migration0497HandymanTaxRuleGovernance,
+  migration0498HandymanRequestBuyerBindings,
+  migration0499HandymanCustomerTaxClassifications,
+  migration0500HandymanBmCommissionTaxCases,
+  migration0501HandymanBmTaxNonApplicability,
+  migration0502HandymanBmCorrectionTaxApproval,
+  migration0503HandymanBmCommissionLedger,
+  migration0504HandymanBmBeneficiaryBankAccounts,
+  migration0505HandymanBmSettlementPaymentEvidence,
+  migration0506HandymanBmDocumentIssuance,
+  migration0507HandymanTenantPaymentReceipts,
+  migration0508HandymanInspectionWorkLinks,
+  migration0509HandymanQuotationDocuments,
+  migration0510HandymanQuotationDeliveryEvents,
+  migration0511HandymanAddMaterialExecutionBinding,
+  migration0512HandymanAddLaborExecution,
+  migration0513HandymanVariationOfferDocuments,
+  migration0514HandymanVariationDeliveryEvents,
+  migration0515HandymanCompletionManifest,
+  migration0516HandymanBastOfficialDocuments,
+  migration0517HandymanReduceFinancialCorrections,
+  migration0518HandymanInclusiveCustomerTax,
+  migration0519HandymanQuotationPriceBasis,
+  migration0520HandymanOfficialInvoices,
+  migration0521HandymanOfficialInvoicePayments,
+  migration0522HandymanAgreedWarrantyTerms,
+  migration0523HandymanWarrantyCertificates,
+  migration0524HandymanWarrantyClaimAssessments,
+  migration0525HandymanWarrantyReworkExecution,
+  migration0526HandymanWarrantyReworkAppointments,
+  migration0527HandymanWarrantyReworkDispatch,
+  migration0528HandymanWarrantyCareComplaints,
+  migration0529HandymanWarrantyClaimResolution,
+  migration0530HandymanFinalReceipts,
+  migration0531HandymanFinalReceiptDelivery,
+  migration0532HandymanPaymentReceiptNumbering,
+  migration0533HandymanRequestScopeSet,
+  migration0534HandymanBmSettlementSupersession,
+  migration0535HandymanFieldEvidenceWorkSession,
 ];

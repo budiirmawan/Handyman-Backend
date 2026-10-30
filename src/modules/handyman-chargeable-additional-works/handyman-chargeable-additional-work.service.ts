@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
+import { assertHandymanCustomerScopeAuthority }
+  from '../handyman-tenant-decision-authority/handyman-customer-scope-authority';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import {
@@ -110,16 +112,17 @@ function ensureNote(value: string | null | undefined, field: string): string {
 async function assertChargeableAuthority(
   actorUserId: string,
   executionScopeId: string,
+  executor?: PoolClient,
 ): Promise<void> {
   const scope = await handymanScopeAssignmentRepository.findScopeById(
-    undefined,
+    executor,
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
   if (!(await canAccessBuildingScopedResource(actorUserId, {
     clientId: scope.clientId,
     buildingId: scope.buildingId,
-  }))) {
+  }, executor))) {
     throw handymanChargeableAdditionalWorkNotAuthorizedError();
   }
 }
@@ -156,7 +159,7 @@ async function assertChargeableLeadAction(
  * READ-ONLY: the head is never written by this module.
  */
 async function lockClaimAndWarranty(
-  client: Pick<PoolClient, 'query'>,
+  client: PoolClient,
   claimId: string,
   warrantyId: string,
   actorUserId: string,
@@ -173,7 +176,7 @@ async function lockClaimAndWarranty(
       `claim-not-found=${claimId}`,
     );
   }
-  await assertChargeableAuthority(actorUserId, claim.executionScopeId);
+  await assertChargeableAuthority(actorUserId, claim.executionScopeId, client);
   const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
     client,
     warrantyId,
@@ -322,9 +325,13 @@ async function applyChargeableDecision(
       work.warrantyId,
       actorUuid,
     );
+    await assertHandymanCustomerScopeAuthority(client, work.executionScopeId, actorUuid);
     const replay = await handymanChargeableAdditionalWorkRepository
       .findWorkEventByIdempotency(client, work.id, action, key);
     if (replay) {
+      if (replay.actorUserId !== actorUuid) {
+        throw handymanChargeableAdditionalWorkConflictError('idempotency-actor-mismatch');
+      }
       const paymentTrigger = await handymanChargeableAdditionalWorkRepository
         .findPaymentTriggerEventForWork(client, work.id);
       const current = await handymanChargeableAdditionalWorkRepository

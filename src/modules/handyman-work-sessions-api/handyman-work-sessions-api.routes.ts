@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
+import { getAddLaborExecutions, postAddLaborExecution } from './handyman-add-labor-execution.controller';
 import {
   getHandymanWorkSessionActiveHandler,
   getHandymanWorkSessionsHandler,
@@ -57,6 +58,9 @@ export function createHandymanWorkSessionsApiRouter(): Router {
     postHandymanWorkSessionCheckOutHandler);
   router.get(`${base}/active`, auth,
     getHandymanWorkSessionActiveHandler);
+  // Item-level ADD labor facts are separate from the work clock and helpers.
+  router.get(`${base}/:sessionId/add-labor-executions`, auth, getAddLaborExecutions);
+  router.post(`${base}/:sessionId/add-labor-executions`, auth, postAddLaborExecution);
   router.get('/handyman/work-sessions/:sessionId/time-projection',
     auth, getHandymanWorkSessionTimeProjectionHandler);
   return router;
