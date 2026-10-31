@@ -44,6 +44,7 @@ import {
   parseCancelBuildingCareRequestBody,
   parseCreateBuildingCareRequestBody,
 } from './handyman-care-tenant-request-gateway.validation';
+import { getBuildingCareCatalogueServiceMetadata } from './handyman-care-catalog-metadata.service';
 
 const AUTHZ = [
   authenticationMiddleware,
@@ -243,6 +244,43 @@ export function createHandymanCareStandaloneDiscoveryRouter(): Router {
           await listBuildingCareCatalogueServices({
             actorUserId: req.auth?.userId ?? '',
             buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          }),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /**
+   * CR-HM-BE-CARE-CATALOG-METADATA-01 PART 06 — authorized catalogue
+   * METADATA for ONE ACTIVE service of the Building's Client: technical
+   * attribute definitions (type, allowed options, constraints), the ACTIVE
+   * variants with the attribute values each one inherits, the governed
+   * quantity bounds, and the ACTIVE Client-owned units of measure.
+   *
+   * Read-only. Same AUTHZ chain as every other Care Building route, and the
+   * Client is derived server-side from the Building — no `service_catalog.read`
+   * or `uom.read` grant is added. A cross-Client, INACTIVE or absent service
+   * answers with the same 404.
+   */
+  router.get(
+    '/handyman/care/buildings/:buildingId/catalogue/services/:serviceCatalogId',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        assertAllowedQuery(req.query as Record<string, unknown>, []);
+        assertEmptyReadBody(req.body);
+        sendSuccess(
+          res,
+          await getBuildingCareCatalogueServiceMetadata({
+            actorUserId: req.auth?.userId ?? '',
+            buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+            serviceCatalogId: parseUuid(
+              req.params.serviceCatalogId,
+              'serviceCatalogId',
+            ),
           }),
         );
       } catch (error) {

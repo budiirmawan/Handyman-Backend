@@ -5294,6 +5294,100 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/catalogue/services/{serviceCatalogId}:
+    parameters:
+      - $ref: '#/components/parameters/BuildingIdPath'
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    get:
+      operationId: getBuildingCareCatalogueServiceMetadata
+      x-required-permission: handyman.care.building
+      x-error-codes:
+        [VALIDATION_ERROR, PERMISSION_DENIED, HANDYMAN_CARE_AUTHORITY_DENIED,
+         SERVICE_CATALOG_NOT_FOUND]
+      summary: Read the intake metadata of one authorised Building catalogue service
+      description: >-
+        CR-HM-BE-CARE-CATALOG-METADATA-01 PART 06 — READ-ONLY intake metadata
+        for ONE service of the authorised Building's Client. It answers
+        exactly what the structured create contract implicitly requires the
+        caller to know: which technical attributes the service declares (data
+        type, unit, required flag, free-value allowance, governed allowed
+        values, sort order), which ACTIVE variants exist and which attribute
+        values each variant INHERITS, the governed quantity bounds, and the
+        ACTIVE Client-owned units of measure that may be reported.
+
+        AUTHORITY is the pre-existing Care Building chain and nothing else:
+        an authenticated Backend Care staff session, the dedicated
+        `handyman.care.building` permission, and an ACTIVE user assignment to
+        the exact ACTIVE Building whose active Property/Client lineage is
+        established server-side. No `service_catalog.read` or `uom.read`
+        grant is added, widened or bypassed, and the caller never supplies a
+        Client: a foreign-Client id, an INACTIVE service and an absent id all
+        answer with the same 404, so this read is never an existence oracle.
+
+        REPORTED SURFACE ONLY: no commercial field is projected — no pricing
+        mode, no price rule identity or `ruleCode`, no price catalogue
+        reference, no price basis, no amount and no currency. Only the
+        quantity bounds `minimum`/`maximum` of ACTIVE rules are exposed,
+        because they constrain intake and reveal no price. A reported UOM is
+        an intake fact and is NOT the quotation pricing UOM; `applicability`
+        states the missing governance explicitly
+        (`serviceUomApplicability: NOT_GOVERNED`) rather than inventing a
+        service-to-UOM mapping the source model does not define.
+
+        Reports nothing for INACTIVE services (404, exactly as create
+        refuses them) and nothing for INACTIVE variants, attributes or UOMs.
+        Unknown query keys and a non-empty GET body are rejected 400.
+        Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: >-
+            Service identity with its technical attribute vocabulary, ACTIVE
+            variants and their inherited values, quantity bounds, ACTIVE
+            Client UOM options and the static applicability statement.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCareCatalogueServiceMetadata'
+        '400':
+          description: >-
+            VALIDATION_ERROR for a malformed `buildingId`/`serviceCatalogId`,
+            an unknown query key or a non-empty GET body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: >-
+            SERVICE_CATALOG_NOT_FOUND — identical for an absent id, an
+            INACTIVE service and a service owned by another Client.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /handyman/care/buildings/{buildingId}/requests/{requestId}/intake-evidence:
     parameters:
       - $ref: '#/components/parameters/BuildingIdPath'
@@ -94719,6 +94813,263 @@ components:
         variants:
           type: array
           items: { $ref: "#/components/schemas/HandymanServiceVariant" }
+
+    HandymanCareCatalogueServiceMetadata:
+      type: object
+      description: >-
+        CR-HM-BE-CARE-CATALOG-METADATA-01 PART 06 — authorised intake metadata
+        for ONE service of the Building's Client. Read-only: no commercial
+        field, no price basis, no amount and no currency is present anywhere
+        in this contract, and no per-service UOM list is asserted (the source
+        model governs none).
+      additionalProperties: false
+      required:
+        [service, attributes, variants, quantityConstraints, unitsOfMeasure,
+         applicability]
+      properties:
+        service:
+          $ref: '#/components/schemas/HandymanCareCatalogueServiceSummary'
+        attributes:
+          type: array
+          description: >-
+            ACTIVE technical attribute definitions of the service, ordered by
+            governed `sortOrder` then `code`. Empty when the service declares
+            none — never inferred.
+          items:
+            $ref: '#/components/schemas/HandymanCareCatalogueAttribute'
+        variants:
+          type: array
+          description: >-
+            ACTIVE variants only, ordered by `code`. An INACTIVE variant is
+            not selectable at create time, so it is not advertised.
+          items:
+            $ref: '#/components/schemas/HandymanCareCatalogueVariant'
+        quantityConstraints:
+          type: array
+          description: >-
+            Governed quantity BOUNDS of ACTIVE rules, projected as plain
+            min/max. Deliberately carries no rule identity, basis, amount or
+            currency.
+          items:
+            $ref: '#/components/schemas/HandymanCareCatalogueQuantityConstraint'
+        unitsOfMeasure:
+          type: array
+          description: >-
+            ACTIVE Client-owned units of measure that may be reported on an
+            item, ordered by `code`. Reported UOM is an intake fact and is NOT
+            the quotation pricing UOM.
+          items:
+            $ref: '#/components/schemas/HandymanCareCatalogueUomOption'
+        applicability:
+          $ref: '#/components/schemas/HandymanCareCatalogueApplicability'
+
+    HandymanCareCatalogueServiceSummary:
+      type: object
+      description: >-
+        Service identity as reported to Care. Deliberately narrower than
+        `ServiceCatalogEntry`: the Client is proven server-side and is never
+        serialized back.
+      additionalProperties: false
+      required: [id, code, name, description, category, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        code:
+          type: string
+          description: Stable per-Client machine identity, immutable.
+        name: { type: string }
+        description: { type: string, nullable: true }
+        category: { type: string }
+        status:
+          type: string
+          enum: [ACTIVE]
+          description: Only ACTIVE services are readable here.
+
+    HandymanCareCatalogueAttribute:
+      type: object
+      description: >-
+        One ACTIVE technical attribute definition of the service, plus the
+        DERIVED `variantApplicable` flag. Attribute definitions are
+        SERVICE-scoped: there is no per-variant attribute definition table in
+        the source model.
+      additionalProperties: false
+      required:
+        [id, code, name, description, dataType, unit, required, allowFreeValue,
+         allowedValues, sortOrder, status, variantApplicable]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        dataType:
+          type: string
+          enum: [NUMBER, TEXT, ENUM, BOOLEAN]
+          description: Governed field type of the value the caller must report.
+        unit:
+          type: string
+          nullable: true
+          description: >-
+            Free unit label declared by the attribute definition (for example
+            `PK`). This is NOT a `units_of_measure` reference and is NOT the
+            quotation pricing UOM.
+        required: { type: boolean }
+        allowFreeValue:
+          type: boolean
+          description: >-
+            When true a value outside `allowedValues` is accepted and retained
+            for the inspection/manual-review lane.
+        allowedValues:
+          type: array
+          description: Governed option vocabulary; possibly empty.
+          items:
+            $ref: '#/components/schemas/HandymanCareCatalogueAllowedValue'
+        sortOrder: { type: integer }
+        status:
+          type: string
+          enum: [ACTIVE]
+        variantApplicable:
+          type: boolean
+          description: >-
+            TRUE when at least one reported ACTIVE variant configures this
+            attribute, so selecting that variant inherits a value for it.
+            Derived from the variant configuration, not stored.
+
+    HandymanCareCatalogueAllowedValue:
+      type: object
+      additionalProperties: false
+      required: [code, label]
+      properties:
+        code:
+          type: string
+          description: Value text the create contract accepts.
+        label: { type: string }
+
+    HandymanCareCatalogueVariant:
+      type: object
+      description: >-
+        One ACTIVE Handyman variant of the service and the attribute values it
+        INHERITS when an item is authored.
+      additionalProperties: false
+      required:
+        [id, code, name, description, status, inheritedAttributeValues,
+         inheritedAttributeCodes]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [ACTIVE]
+        inheritedAttributeValues:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCareCatalogueVariantAttribute'
+        inheritedAttributeCodes:
+          type: array
+          description: >-
+            Provenance statement, sorted: the attribute codes this variant
+            supplies. The same vocabulary the request item reports as
+            `inheritedAttributeCodes`.
+          items: { type: string }
+
+    HandymanCareCatalogueVariantAttribute:
+      type: object
+      description: >-
+        One materialised variant attribute value. `value` is the single
+        normalized form the create contract compares against.
+      additionalProperties: false
+      required:
+        [attributeId, code, name, dataType, unit, valueText, valueNumber, value]
+      properties:
+        attributeId: { $ref: '#/components/schemas/Uuid' }
+        code: { type: string }
+        name: { type: string }
+        dataType:
+          type: string
+          enum: [NUMBER, TEXT, ENUM, BOOLEAN]
+        unit: { type: string, nullable: true }
+        valueText: { type: string, nullable: true }
+        valueNumber: { type: number, nullable: true }
+        value: { type: string }
+
+    HandymanCareCatalogueQuantityConstraint:
+      type: object
+      description: >-
+        Quantity bounds of an ACTIVE rule. Exactly three fields: the scope and
+        the bounds. No rule id, `ruleCode`, price catalogue reference, basis,
+        amount or currency.
+      additionalProperties: false
+      required: [serviceVariantId, minimum, maximum]
+      properties:
+        serviceVariantId:
+          $ref: '#/components/schemas/Uuid'
+          nullable: true
+          description: Variant scope of the rule, or null for the service itself.
+        minimum: { type: number, nullable: true }
+        maximum: { type: number, nullable: true }
+
+    HandymanCareCatalogueUomOption:
+      type: object
+      description: >-
+        One ACTIVE Client-owned unit of measure usable as a reported intake
+        UOM. `id` is the stable identifier the create contract accepts; `code`
+        is the machine key; `displayLabel` is a presentation convenience.
+      additionalProperties: false
+      required: [id, code, name, symbol, category, displayLabel]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        code: { type: string }
+        name: { type: string }
+        symbol: { type: string }
+        category: { type: string }
+        displayLabel:
+          type: string
+          description: Composed as `<name> (<symbol>)`; never replaces `code` or `id`.
+
+    HandymanCareCatalogueApplicability:
+      type: object
+      description: >-
+        Facts about the SOURCE MODEL, stated so the intake UI is never told a
+        comfortable lie. These are not new rules and change no authority.
+      additionalProperties: false
+      required:
+        [serviceScope, reportableServiceStatuses, selectableVariantStatuses,
+         uomScope, serviceUomApplicability, attributeScope, attributeInheritance,
+         notes]
+      properties:
+        serviceScope:
+          type: string
+          enum: [CLIENT]
+        reportableServiceStatuses:
+          type: array
+          items: { type: string, enum: [ACTIVE] }
+        selectableVariantStatuses:
+          type: array
+          items: { type: string, enum: [ACTIVE] }
+        uomScope:
+          type: string
+          enum: [CLIENT]
+        serviceUomApplicability:
+          type: string
+          enum: [NOT_GOVERNED]
+          description: >-
+            No service-to-UOM mapping exists in the source model, so every
+            ACTIVE Client UOM is reportable and no per-service subset is
+            asserted. The Backend validates ACTIVE status and Client
+            ownership only.
+        attributeScope:
+          type: string
+          enum: [SERVICE]
+        attributeInheritance:
+          type: string
+          enum: [VARIANT_MATERIALISED]
+          description: >-
+            Variant values are materialised onto the item; an explicit value
+            that contradicts the variant is refused, never overwritten.
+        notes:
+          type: array
+          description: Plain-language statement of the gaps above.
+          items: { type: string }
 
     HandymanMaterialCommonality:
       type: string
