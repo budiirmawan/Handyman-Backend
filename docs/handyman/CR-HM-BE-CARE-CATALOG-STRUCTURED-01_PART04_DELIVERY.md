@@ -228,9 +228,8 @@ Totals for the PART 04-relevant corpus: **134 tests executed, 123 pass, 11 pre-e
 
 ## 8. Final commit SHA
 
-See the final line of this report after the commit is created:
-
-**Commit:** `<see git log -1 on arena/9ab3fff8-handyman-backend>`
+**Commit (implementation):** `79bc9b9f54f5070572d221af0a921dbbeec80e38`
+**Commit (this report's SHA stamp):** the follow-up commit that records it
 **Branch pushed:** `arena/9ab3fff8-handyman-backend`
 **PR:** none (as instructed) · **Merge:** none · **Deployment:** none
 
