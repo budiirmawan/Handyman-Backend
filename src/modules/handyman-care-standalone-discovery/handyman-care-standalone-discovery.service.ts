@@ -23,6 +23,7 @@ import { readExecutionScopeServiceWarrantyView } from '../handyman-service-warra
 import {
   handymanCareStandaloneDiscoveryRepository,
   type StandaloneCareRequestFilters,
+  type StandaloneCareRequestItemRecord,
   type StandaloneCareRequestPage,
   type StandaloneCareRequestRecord,
 } from './handyman-care-standalone-discovery.repository';
@@ -56,6 +57,46 @@ function projectRequest(record: StandaloneCareRequestRecord) {
     serviceCatalogId: record.serviceCatalogId,
     serviceVariantId: record.serviceVariantId,
     description: record.description,
+    status: record.status,
+    createdAt: iso(record.createdAt),
+    updatedAt: iso(record.updatedAt),
+  };
+}
+
+/**
+ * CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 — allow-list projection of one
+ * persisted ACTIVE structured item.
+ *
+ * Reported service items are NOT approved quotation lines: this projection
+ * carries what was REPORTED (catalogue/variant identity, quantity, the
+ * UOM the Care staff stated, free-text description, access condition and the
+ * effective attribute facts with their inheritance provenance) and nothing
+ * about price, approval or scheduling. An access condition is NOT a BM
+ * clearance and an item is NOT a confirmed appointment.
+ */
+export function projectStandaloneCareRequestItem(
+  record: StandaloneCareRequestItemRecord,
+) {
+  const inheritedAttributeValues = record.inheritedAttributeValues ?? {};
+  return {
+    id: record.id,
+    serviceCatalogId: record.serviceCatalogId,
+    serviceCode: record.serviceCode,
+    serviceName: record.serviceName,
+    serviceVariantId: record.serviceVariantId,
+    serviceVariantCode: record.serviceVariantCode,
+    serviceVariantName: record.serviceVariantName,
+    quantity: record.quantity,
+    uomId: record.uomId,
+    uomCode: record.uomCode,
+    uomName: record.uomName,
+    uomSymbol: record.uomSymbol,
+    itemDescription: record.itemDescription,
+    accessCondition: record.accessCondition,
+    attributeValues: record.attributeValues ?? {},
+    inheritedAttributeValues,
+    // The provenance statement: exactly which codes the variant supplied.
+    inheritedAttributeCodes: Object.keys(inheritedAttributeValues).sort(),
     status: record.status,
     createdAt: iso(record.createdAt),
     updatedAt: iso(record.updatedAt),
@@ -285,8 +326,20 @@ export async function getStandaloneCareRequestDetail(input: {
     );
   if (!record) throw handymanServiceRequestNotFoundError();
 
+  // PART 04 — persisted ACTIVE items of THIS proven request. The read is
+  // keyed by the server-derived Client and the request id already proven to
+  // belong to the authorized Building, so a sibling Building or a foreign
+  // request can never contribute a row. The request and progress blocks are
+  // unchanged; `items` is additive.
+  const items =
+    await handymanCareStandaloneDiscoveryRepository.listBuildingCareRequestItems(
+      authority.scope.clientId,
+      record.id,
+    );
+
   return {
     request: projectRequest(record),
+    items: items.map((item) => projectStandaloneCareRequestItem(item)),
     progress: await readOperationalProgress({
       actorUserId: input.actorUserId,
       request: record,

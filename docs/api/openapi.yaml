@@ -4764,7 +4764,7 @@ paths:
     post:
       operationId: createBuildingCareRequest
       x-required-permission: handyman.care.building
-      x-error-codes: [HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID, HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE, VALIDATION_ERROR, HANDYMAN_CARE_AUTHORITY_DENIED, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CHANNEL_ATTRIBUTION_CONTEXT_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_NOT_FOUND, HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_REFERENCE_CONFLICT, HANDYMAN_CHANNEL_ATTRIBUTION_REQUESTER_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_KEY_REQUIRED]
+      x-error-codes: [HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID, HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE, VALIDATION_ERROR, HANDYMAN_CARE_AUTHORITY_DENIED, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CHANNEL_ATTRIBUTION_CONTEXT_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_NOT_FOUND, HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_REFERENCE_CONFLICT, HANDYMAN_CHANNEL_ATTRIBUTION_REQUESTER_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_ITEM_INVALID, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_KEY_REQUIRED]
       summary: Create the canonical Handyman Request for an authorized Tenant
       description: >-
         CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted Tenant request
@@ -4791,6 +4791,20 @@ paths:
         Unit/PIC identifiers fail 400 attribution validation and unknown
         service identifiers fail 404 `SERVICE_CATALOG_NOT_FOUND`.
         Cache-Control is no-store.
+        CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 adds a STRUCTURED
+        selection as an ALTERNATIVE to the legacy single-service selection:
+        `items[]` (1..50) is persisted by the existing advanced Care item
+        engine with the same quantity precision, variant rules, UOM
+        (ACTIVE, same Client), access condition and attribute-inheritance
+        semantics as every other structured intake. Supplying `items`
+        TOGETHER with the legacy `serviceCatalogId`/`serviceVariantId`
+        selection is rejected 400 — never silently resolved. The parent
+        request keeps its catalogue anchor (the first item) while every item
+        is its own persisted row, written in the same transaction as the
+        request, its attribution and its parties, so a failure leaves no
+        orphan record. The 201 body then additionally carries `items`. The
+        Building-session Bearer credential remains the only authorization:
+        no BM exchange token is accepted or issued here.
       tags: [Customer Care Discovery]
       security:
         - bearerAuth: []
@@ -4808,7 +4822,9 @@ paths:
           description: >-
             The canonical Handyman Request in its initial INTAKE state, or
             the idempotent replay of the original result for the same
-            actor/operation/key/fingerprint.
+            actor/operation/key/fingerprint. A structured (`items[]`)
+            submission additionally returns the persisted ACTIVE request
+            items in the same projection the detail read uses.
           headers:
             Cache-Control:
               schema: { type: string, enum: [no-store] }
@@ -4820,7 +4836,9 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/HandymanCareStandaloneRequest'
+                        oneOf:
+                          - $ref: '#/components/schemas/HandymanCareStandaloneRequest'
+                          - $ref: '#/components/schemas/HandymanCareStandaloneRequestWithItems'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -4863,7 +4881,19 @@ paths:
         HANDYMAN_SERVICE_REQUEST_NOT_FOUND; existence is never enumerated.
         The request is an allow-list projection and the progress block is a
         bounded projection of existing read services. Cache-Control is
-        no-store.
+        no-store. CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 adds the
+        persisted ACTIVE request items (`items`) alongside the unchanged
+        `request` and `progress` blocks: catalogue and variant identity,
+        quantity, the reported UOM, item description, access condition, the
+        EFFECTIVE attribute values, `inheritedAttributeValues` with
+        `inheritedAttributeCodes` as the provenance statement, item status
+        and timestamps. The item read is keyed by the same server-derived
+        Client and the request already proven to belong to the authorized
+        Building, so a sibling Building or foreign request contributes
+        nothing. INTERNAL_ONLY Care Notes live in their own table and are
+        never joined into this projection. Items are REPORTED service facts,
+        not approved quotation lines; an access condition is not BM clearance
+        and no item states a confirmed appointment.
       security:
         - bearerAuth: []
       parameters:
@@ -135208,13 +135238,23 @@ components:
         as an ACTIVE PIC of `tenantCompanyId`, so it can never become the
         acting identity.
       additionalProperties: false
-      required: [tenantCompanyId, serviceCatalogId]
+      required: [tenantCompanyId]
       oneOf:
         - required: [preferredWindowStart, preferredWindowEnd]
         - not:
             anyOf:
               - required: [preferredWindowStart]
               - required: [preferredWindowEnd]
+      anyOf:
+        - required: [serviceCatalogId]
+        - required: [items]
+      if:
+        required: [items]
+      then:
+        not:
+          anyOf:
+            - required: [serviceCatalogId]
+            - required: [serviceVariantId]
       properties:
         tenantCompanyId:
           type: string
@@ -135233,11 +135273,27 @@ components:
         serviceCatalogId:
           type: string
           format: uuid
-          description: ACTIVE service entry of the server-derived Client.
+          description: >-
+            ACTIVE service entry of the server-derived Client. This is the
+            LEGACY single-service selection; it is mutually exclusive with
+            `items` and combining the two is rejected 400.
         serviceVariantId:
           type: string
           format: uuid
-          description: Optional ACTIVE variant of the selected service.
+          description: >-
+            Optional ACTIVE variant of the selected service (legacy
+            single-service selection only; rejected alongside `items`).
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          description: >-
+            PART 04 structured selection, persisted by the existing advanced
+            Care item engine. Mutually exclusive with the legacy
+            `serviceCatalogId`/`serviceVariantId` selection. The parent
+            request's catalogue anchor records the first item.
+          items:
+            $ref: '#/components/schemas/HandymanCareStructuredRequestItemInput'
         description:
           type: string
           minLength: 1
@@ -135471,10 +135527,169 @@ components:
     HandymanCareStandaloneRequestDetail:
       type: object
       additionalProperties: false
-      required: [request, progress]
+      required: [request, items, progress]
       properties:
         request: { $ref: '#/components/schemas/HandymanCareStandaloneRequest' }
+        items:
+          type: array
+          maxItems: 50
+          description: >-
+            Persisted ACTIVE request items of this request, ordered by
+            createdAt then id. Empty when the request carries no structured
+            items (a legacy single-service submission).
+          items: { $ref: '#/components/schemas/HandymanCareStandaloneRequestItem' }
         progress: { $ref: '#/components/schemas/HandymanCareStandaloneProgressBlock' }
+    HandymanCareStandaloneRequestWithItems:
+      description: >-
+        The structured-submission 201 body: the unchanged legacy request
+        projection plus the persisted ACTIVE items in the same projection the
+        detail read uses.
+      type: object
+      additionalProperties: false
+      required:
+        [id, buildingId, spaceId, serviceCatalogId, serviceVariantId,
+         description, status, createdAt, updatedAt, items]
+      properties:
+        id: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        schedulingReadiness:
+          $ref: '#/components/schemas/HandymanCareSchedulingPreference'
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/HandymanCareStandaloneRequestItem' }
+    HandymanCareStandaloneRequestItem:
+      type: object
+      additionalProperties: false
+      description: >-
+        CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 — one persisted ACTIVE
+        structured request item as REPORTED by the Building Care session.
+        Reported facts only: no price, no approval, no appointment. An
+        `accessCondition` is a reported site condition, never BM clearance.
+      required:
+        [id, serviceCatalogId, serviceCode, serviceName, serviceVariantId,
+         serviceVariantCode, serviceVariantName, quantity, uomId, uomCode,
+         uomName, uomSymbol, itemDescription, accessCondition, attributeValues,
+         inheritedAttributeValues, inheritedAttributeCodes, status, createdAt,
+         updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceCode: { type: string }
+        serviceName: { type: string }
+        serviceVariantId: { type: [string, 'null'], format: uuid }
+        serviceVariantCode: { type: [string, 'null'] }
+        serviceVariantName: { type: [string, 'null'] }
+        quantity:
+          type: number
+          description: >-
+            The REPORTED quantity, preserved at NUMERIC(18,4) precision.
+          exclusiveMinimum: 0
+          maximum: 99999999999999
+        uomId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The UOM the Care staff reported, validated ACTIVE and owned by
+            the same Client. Null when none was reported.
+        uomCode: { type: [string, 'null'] }
+        uomName: { type: [string, 'null'] }
+        uomSymbol: { type: [string, 'null'] }
+        itemDescription: { type: [string, 'null'], maxLength: 1000 }
+        accessCondition:
+          type: string
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
+        attributeValues:
+          type: object
+          description: >-
+            The EFFECTIVE attribute set: the values inherited from the
+            service variant plus the values stated for the item. This is
+            exactly what the price resolution reads.
+          additionalProperties: { type: string }
+        inheritedAttributeValues:
+          type: object
+          description: >-
+            The PROVENANCE half of `attributeValues`: only the values the
+            selected service variant supplied, materialised when the item was
+            authored so a later catalogue change can never rewrite the item.
+          additionalProperties: { type: string }
+        inheritedAttributeCodes:
+          type: array
+          description: >-
+            The explicit provenance statement: the sorted attribute codes the
+            service variant supplied for this item.
+          items: { type: string }
+        status: { type: string, enum: [ACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanCareStructuredRequestItemInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 — one structured item of
+        the Building Care create body. Structural validation happens at the
+        edge (UUID shape, positive finite quantity, bounded attribute map,
+        governed access-condition vocabulary); every semantic rule (ACTIVE
+        service/variant, Client ownership, ACTIVE Client-owned UOM,
+        NUMERIC(18,4) precision, variant contradiction, configured attribute
+        type/value) is enforced by the existing Care item engine and fails
+        400 HANDYMAN_SERVICE_REQUEST_ITEM_INVALID.
+      required: [serviceCatalogId, quantity]
+      properties:
+        serviceCatalogId:
+          type: string
+          format: uuid
+          description: ACTIVE service entry of the server-derived Client.
+        serviceVariantId:
+          type: string
+          format: uuid
+          description: >-
+            Optional ACTIVE variant of THAT service; must belong to the same
+            Client and service. Its ACTIVE configured values are inherited
+            into `attributeValues` and recorded as provenance.
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.0001
+          maximum: 99999999999999
+          description: >-
+            Positive quantity within NUMERIC(18,4) precision. Never rounded by
+            the Backend.
+        uomId:
+          type: string
+          format: uuid
+          description: >-
+            Optional unit of measure, validated ACTIVE and owned by the same
+            Client as the authorized Building.
+        attributeValues:
+          type: object
+          maxProperties: 20
+          additionalProperties: { type: string, maxLength: 200 }
+          description: >-
+            Optional reported attribute facts, at most 20 string values of at
+            most 200 characters. The reserved `ACCESS_CONDITION` selector key
+            is rejected — use `accessCondition`.
+        itemDescription:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: >-
+            Optional per-item free text, persisted verbatim (trimmed). Kept
+            distinct from the request-level `description`.
+        accessCondition:
+          type: string
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
+          description: >-
+            Optional reported site access condition; defaults to STANDARD.
+            Not BM clearance and not an appointment.
     HandymanCareStandaloneProgress:
       type: object
       additionalProperties: false

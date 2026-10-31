@@ -3,6 +3,10 @@ import type { OptionalHandymanRequestedWindow } from '../handyman-scheduling/han
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
+  HANDYMAN_SERVICE_ACCESS_CONDITIONS,
+  type HandymanServiceAccessCondition,
+} from '../handyman-parameterized-catalog';
+import {
   NON_ACCEPTED_IDENTITY_FIELDS,
   assertNoSuppliedRecordingIdentity,
 } from '../handyman-care-authority';
@@ -31,6 +35,7 @@ const ALLOWED_BODY_KEYS = [
   'spaceId',
   'serviceCatalogId',
   'serviceVariantId',
+  'items',
   'description',
   'preferredWindowStart',
   'preferredWindowEnd',
@@ -42,12 +47,60 @@ const ALLOWED_BODY_KEYS = [
   'costResponsibleTenantCompanyId',
 ] as const;
 
+/**
+ * CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 — structured Building-session
+ * selection.
+ *
+ * The legacy Building-session contract submits ONE `serviceCatalogId` (plus
+ * an optional `serviceVariantId`) and the parent request records it. The
+ * structured contract submits a bounded `items[]` list that the EXISTING
+ * advanced item engine persists (quantity, UOM, attribute inheritance,
+ * variant rules, access condition). The two are mutually exclusive
+ * SELECTIONS: mixing them is ambiguous about which row owns the parent
+ * request `service_catalog_id`, so it is rejected instead of silently
+ * resolved.
+ *
+ * The item vocabulary mirrors the exchange-token structured intake
+ * (`POST /handyman/requests/care`) with one deliberate spelling difference:
+ * the per-item free text is `itemDescription` — the persisted column name —
+ * so the request-level `description` and the item-level description can
+ * never be confused.
+ */
+export const MAX_BUILDING_CARE_REQUEST_ITEMS = 50;
+
+const ITEM_ALLOWED_KEYS = [
+  'serviceCatalogId',
+  'serviceVariantId',
+  'quantity',
+  'uomId',
+  'attributeValues',
+  'itemDescription',
+  'accessCondition',
+] as const;
+
+const MAX_ATTRIBUTES_PER_ITEM = 20;
+const MAX_ATTRIBUTE_VALUE_LENGTH = 200;
+
+export type CreateBuildingCareRequestItem = {
+  serviceCatalogId: string;
+  serviceVariantId?: string;
+  quantity: number;
+  uomId?: string;
+  attributeValues?: Record<string, string>;
+  itemDescription?: string;
+  accessCondition?: HandymanServiceAccessCondition;
+};
+
 export type CreateBuildingCareRequestBody = OptionalHandymanRequestedWindow & {
   tenantCompanyId: string;
   tenantPicId?: string;
   spaceId?: string;
-  serviceCatalogId: string;
+  /** Legacy single-service selection. Mutually exclusive with `items`. */
+  serviceCatalogId?: string;
+  /** Legacy single-service variant. Mutually exclusive with `items`. */
   serviceVariantId?: string;
+  /** Structured selection; persisted by the advanced Care item engine. */
+  items?: CreateBuildingCareRequestItem[];
   description?: string;
   approvalTenantCompanyId?: string;
   costResponsibleTenantCompanyId?: string;
@@ -107,6 +160,133 @@ const FORBIDDEN_ACTOR_IDENTITY_FIELDS: readonly string[] =
     (field) => field !== 'tenantPicId' && field !== 'tenant_pic_id',
   );
 
+/**
+ * Parse ONE structured selection item.
+ *
+ * Structural only: UUID shape, a positive finite quantity, a bounded string
+ * attribute map and the governed access-condition vocabulary. Every
+ * SEMANTIC rule — service/variant ACTIVE status, Client ownership, UOM
+ * ACTIVE + Client ownership, quantity precision, variant contradiction and
+ * configured attribute type/value — stays in the advanced Care item engine
+ * so the Building session and the exchange-token intake answer identically.
+ */
+function parseStructuredItem(
+  raw: unknown,
+  index: number,
+  details: { field: string; message: string }[],
+): CreateBuildingCareRequestItem {
+  const field = `items[${index}]`;
+  if (!isRecord(raw)) {
+    details.push({ field, message: 'Each item must be an object.' });
+    return { serviceCatalogId: '', quantity: 0 };
+  }
+  const unknownKeys = Object.keys(raw).filter(
+    (key) => !(ITEM_ALLOWED_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    details.push({
+      field: `${field}.${unknownKeys[0]}`,
+      message: 'Unexpected item field.',
+    });
+  }
+
+  const serviceCatalogId =
+    readRequiredUuid(raw.serviceCatalogId, `${field}.serviceCatalogId`, details) ??
+    '';
+  const serviceVariantId = readOptionalUuid(
+    raw.serviceVariantId,
+    `${field}.serviceVariantId`,
+    details,
+  );
+  const uomId = readOptionalUuid(raw.uomId, `${field}.uomId`, details);
+
+  const quantity = raw.quantity;
+  if (
+    typeof quantity !== 'number' ||
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
+    details.push({
+      field: `${field}.quantity`,
+      message: 'quantity is required and must be a positive number.',
+    });
+  }
+
+  let attributeValues: Record<string, string> | undefined;
+  if (raw.attributeValues !== undefined && raw.attributeValues !== null) {
+    if (!isRecord(raw.attributeValues)) {
+      details.push({
+        field: `${field}.attributeValues`,
+        message: 'attributeValues must be an object of attribute code to value.',
+      });
+    } else {
+      const entries = Object.entries(raw.attributeValues);
+      if (entries.length > MAX_ATTRIBUTES_PER_ITEM) {
+        details.push({
+          field: `${field}.attributeValues`,
+          message: `attributeValues may carry at most ${MAX_ATTRIBUTES_PER_ITEM} attributes.`,
+        });
+      } else if (
+        entries.some(
+          ([, value]) =>
+            typeof value !== 'string' ||
+            value.trim().length > MAX_ATTRIBUTE_VALUE_LENGTH,
+        )
+      ) {
+        details.push({
+          field: `${field}.attributeValues`,
+          message: `attributeValues must be bounded strings of at most ${MAX_ATTRIBUTE_VALUE_LENGTH} characters.`,
+        });
+      } else {
+        attributeValues = raw.attributeValues as Record<string, string>;
+      }
+    }
+  }
+
+  let accessCondition: HandymanServiceAccessCondition | undefined;
+  if (raw.accessCondition !== undefined && raw.accessCondition !== null) {
+    if (
+      typeof raw.accessCondition !== 'string' ||
+      !(HANDYMAN_SERVICE_ACCESS_CONDITIONS as readonly string[]).includes(
+        raw.accessCondition,
+      )
+    ) {
+      details.push({
+        field: `${field}.accessCondition`,
+        message: `accessCondition must be one of ${HANDYMAN_SERVICE_ACCESS_CONDITIONS.join(', ')}.`,
+      });
+    } else {
+      accessCondition = raw.accessCondition as HandymanServiceAccessCondition;
+    }
+  }
+
+  let itemDescription: string | undefined;
+  if (raw.itemDescription !== undefined && raw.itemDescription !== null) {
+    if (
+      typeof raw.itemDescription !== 'string' ||
+      raw.itemDescription.trim().length < 1 ||
+      raw.itemDescription.trim().length > 1000
+    ) {
+      details.push({
+        field: `${field}.itemDescription`,
+        message: 'itemDescription must be 1-1000 characters when provided.',
+      });
+    } else {
+      itemDescription = raw.itemDescription.trim();
+    }
+  }
+
+  return {
+    serviceCatalogId,
+    ...(serviceVariantId === undefined ? {} : { serviceVariantId }),
+    quantity: typeof quantity === 'number' ? quantity : 0,
+    ...(uomId === undefined ? {} : { uomId }),
+    ...(attributeValues === undefined ? {} : { attributeValues }),
+    ...(itemDescription === undefined ? {} : { itemDescription }),
+    ...(accessCondition === undefined ? {} : { accessCondition }),
+  };
+}
+
 export function parseCreateBuildingCareRequestBody(
   body: unknown,
 ): CreateBuildingCareRequestBody {
@@ -134,18 +314,49 @@ export function parseCreateBuildingCareRequestBody(
     'tenantCompanyId',
     details,
   );
-  const serviceCatalogId = readRequiredUuid(
-    body.serviceCatalogId,
-    'serviceCatalogId',
-    details,
-  );
+
+  // PART 04 — the legacy single-service selection and the structured
+  // `items[]` selection are mutually exclusive. Presenting both is a
+  // rejected request, never a silent precedence rule.
+  const structured = body.items !== undefined && body.items !== null;
+  let items: CreateBuildingCareRequestItem[] | undefined;
+  if (structured) {
+    for (const legacyKey of ['serviceCatalogId', 'serviceVariantId'] as const) {
+      if (body[legacyKey] !== undefined && body[legacyKey] !== null) {
+        details.push({
+          field: legacyKey,
+          message: `${legacyKey} must not be combined with items; submit either the legacy single-service selection or the structured items list.`,
+        });
+      }
+    }
+    if (!Array.isArray(body.items)) {
+      details.push({
+        field: 'items',
+        message: 'items must be an array of structured service items.',
+      });
+    } else if (
+      body.items.length < 1 ||
+      body.items.length > MAX_BUILDING_CARE_REQUEST_ITEMS
+    ) {
+      details.push({
+        field: 'items',
+        message: `items must contain between 1 and ${MAX_BUILDING_CARE_REQUEST_ITEMS} service items.`,
+      });
+    } else {
+      items = body.items.map((raw, index) =>
+        parseStructuredItem(raw, index, details),
+      );
+    }
+  }
+
+  const serviceCatalogId = structured
+    ? undefined
+    : readRequiredUuid(body.serviceCatalogId, 'serviceCatalogId', details);
   const tenantPicId = readOptionalUuid(body.tenantPicId, 'tenantPicId', details);
   const spaceId = readOptionalUuid(body.spaceId, 'spaceId', details);
-  const serviceVariantId = readOptionalUuid(
-    body.serviceVariantId,
-    'serviceVariantId',
-    details,
-  );
+  const serviceVariantId = structured
+    ? undefined
+    : readOptionalUuid(body.serviceVariantId, 'serviceVariantId', details);
   const approvalTenantCompanyId = readOptionalUuid(
     body.approvalTenantCompanyId,
     'approvalTenantCompanyId',
@@ -179,7 +390,11 @@ export function parseCreateBuildingCareRequestBody(
     }
   }
 
-  if (!tenantCompanyId || !serviceCatalogId || details.length) {
+  if (
+    !tenantCompanyId ||
+    (structured ? items === undefined : !serviceCatalogId) ||
+    details.length
+  ) {
     fail(details);
   }
   const dates = parseOptionalHandymanRequestedWindow(body.preferredWindowStart, body.preferredWindowEnd);
@@ -188,8 +403,9 @@ export function parseCreateBuildingCareRequestBody(
     tenantCompanyId,
     ...(tenantPicId === undefined ? {} : { tenantPicId }),
     ...(spaceId === undefined ? {} : { spaceId }),
-    serviceCatalogId,
+    ...(serviceCatalogId === undefined ? {} : { serviceCatalogId }),
     ...(serviceVariantId === undefined ? {} : { serviceVariantId }),
+    ...(items === undefined ? {} : { items }),
     ...(description === undefined ? {} : { description }),
     ...(approvalTenantCompanyId === undefined
       ? {}

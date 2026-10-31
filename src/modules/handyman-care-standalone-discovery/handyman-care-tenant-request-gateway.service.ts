@@ -12,6 +12,9 @@ import {
   createHandymanServiceRequestForAttribution,
   handymanServiceRequestNotFoundError,
 } from '../handyman-requests';
+import {
+  addCareHandymanServiceRequestItemInTransaction,
+} from '../handyman-parameterized-catalog/handyman-request-items.service';
 import { executeHandymanIdempotent } from '../handyman-audit';
 import { computeRequestFingerprint } from '../request-idempotency';
 import { hasCurrentUnitPartyRole } from '../apartment-master';
@@ -27,8 +30,14 @@ import {
   type StandaloneCareTenantRecord,
   type StandaloneCareUnitRecord,
 } from './handyman-care-standalone-discovery.repository';
-import { requireActiveAssignedBuilding } from './handyman-care-standalone-discovery.service';
-import type { CreateBuildingCareRequestBody } from './handyman-care-tenant-request-gateway.validation';
+import {
+  projectStandaloneCareRequestItem,
+  requireActiveAssignedBuilding,
+} from './handyman-care-standalone-discovery.service';
+import type {
+  CreateBuildingCareRequestBody,
+  CreateBuildingCareRequestItem,
+} from './handyman-care-tenant-request-gateway.validation';
 
 /**
  * CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted Tenant request
@@ -112,6 +121,27 @@ function projectCreatedRequest(request: ProjectableRequest) {
     createdAt: iso(request.createdAt),
     updatedAt: iso(request.updatedAt),
     ...(request.schedulingReadiness ? { schedulingReadiness: request.schedulingReadiness } : {}),
+  };
+}
+
+/**
+ * PART 04 — canonical per-item fingerprint input.
+ *
+ * Every optional field is materialised with its DEFAULT so that
+ * `quantity x 2` and `quantity x 2 + accessCondition: STANDARD` are the SAME
+ * submission (the engine defaults it), while any real change of selection,
+ * quantity, UOM, attributes or access condition changes the fingerprint and
+ * therefore the idempotency outcome (409, never a silent overwrite).
+ */
+function normalizeItemForFingerprint(item: CreateBuildingCareRequestItem) {
+  return {
+    serviceCatalogId: item.serviceCatalogId,
+    serviceVariantId: item.serviceVariantId ?? null,
+    quantity: item.quantity,
+    uomId: item.uomId ?? null,
+    attributeValues: item.attributeValues ?? {},
+    itemDescription: item.itemDescription ?? null,
+    accessCondition: item.accessCondition ?? 'STANDARD',
   };
 }
 
@@ -283,6 +313,34 @@ export async function createBuildingCareRequest(input: {
   });
 
   const dates = parseOptionalHandymanRequestedWindow(input.body.preferredWindowStart, input.body.preferredWindowEnd);
+
+  // PART 04 — structured selection. The parent request keeps the catalogue
+  // anchor that migration 0488 still requires for the CATALOG intake lane
+  // (`handyman_service_requests_manual_source_check`) by recording the FIRST
+  // structured item — the same precedence the exchange-token structured
+  // intake already uses. Every item is persisted separately by the advanced
+  // Care item engine, so nothing is lost and no legacy column changes
+  // meaning.
+  const structuredItems = input.body.items;
+  const primaryItem = structuredItems?.[0];
+  const parentServiceCatalogId =
+    primaryItem?.serviceCatalogId ?? input.body.serviceCatalogId;
+  const parentServiceVariantId = primaryItem
+    ? primaryItem.serviceVariantId ?? null
+    : input.body.serviceVariantId ?? null;
+  if (parentServiceCatalogId === undefined) {
+    // Unreachable through the transport parser (it requires exactly one of
+    // the two selections); kept as an explicit invariant instead of a
+    // non-null assertion so a future caller cannot create an anchor-less
+    // CATALOG request.
+    throw AppError.validation('Request validation failed.', [
+      {
+        field: 'serviceCatalogId',
+        message: 'A single-service or structured service selection is required.',
+      },
+    ]);
+  }
+
   const normalized = {
     // Omit absent dates to retain fingerprints of legacy no-date submissions.
     ...dates,
@@ -290,11 +348,18 @@ export async function createBuildingCareRequest(input: {
     tenantCompanyId: input.body.tenantCompanyId,
     tenantPicId: input.body.tenantPicId ?? null,
     spaceId: input.body.spaceId ?? null,
-    serviceCatalogId: input.body.serviceCatalogId,
-    serviceVariantId: input.body.serviceVariantId ?? null,
+    serviceCatalogId: parentServiceCatalogId,
+    serviceVariantId: parentServiceVariantId,
     description: input.body.description ?? null,
     approvalTenantCompanyId: parties.approvalTenantCompanyId,
     costResponsibleTenantCompanyId: parties.costResponsibleTenantCompanyId,
+    // Absent for legacy submissions, so every existing fingerprint is
+    // byte-identical to before PART 04.
+    ...(structuredItems === undefined
+      ? {}
+      : {
+        items: structuredItems.map((item) => normalizeItemForFingerprint(item)),
+      }),
   };
   const requestFingerprint = computeRequestFingerprint(normalized);
 
@@ -356,9 +421,66 @@ export async function createBuildingCareRequest(input: {
         client,
       );
 
+      if (structuredItems === undefined) {
+        // Legacy single-service contract: byte-identical response, no
+        // request-item rows authored.
+        return {
+          responseStatus: 201,
+          responseBody: projectCreatedRequest(request),
+        };
+      }
+
+      // PART 04 — structured items, persisted by the EXISTING advanced Care
+      // item engine inside this same transaction. The engine owns every
+      // semantic rule (ACTIVE service/variant, Client ownership, ACTIVE
+      // Client-owned UOM, NUMERIC(18,4) quantity precision, variant
+      // contradiction, configured attribute type/value) and materialises the
+      // effective attribute set plus its inheritance provenance. Care staff
+      // session provenance rides on the parent request creator, the
+      // immutable attribution and the engine's item audit event
+      // (`careActorId`), never on a fabricated item creator.
+      for (const item of structuredItems) {
+        await addCareHandymanServiceRequestItemInTransaction(
+          client,
+          {
+            id: request.id,
+            clientId: request.clientId,
+            buildingId: request.buildingId,
+            status: request.status,
+          },
+          {
+            serviceCatalogId: item.serviceCatalogId,
+            quantity: item.quantity,
+            ...(item.serviceVariantId === undefined
+              ? {}
+              : { serviceVariantId: item.serviceVariantId }),
+            ...(item.uomId === undefined ? {} : { uomId: item.uomId }),
+            ...(item.attributeValues === undefined
+              ? {}
+              : { attributeValues: item.attributeValues }),
+            ...(item.accessCondition === undefined
+              ? {}
+              : { accessCondition: item.accessCondition }),
+            ...(item.itemDescription === undefined
+              ? {}
+              : { itemDescription: item.itemDescription }),
+          },
+          input.actorUserId,
+        );
+      }
+
+      // Read the items back INSIDE the transaction through the same
+      // Building-scoped projection the detail read uses, so the create
+      // response and the subsequent GET round-trip speak one vocabulary.
+      const items = await handymanCareStandaloneDiscoveryRepository
+        .listBuildingCareRequestItems(attribution.clientId, request.id, client);
+
       return {
         responseStatus: 201,
-        responseBody: projectCreatedRequest(request),
+        responseBody: {
+          ...projectCreatedRequest(request),
+          items: items.map((item) => projectStandaloneCareRequestItem(item)),
+        },
       };
     },
   });

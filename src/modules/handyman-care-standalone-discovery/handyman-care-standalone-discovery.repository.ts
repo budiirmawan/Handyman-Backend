@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type { HandymanServiceRequestStatus } from '../handyman-requests';
 
@@ -227,6 +228,96 @@ async function findBuildingCareRequestById(
 }
 
 /**
+ * CR-HM-BE-CARE-CATALOG-STRUCTURED-01 PART 04 — Building-session readback of
+ * the persisted structured request items.
+ *
+ * Scope law: the caller has ALREADY proven the exact Building/Client pair
+ * with `resolveBuildingCareAuthority` + the active lineage and has resolved
+ * the parent request through `findBuildingCareRequestById` (which filters
+ * client_id AND building_id). This read therefore keys on the same
+ * server-derived clientId plus that proven request id — never on a
+ * caller-supplied context — and cannot widen the scope.
+ *
+ * Projection law: an explicit allow-list. Internal Care Notes live in their
+ * own table and are never joined here, so an INTERNAL_ONLY note can never
+ * reach this projection. The item `attributeValues` is the EFFECTIVE set the
+ * pricing engine reads and `inheritedAttributeValues` is its provenance;
+ * `inheritedAttributeCodes` states the provenance explicitly for the client.
+ *
+ * `executor` lets the create transaction read its OWN uncommitted items, so
+ * the POST body and the GET detail speak one vocabulary.
+ */
+export type StandaloneCareRequestItemRecord = {
+  id: string;
+  serviceCatalogId: string;
+  serviceCode: string;
+  serviceName: string;
+  serviceVariantId: string | null;
+  serviceVariantCode: string | null;
+  serviceVariantName: string | null;
+  quantity: number;
+  uomId: string | null;
+  uomCode: string | null;
+  uomName: string | null;
+  uomSymbol: string | null;
+  attributeValues: Record<string, string>;
+  inheritedAttributeValues: Record<string, string>;
+  itemDescription: string | null;
+  accessCondition: string;
+  status: 'ACTIVE';
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/** Bounded exactly like the create contract (at most 50 items per request). */
+const MAX_READBACK_ITEMS = 50;
+
+async function listBuildingCareRequestItems(
+  clientId: string,
+  handymanRequestId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<StandaloneCareRequestItemRecord[]> {
+  const result = await executor.query<StandaloneCareRequestItemRecord>(
+    `SELECT ri.id,
+            ri.service_catalog_id AS "serviceCatalogId",
+            sc.code AS "serviceCode",
+            sc.name AS "serviceName",
+            ri.service_variant_id AS "serviceVariantId",
+            sv.code AS "serviceVariantCode",
+            sv.name AS "serviceVariantName",
+            ri.quantity::float8 AS quantity,
+            ri.uom_id AS "uomId",
+            u.code AS "uomCode",
+            u.name AS "uomName",
+            u.symbol AS "uomSymbol",
+            ri.attribute_values AS "attributeValues",
+            ri.inherited_attribute_values AS "inheritedAttributeValues",
+            ri.item_description AS "itemDescription",
+            ri.access_condition AS "accessCondition",
+            ri.status,
+            ri.created_at AS "createdAt",
+            ri.updated_at AS "updatedAt"
+       FROM handyman_service_request_items ri
+       JOIN service_catalog sc
+         ON sc.id = ri.service_catalog_id
+        AND sc.client_id = ri.client_id
+       LEFT JOIN handyman_service_variants sv
+         ON sv.id = ri.service_variant_id
+        AND sv.client_id = ri.client_id
+       LEFT JOIN units_of_measure u
+         ON u.id = ri.uom_id
+        AND u.client_id = ri.client_id
+      WHERE ri.client_id = $1
+        AND ri.handyman_request_id = $2
+        AND ri.status = 'ACTIVE'
+      ORDER BY ri.created_at ASC, ri.id ASC
+      LIMIT ${MAX_READBACK_ITEMS}`,
+    [clientId, handymanRequestId],
+  );
+  return result.rows;
+}
+
+/**
  * CR-HM-CC-TENANT-REQUEST-GATEWAY-01 intake readers.
  *
  * Every query below is keyed by the Server-derived (clientId, buildingId)
@@ -374,6 +465,7 @@ async function listBuildingCareUnits(
 export const handymanCareStandaloneDiscoveryRepository = {
   findActiveBuildingLineage,
   findBuildingCareRequestById,
+  listBuildingCareRequestItems,
   listActiveBuildingLineages,
   listBuildingCareFloors,
   listBuildingCareRequests,
