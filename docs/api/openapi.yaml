@@ -99092,6 +99092,13 @@ components:
         CR-HM-17 GAP PART 01 (B3) — Backend-resolved attribution and
         care-actor provenance composed from the immutable
         `handyman_channel_attributions` row bound to the request.
+
+        `originChannel` is the governed channel enum
+        (`HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_CHANNELS`): a BM Super App
+        handoff is `BM_SUPER_APP`, and an intake written by a Backend Care
+        staff session is `CUSTOMER_CARE_BACKEND`. Both are legitimate values
+        of the READ contract; only the BM-issued handoff artifact itself is
+        `BM_SUPER_APP`-only.
       required:
         [id, originChannel, originReference, createdByUserId,
          actorType, careActorId, actorReference, createdAt]
@@ -99099,7 +99106,7 @@ components:
         id: { $ref: "#/components/schemas/Uuid" }
         originChannel:
           type: string
-          enum: [BM_SUPER_APP]
+          enum: [BM_SUPER_APP, CUSTOMER_CARE_BACKEND]
         originReference: { type: string, nullable: true }
         createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
         actorType:
@@ -99118,11 +99125,23 @@ components:
         Backend-resolved attribution/care-actor provenance, and
         execution-scope pointer where present. No local status inference;
         no FM/SaaS fallback.
+
+        CR-HM-BE-CARE-OPENAPI-CONTRACT-01 PART 09 — the tenant scheduling
+        preference is NOT part of this read projection. `preferredWindowStart`
+        and `preferredWindowEnd` are create-side facts: when supplied at
+        intake they are persisted as a `handyman_scheduling_readiness` row and
+        returned on the CREATE response as `schedulingReadiness` (see
+        `HandymanCareSchedulingPreference`), and read back through the
+        scheduling-readiness contract (`HandymanSchedulingReadinessRecord`),
+        never from this projection. They were therefore removed from
+        `required`; no property was added, removed or renamed. A preferred
+        window is a tenant scheduling preference — it is NOT a confirmed
+        appointment and confers no appointment authority.
       required:
         [id, clientId, channelAttributionId, tenantCompanyId, tenantPicId,
          buildingId, spaceId, serviceCatalogId, serviceVariantId,
-         originChannel, originReference, description, preferredWindowStart,
-         preferredWindowEnd, status, createdByUserId, createdAt, updatedAt, actorType, careActorId,
+         originChannel, originReference, description, status,
+         createdByUserId, createdAt, updatedAt, actorType, careActorId,
          actorReference, attribution, executionScopeId]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
@@ -99136,7 +99155,11 @@ components:
         serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
         originChannel:
           type: string
-          enum: [BM_SUPER_APP]
+          enum: [BM_SUPER_APP, CUSTOMER_CARE_BACKEND]
+          description: >-
+            Governed channel of the immutable attribution. `BM_SUPER_APP` for
+            a BM handoff, `CUSTOMER_CARE_BACKEND` for an intake written by a
+            Backend Care staff session.
         originReference: { type: string, nullable: true }
         description: { type: string, nullable: true }
         status: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
